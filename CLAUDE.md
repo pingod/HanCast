@@ -308,7 +308,9 @@ cd hancast-backend && python scripts/build_sidecar.py
   为此 CI 把 `beforeBuildCommand` 拆成了独立步骤（frontend → sync-sidecar →
   Nuitka sidecar → Preflight → tauri bundle），所以 base 配置的
   `beforeBuildCommand` 已简化为只做版本同步。
-- **Release**：仅在 `build` 成功且（tag 推送 或 `make_release=true`）时创建 draft release
+- **Release**：仅在 `build` 成功、**ref 是 tag**、且（tag 推送 或 `make_release=true`）
+  时创建 draft release。`make_release` 输入默认 **false**——在 `main` 上手动
+  dispatch 只构建、不发布（曾用 `refs/heads/main` 当 tag 发 release，被 API 400 拒掉）。
 
 ### 构建产物路径
 
@@ -338,7 +340,8 @@ cd hancast-backend && python scripts/build_sidecar.py
 │   └── SinkProtocolInfo.csv
 │
 └── mpv/                                # MPV 播放器（捆绑）
-    ├── mpv.exe                          # macOS 为 mpv.app/Contents/MacOS/mpv
+    ├── mpv.exe                          # Windows；macOS 为 mpv.app/（整体保留）
+    │                                    # Linux 为 mpv
     └── portable_config/
         ├── mpv.conf                     # 仓库中提交的配置
         ├── scripts/                     # 弹幕、OSD 等插件
@@ -377,12 +380,25 @@ glob pattern <pattern> path not found or didn't match any files.
 | 文件 | 内容 |
 |------|------|
 | `src-tauri/tauri.conf.json` | 仅平台无关子集：`mpv/*`、`mpv/portable_config/**/*`、`hancast_sidecar/**/*` |
-| `src-tauri/tauri.windows.conf.json` | 追加 `*.dll`、`*.pyd` |
-| `src-tauri/tauri.macos.conf.json` | 追加 `*.so` |
-| `src-tauri/tauri.linux.conf.json` | 追加 `*.so` |
+| `src-tauri/tauri.windows.conf.json` | `mpv/*`、`mpv/portable_config/**/*`、`*.dll`、`*.pyd`、`hancast_sidecar/**/*` |
+| `src-tauri/tauri.macos.conf.json` | `mpv/mpv.app/**/*`、`mpv/portable_config/**/*`、`*.so`、`hancast_sidecar/**/*` |
+| `src-tauri/tauri.linux.conf.json` | `mpv/*`、`mpv/portable_config/**/*`、`*.so`、`hancast_sidecar/**/*` |
 
 ⚠️ **Tauri 的平台配置合并用 `json_patch::merge`（RFC 7386 JSON Merge Patch），数组是整体替换而非逐元素合并。**
 所以每个平台文件必须写出**完整**的 `bundle.resources` 数组，不能只写增量。
+
+**glob 不递归，且命中的目录会被静默丢弃**（`tauri-utils/src/resources.rs`）：
+
+- `glob::glob("mpv/*")` 只列 `mpv/` 的**直接子项**，即使 `require_literal_separator=false`，
+  `*` 也不跨目录层级；要递归必须显式写 `**`。
+- 迭代器遇到**目录**命中会直接跳过，不递归进去（`if entry.is_dir() { skip }`）。
+- 所以 `GlobPathNotFound` 的触发条件是**一个文件都没匹配到**——只匹配到目录同样失败。
+
+⚠️ macOS 就栽在这上面：`mpv/*` 看得见 `mpv.app/` 目录，但目录被丢弃，
+app 打出来没有 mpv，反倒把 44 MB 的 `mpv.tar.gz` 打进 bundle。
+修法：macos 配置显式写 `mpv/mpv.app/**/*`，CI 解完 tarball 后删掉它。
+`check-resources.cjs` 已按这套语义复刻：只数**文件**命中，并对「glob 命中了目录、
+但目录下一个文件都不会进 bundle」的 orphaned 情况打 `warn`。
 
 **动态库 glob 必须是顶层**（`*.so` 而非 `**/*.so`）：
 `**/*.so` 会把 `src-tauri/target/` 下的整个 Rust 构建产物打进安装包。
@@ -403,8 +419,15 @@ Nuitka standalone 会把依赖静态并入可执行文件（37–57MB 的单体�
 node scripts/check-resources.cjs        # 本地
 ```
 
-它按平台复刻 Tauri 的合并语义，逐个 glob 打印命中数量；任一 glob 为 0 就打印
+它按平台复刻 Tauri 的合并语义和 glob 语义（目录命中不算数，orphaned 目录打 warn），
+逐个 glob 打印**文件**命中数量；任一 glob 一个文件都没匹配到就打印
 `src-tauri/` 实际内容并以非 0 退出，把 build.rs 那种含糊报错变成精确诊断。
+
+⚠️ **仓库根的 `mpv/portable_config/` 与 `src-tauri/mpv/` 是两套目录**：
+`mpv/*` 被 gitignore、仅 `mpv/portable_config/` 入库，位置在**仓库根**；
+而 `bundle.resources` 的路径都相对 `src-tauri/`。所以 CI 的三个平台步骤都必须
+把 `mpv/portable_config/` 拷进 `src-tauri/mpv/portable_config/`，否则
+`mpv/portable_config/**/*` 无命中、构建直接失败。
 
 ⚠️ **它必须跑在 sidecar 构建之后、`tauri build` 之前。**
 `hancast_sidecar/**/*` 和 `*.so` / `*.dll` / `*.pyd` 都是 Nuitka 的产物，
