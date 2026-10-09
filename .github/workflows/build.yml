@@ -137,6 +137,13 @@ jobs:
           rm -rf /tmp/mpv_extract
           mkdir -p /tmp/mpv_extract "$WS/src-tauri/mpv"
           unzip -q mpv.zip -d /tmp/mpv_extract
+          # macOS 资产里的 zip 解出来是 mpv.tar.gz，里面才是 mpv.app，需要再解一层
+          for tgz in /tmp/mpv_extract/*.tar.gz /tmp/mpv_extract/*.tar.xz; do
+            if [ -f "$tgz" ]; then
+              echo "Extracting nested archive: $tgz"
+              tar -xf "$tgz" -C /tmp/mpv_extract
+            fi
+          done
 
           # 保留仓库里已提交的 src-tauri/mpv/portable_config/，只清理旧的二进制/动态库
           find "$WS/src-tauri/mpv" -maxdepth 1 -type f -delete
@@ -166,6 +173,10 @@ jobs:
                       "$WS/src-tauri/mpv/mpv.app/Contents/MacOS/mpv"; do
             if [ -f "$cand" ]; then found="$cand"; break; fi
           done
+          # 兜底：整个目录里搜任意一个叫 mpv[.exe] 的可执行文件
+          if [ -z "$found" ]; then
+            found="$(find "$WS/src-tauri/mpv" -type f -name 'mpv' -o -type f -name 'mpv.exe' 2>/dev/null | head -1 || true)"
+          fi
           if [ -z "$found" ]; then
             echo "::error::no usable mpv binary found under src-tauri/mpv"
             find "$WS/src-tauri/mpv" | head -50
@@ -205,9 +216,21 @@ jobs:
           echo "Resolved version: $ver"
           echo "VERSION=$ver" >> "$GITHUB_ENV"
 
+      # 显式跑 beforeBuildCommand 的三个动作（npm run build + sync-sidecar + build:sidecar）。
+      # 原因：bundle.resources 的 glob 依赖 sidecar 的产物
+      # （src-tauri/hancast_sidecar/ 和提升到根部的 *.so / *.dll / *.pyd），
+      # 这些要到 beforeBuildCommand 跑完才存在。把 Preflight 放在 tauri build
+      # 之前单独一步，才能在毫秒级失败而不是等 build.rs 报含糊的 glob 错误。
+      - name: Build frontend
+        run: npm run build
+      - name: Sync sidecar sources
+        run: node scripts/sync-sidecar.cjs
+      - name: Build sidecar (Nuitka)
+        shell: bash
+        run: npm run build:sidecar
       - name: "Preflight: verify bundle.resources globs"
         run: node scripts/check-resources.cjs
-      - name: Build (frontend + Nuitka sidecar + Tauri bundle)
+      - name: Tauri bundle
         run: npx tauri build --bundles ${{ matrix.bundles }}
 
       # ---------- 收集产物 ----------

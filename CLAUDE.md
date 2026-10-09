@@ -304,7 +304,10 @@ cd hancast-backend && python scripts/build_sidecar.py
   避免共享 runner 上 `api.github.com` 的 60 次/小时匿名限流）
 - **签名**：不做。macOS 用户需绕过 Gatekeeper，Windows 可能触发 SmartScreen
 - **Preflight**：`node scripts/check-resources.cjs` 在 `tauri build` 之前跑，
-  glob 无命中就带上 `src-tauri/` 实际清单失败，避免 build.rs 的含糊报错
+  glob 无命中就带上 `src-tauri/` 实际清单失败，避免 build.rs 的含糊报错。
+  为此 CI 把 `beforeBuildCommand` 拆成了独立步骤（frontend → sync-sidecar →
+  Nuitka sidecar → Preflight → tauri bundle），所以 base 配置的
+  `beforeBuildCommand` 已简化为只做版本同步。
 - **Release**：仅在 `build` 成功且（tag 推送 或 `make_release=true`）时创建 draft release
 
 ### 构建产物路径
@@ -402,7 +405,11 @@ node scripts/check-resources.cjs        # 本地
 
 它按平台复刻 Tauri 的合并语义，逐个 glob 打印命中数量；任一 glob 为 0 就打印
 `src-tauri/` 实际内容并以非 0 退出，把 build.rs 那种含糊报错变成精确诊断。
-CI 里它作为 `Preflight` 步骤跑在 `tauri build` 之前。
+
+⚠️ **它必须跑在 sidecar 构建之后、`tauri build` 之前。**
+`hancast_sidecar/**/*` 和 `*.so` / `*.dll` / `*.pyd` 都是 Nuitka 的产物，
+在 `beforeBuildCommand` 执行前根本不存在——这也是 CI 把 `beforeBuildCommand`
+拆成独立步骤的原因（见上一节）。
 
 ### 版本管理
 
