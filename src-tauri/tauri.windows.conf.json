@@ -1,0 +1,11 @@
+{
+  "bundle": {
+    "resources": [
+      "mpv/*",
+      "mpv/portable_config/**/*",
+      "*.dll",
+      "*.pyd",
+      "hancast_sidecar/**/*"
+    ]
+  }
+}

@@ -75,7 +75,10 @@ G:\Code\Macast-Han\
 │
 ├── src-tauri/                   # Tauri Rust 后端
 │   ├── Cargo.toml               # Rust 依赖
-│   ├── tauri.conf.json          # Tauri 配置
+│   ├── tauri.conf.json          # Tauri 配置（base，仅平台无关的 resources）
+│   ├── tauri.windows.conf.json  # Windows 覆盖（数组整体替换，见文档）
+│   ├── tauri.macos.conf.json    # macOS 覆盖
+│   ├── tauri.linux.conf.json    # Linux 覆盖
 │   ├── build.rs                 # tauri_build::build()
 │   ├── icons/                   # 应用图标
 │   └── src/
@@ -115,7 +118,7 @@ G:\Code\Macast-Han\
 │   │       ├── SinkProtocolInfo.csv
 │   │       └── setting.html
 │   ├── scripts/
-│   │   ├── build_sidecar.py     # PyInstaller 构建脚本
+│   │   ├── build_sidecar.py     # Nuitka 构建脚本 + flatten_dependencies()
 │   │   └── run_sidecar.py       # 独立 Sidecar 运行器
 │   └── tests/
 │       ├── test_commands.py
@@ -123,7 +126,8 @@ G:\Code\Macast-Han\
 │
 ├── Macast-main/                 # 原始 1.x Python 源码（参考用）
 ├── Macast-plugins-main/         # 原始 Macast 插件（参考用）
-├── mpv/                         # 捆绑的 MPV 二进制文件（Windows, ~120MB）
+├── mpv/                         # 捆绑的 MPV（gitignore，只提交 portable_config/）
+│   └── portable_config/mpv.conf
 ├── docs/                        # 设计文档
 │   ├── HanCast-Backend-Spec.md
 │   ├── Macast-Frontend-API.md
@@ -275,9 +279,33 @@ cd hancast-backend && uv run python -m hancast_sidecar.main
 # 构建 Tauri 应用（prebuild 自动同步版本号）
 cargo tauri build
 
-# 构建 Python Sidecar（PyInstaller）
+# 构建 Python Sidecar（Nuitka）
 cd hancast-backend && python scripts/build_sidecar.py
 ```
+
+**构建前必须做的事**（`tauri build` 不会替你做）：
+
+1. `src-tauri/mpv/` 里要有 mpv 可执行文件 —— CI 里由 workflow 步骤准备，
+   本地需手动放置（`mpv/` 被 gitignore，只有 `portable_config/` 入库）。
+2. 运行 `node scripts/check-resources.cjs` 确认 `bundle.resources` 每个 glob 都有命中。
+
+### CI 构建（GitHub Actions）
+
+`.github/workflows/build.yml`，单个 `build` job + 3 条矩阵：
+
+| 矩阵项 | Runner | 产物 | mpv 来源 |
+|--------|--------|------|----------|
+| `macos-arm64` | `macos-14` | `app`, `dmg` | 官方 release `macos-15-arm` zip |
+| `windows-x64` | `windows-latest` | `nsis` | 官方 release `x86_64-pc-windows-msvc` zip |
+| `linux-x64` | `ubuntu-latest` | `deb`, `rpm`, `appimage` | `apt-get install mpv`（官方 release 无 Linux 产物）|
+
+- **触发**：推送 `v*` tag，或手动 `workflow_dispatch`
+- **mpv 版本**：`env.MPV_TAG` 固定为 `v0.41.0`（不用 GitHub API 查 tag，
+  避免共享 runner 上 `api.github.com` 的 60 次/小时匿名限流）
+- **签名**：不做。macOS 用户需绕过 Gatekeeper，Windows 可能触发 SmartScreen
+- **Preflight**：`node scripts/check-resources.cjs` 在 `tauri build` 之前跑，
+  glob 无命中就带上 `src-tauri/` 实际清单失败，避免 build.rs 的含糊报错
+- **Release**：仅在 `build` 成功且（tag 推送 或 `make_release=true`）时创建 draft release
 
 ### 构建产物路径
 
@@ -295,9 +323,9 @@ cd hancast-backend && python scripts/build_sidecar.py
 ```
 运行目录/
 ├── HanCast.exe                         # 主程序（Tauri + Rust）
-├── hancast-sidecar-*.exe               # Python 后端（DLNA/SSDP/媒体解析）
-├── python312.dll + *.pyd               # Python 运行时 + 标准库
-├── libcrypto/libssl/libffi/vcruntime   # 系统依赖
+├── hancast-sidecar.exe                 # Python 后端（DLNA/SSDP/媒体解析）
+│                                        # Nuitka standalone 单体二进制，依赖已并入
+├── *.dll / *.pyd / *.so                # Python 扩展模块（平台相关，见平台配置）
 │
 ├── hancast_sidecar/xml/                # UPnP 描述文件（DLNA 必需）
 │   ├── Description.xml
@@ -306,25 +334,75 @@ cd hancast-backend && python scripts/build_sidecar.py
 │   ├── RenderingControl.xml
 │   └── SinkProtocolInfo.csv
 │
-├── lxml/                               # XML 解析（DLNA 协议依赖）
-├── charset_normalizer/                 # 字符编码
-├── certifi/                            # CA 证书
-│
 └── mpv/                                # MPV 播放器（捆绑）
-    ├── mpv.exe
+    ├── mpv.exe                          # macOS 为 mpv.app/Contents/MacOS/mpv
     └── portable_config/
-        ├── mpv.conf
-        ├── scripts/                    # 弹幕、OSD 等插件
-        ├── shaders/                    # 视频着色器（Anime4K）
-        ├── fonts/                      # 字体文件
-        └── watch_later/                # 播放进度记忆
+        ├── mpv.conf                     # 仓库中提交的配置
+        ├── scripts/                     # 弹幕、OSD 等插件
+        ├── shaders/                     # 视频着色器（Anime4K）
+        ├── fonts/                       # 字体文件
+        └── watch_later/                 # 播放进度记忆
 ```
+
+> ⚠️ `certifi/`、`lxml/`、`charset_normalizer/` 这三个独立目录已**不在**运行目录中——
+> 那是早期 PyInstaller onedir 的遗留布局，本项目改用 Nuitka 后依赖已静态并入 sidecar 可执行文件。
+> 详见下一节。
 
 **核心组件**：
 - `HanCast.exe`：Tauri 前端 + Rust 桥接层
 - `hancast-sidecar-*.exe`：Python 后端（DLNA/SSDP/媒体解析）
 - `mpv/`：捆绑的 MPV 播放器
 - `hancast_sidecar/xml/`：UPnP 协议描述文件
+
+### bundle.resources 与 Nuitka 依赖提升
+
+> ⚠️ 本节说明为何 `bundle.resources` 被拆成 base + 三个平台配置文件。
+> `.json` 不支持注释，所以文档只能写在这里。
+
+**硬性规则：每个 glob 都必须在【当前平台】匹配到至少一个文件。**
+
+tauri-build 的 `build.rs` 对任何含 `*` 的 glob，只要匹配结果为空就直接失败：
+
+```
+glob pattern <pattern> path not found or didn't match any files.
+```
+
+而且它在第一个失败的 glob 处就中断，后续 glob 根本不会被校验，排查成本很高。
+
+**平台相关清单放不进 base 文件**，因此拆成：
+
+| 文件 | 内容 |
+|------|------|
+| `src-tauri/tauri.conf.json` | 仅平台无关子集：`mpv/*`、`mpv/portable_config/**/*`、`hancast_sidecar/**/*` |
+| `src-tauri/tauri.windows.conf.json` | 追加 `*.dll`、`*.pyd` |
+| `src-tauri/tauri.macos.conf.json` | 追加 `*.so` |
+| `src-tauri/tauri.linux.conf.json` | 追加 `*.so` |
+
+⚠️ **Tauri 的平台配置合并用 `json_patch::merge`（RFC 7386 JSON Merge Patch），数组是整体替换而非逐元素合并。**
+所以每个平台文件必须写出**完整**的 `bundle.resources` 数组，不能只写增量。
+
+**动态库 glob 必须是顶层**（`*.so` 而非 `**/*.so`）：
+`**/*.so` 会把 `src-tauri/target/` 下的整个 Rust 构建产物打进安装包。
+
+**依赖提升流程**：`build_sidecar.py` 的 `flatten_dependencies()` 把 Nuitka dist
+（`src-tauri/hancast-sidecar/`）里除可执行文件外的依赖，合并复制到 `src-tauri/` 根部，
+这样它们才能被上面的 `*.dll` / `*.pyd` / `*.so` glob 捕获。
+可执行文件本身留在 `hancast-sidecar/` 里供 `externalBin` 使用，不做重复。
+
+**历史遗留**：`certifi/**/*`、`lxml/**/*`、`charset_normalizer/**/*` 曾长期躺在
+`bundle.resources` 里，但那是 **PyInstaller onedir** 的目录布局，本项目早已迁移到 Nuitka。
+Nuitka standalone 会把依赖静态并入可执行文件（37–57MB 的单体二进制即证据），
+产出目录里没有这些独立目录，所以它们已在全部配置中移除。**不要凭猜测重新加回去。**
+
+**新增 glob 后必须验证**（CI 与本地都跑）：
+
+```bash
+node scripts/check-resources.cjs        # 本地
+```
+
+它按平台复刻 Tauri 的合并语义，逐个 glob 打印命中数量；任一 glob 为 0 就打印
+`src-tauri/` 实际内容并以非 0 退出，把 build.rs 那种含糊报错变成精确诊断。
+CI 里它作为 `Preflight` 步骤跑在 `tauri build` 之前。
 
 ### 版本管理
 

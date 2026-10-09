@@ -78,7 +78,9 @@ _bmad-output/
 Macast-main/
 
 # ── MPV 播放器 (外部依赖，不纳入版本控制) ──
-mpv/
+# 只忽略 mpv 二进制/动态库，但保留我们自带的配置与脚本（portable_config/）
+mpv/*
+!mpv/portable_config/
 
 .understand-anything/
 
@@ -92,3 +94,6 @@ scripts/claude-dashboard.bat
 MSIX/
 
 hancast-backend/mpv_diag.txt
+
+# pi 追踪目录
+.pi-traces/

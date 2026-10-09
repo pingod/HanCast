@@ -47,12 +47,7 @@
     "resources": [
       "mpv/*",
       "mpv/portable_config/**/*",
-      "*.dll",
-      "*.pyd",
-      "hancast_sidecar/**/*",
-      "certifi/**/*",
-      "lxml/**/*",
-      "charset_normalizer/**/*"
+      "hancast_sidecar/**/*"
     ],
     "windows": {
       "nsis": {

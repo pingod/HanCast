@@ -134,30 +134,44 @@ jobs:
           echo "Downloading: $url"
           curl -fsSL -o mpv.zip "$url"
           WS="$(pwd)"
-          rm -rf /tmp/mpv_extract "$WS/src-tauri/mpv"
+          rm -rf /tmp/mpv_extract
           mkdir -p /tmp/mpv_extract "$WS/src-tauri/mpv"
           unzip -q mpv.zip -d /tmp/mpv_extract
 
-          # 把解压出的所有文件（mpv 可执行文件 + 依赖库）扁平复制到 src-tauri/mpv
-          find /tmp/mpv_extract -type f -exec cp -f {} "$WS/src-tauri/mpv/" \;
-          mkdir -p "$WS/src-tauri/mpv/portable_config"
+          # 保留仓库里已提交的 src-tauri/mpv/portable_config/，只清理旧的二进制/动态库
+          find "$WS/src-tauri/mpv" -maxdepth 1 -type f -delete
+          # macOS 的 mpv.app 是 bundle，必须整体保留目录结构（cp -a），不能扁平复制
+          cp -a /tmp/mpv_extract/. "$WS/src-tauri/mpv/"
+          # 仓库根目录提交了 mpv/portable_config/（mpv/* 被 gitignore，用 ! 保留），
+          # 而 bundle.resources 相对 src-tauri/，所以必须拷进 src-tauri/mpv/
+          if [ -d mpv/portable_config ]; then
+            mkdir -p "$WS/src-tauri/mpv/portable_config"
+            cp -a mpv/portable_config/. "$WS/src-tauri/mpv/portable_config/"
+          fi
 
           echo "MPV files in src-tauri/mpv:"
           ls -la "$WS/src-tauri/mpv"
-
-          # 重命名为规范名，方便资源打包 / 运行时定位
-          if [ -f "$WS/src-tauri/mpv/mpv.exe" ]; then
-            : # 已是规范名
-          else
-            exe="$(find "$WS/src-tauri/mpv" -maxdepth 1 -name 'mpv*.exe' -type f | head -1)"
+          # Windows: 统一重命名为规范名 mpv.exe，便于运行时定位
+          if [ ! -f "$WS/src-tauri/mpv/mpv.exe" ]; then
+            exe="$(find "$WS/src-tauri/mpv" -name 'mpv*.exe' -type f | head -1 || true)"
             if [ -n "$exe" ]; then
               mv -f "$exe" "$WS/src-tauri/mpv/mpv.exe"
-            else
-              bin="$(find "$WS/src-tauri/mpv" -maxdepth 1 -name 'mpv*' -type f | head -1)"
-              mv -f "$bin" "$WS/src-tauri/mpv/mpv"
             fi
           fi
           chmod +x "$WS/src-tauri/mpv/mpv" "$WS/src-tauri/mpv/mpv.exe" 2>/dev/null || true
+
+          # 校验：必须能找到一个可用的 mpv 可执行文件
+          found=""
+          for cand in "$WS/src-tauri/mpv/mpv" "$WS/src-tauri/mpv/mpv.exe" \
+                      "$WS/src-tauri/mpv/mpv.app/Contents/MacOS/mpv"; do
+            if [ -f "$cand" ]; then found="$cand"; break; fi
+          done
+          if [ -z "$found" ]; then
+            echo "::error::no usable mpv binary found under src-tauri/mpv"
+            find "$WS/src-tauri/mpv" | head -50
+            exit 1
+          fi
+          echo "MPV executable: $found"
 
       - name: Prepare MPV (Linux)
         if: matrix.runner-os == 'Linux'
@@ -165,10 +179,17 @@ jobs:
           set -e
           MPV_BIN="$(command -v mpv)"
           echo "system mpv: $MPV_BIN"
-          rm -rf src-tauri/mpv && mkdir -p src-tauri/mpv/portable_config
+          mkdir -p src-tauri/mpv
           cp -f "$MPV_BIN" src-tauri/mpv/mpv
           chmod +x src-tauri/mpv/mpv
+          # 仓库根目录提交了 mpv/portable_config/（mpv/* 被 gitignore，用 ! 保留），
+          # 而 bundle.resources 相对 src-tauri/，所以必须拷进 src-tauri/mpv/
+          if [ -d mpv/portable_config ]; then
+            mkdir -p src-tauri/mpv/portable_config
+            cp -a mpv/portable_config/. src-tauri/mpv/portable_config/
+          fi
           ls -la src-tauri/mpv
+          ls -la src-tauri/mpv/portable_config
 
       # ---------- 构建 ----------
       - name: Resolve version
@@ -184,6 +205,8 @@ jobs:
           echo "Resolved version: $ver"
           echo "VERSION=$ver" >> "$GITHUB_ENV"
 
+      - name: "Preflight: verify bundle.resources globs"
+        run: node scripts/check-resources.cjs
       - name: Build (frontend + Nuitka sidecar + Tauri bundle)
         run: npx tauri build --bundles ${{ matrix.bundles }}
 
