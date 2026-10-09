@@ -31,6 +31,9 @@ permissions:
 env:
   # 缓存 / 镜像加速（可按需调整）
   UV_PYTHON_PREFERENCE: only-managed
+  # 固定 MPV 版本，避免运行时依赖 api.github.com（易被限流 403）。
+  # 资产已确认存在：mpv-v0.41.0-{macos-15-arm, x86_64-pc-windows-msvc}.zip
+  MPV_TAG: "v0.41.0"
 
 jobs:
   build:
@@ -119,16 +122,6 @@ jobs:
         run: npm ci
 
       # ---------- 准备 MPV ----------
-      - name: Resolve latest mpv release tag
-        if: matrix.mpv_suffix != ''
-        id: mpv_tag
-        shell: bash
-        run: |
-          set -e
-          tag=$(curl -fsSL https://api.github.com/repos/mpv-player/mpv/releases/latest \
-                  | grep -o '"tag_name":[^,]*' | sed 's/.*"\([^"]*\)".*/\1/')
-          echo "latest mpv tag: $tag"
-          echo "MPV_TAG=$tag" >> "$GITHUB_ENV"
 
       - name: Download & unpack MPV (macOS / Windows)
         if: matrix.mpv_suffix != ''
@@ -140,28 +133,31 @@ jobs:
           url="https://github.com/mpv-player/mpv/releases/download/${MPV_TAG}/mpv-${MPV_TAG}-${MPV_SUFFIX}.zip"
           echo "Downloading: $url"
           curl -fsSL -o mpv.zip "$url"
-          rm -rf /tmp/mpv_extract && mkdir -p /tmp/mpv_extract
+          WS="$(pwd)"
+          rm -rf /tmp/mpv_extract "$WS/src-tauri/mpv"
+          mkdir -p /tmp/mpv_extract "$WS/src-tauri/mpv"
           unzip -q mpv.zip -d /tmp/mpv_extract
 
-          rm -rf src-tauri/mpv && mkdir -p src-tauri/mpv
           # 把解压出的所有文件（mpv 可执行文件 + 依赖库）扁平复制到 src-tauri/mpv
-          (cd /tmp/mpv_extract && find . -type f -print0 | while IFS= read -r -d '' f; do
-            cp -f "$f" src-tauri/mpv/ || true
-          done)
-          mkdir -p src-tauri/mpv/portable_config
+          find /tmp/mpv_extract -type f -exec cp -f {} "$WS/src-tauri/mpv/" \;
+          mkdir -p "$WS/src-tauri/mpv/portable_config"
+
           echo "MPV files in src-tauri/mpv:"
-          ls -la src-tauri/mpv
+          ls -la "$WS/src-tauri/mpv"
+
           # 重命名为规范名，方便资源打包 / 运行时定位
-          if [ -f src-tauri/mpv/mpv.exe ]; then
+          if [ -f "$WS/src-tauri/mpv/mpv.exe" ]; then
             : # 已是规范名
-          elif [ -n "$(find src-tauri/mpv -maxdepth 1 -name 'mpv*.exe' -print -quit)" ]; then
-            mv -f "$(find src-tauri/mpv -maxdepth 1 -name 'mpv*.exe' | head -1)" src-tauri/mpv/mpv.exe
-          elif [ -f src-tauri/mpv/mpv ]; then
-            :
           else
-            mv -f "$(find src-tauri/mpv -maxdepth 1 -name 'mpv*' -type f | head -1)" src-tauri/mpv/mpv
+            exe="$(find "$WS/src-tauri/mpv" -maxdepth 1 -name 'mpv*.exe' -type f | head -1)"
+            if [ -n "$exe" ]; then
+              mv -f "$exe" "$WS/src-tauri/mpv/mpv.exe"
+            else
+              bin="$(find "$WS/src-tauri/mpv" -maxdepth 1 -name 'mpv*' -type f | head -1)"
+              mv -f "$bin" "$WS/src-tauri/mpv/mpv"
+            fi
           fi
-          chmod +x src-tauri/mpv/mpv src-tauri/mpv/mpv.exe 2>/dev/null || true
+          chmod +x "$WS/src-tauri/mpv/mpv" "$WS/src-tauri/mpv/mpv.exe" 2>/dev/null || true
 
       - name: Prepare MPV (Linux)
         if: matrix.runner-os == 'Linux'
