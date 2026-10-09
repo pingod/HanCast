@@ -67,20 +67,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Show toolchain versions
-        shell: bash
-        run: |
-          set -e
-          echo "=== OS ==="
-          uname -a || true
-          echo "=== rust ==="
-          rustc --version
-          cargo --version
-          echo "=== node ==="
-          node --version
-          npm --version
-          echo "=== uv ==="
-          uv --version
 
       # ---------- 通用工具链 ----------
       - name: Install Rust stable
@@ -97,6 +83,22 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
+      - name: Show toolchain versions
+        shell: bash
+        run: |
+          set -e
+          echo "=== OS ==="
+          uname -a || true
+          echo "=== rust ==="
+          rustc --version
+          cargo --version
+          echo "=== node ==="
+          node --version
+          npm --version
+          echo "=== uv ==="
+          uv --version
+          echo "=== python (managed) ==="
+          uv run --project hancast-backend python --version 2>/dev/null || true
 
       # ---------- 平台依赖 ----------
       - name: Install Linux build deps (Tauri + Nuitka C compiler)
