@@ -10,7 +10,7 @@
 #
 # 触发：
 #   - push 标签 v*  → 自动构建并上传 draft Release
-#   - 手动 workflow_dispatch
+#   - 手动 workflow_dispatch → 构建；只有 ref 是 tag 且勾选 make_release 时才发布
 
 name: Build Installers
 
@@ -23,7 +23,7 @@ on:
       make_release:
         description: "构建成功后创建 draft GitHub Release"
         type: boolean
-        default: true
+        default: false
 
 permissions:
   contents: write
@@ -143,6 +143,8 @@ jobs:
               echo "Extracting nested archive: $tgz"
               tar -xf "$tgz" -C /tmp/mpv_extract
             fi
+          # 解完就删掉 tarball，别让它跟着 cp -a 混进 bundle
+          rm -f /tmp/mpv_extract/*.tar.gz /tmp/mpv_extract/*.tar.xz
           done
 
           # 保留仓库里已提交的 src-tauri/mpv/portable_config/，只清理旧的二进制/动态库
@@ -273,6 +275,7 @@ jobs:
     needs: [build, read_version]
     if: >
       needs.build.result == 'success' &&
+      github.ref_type == 'tag' &&
       ( github.event_name == 'push' || inputs.make_release == true )
     runs-on: ubuntu-latest
     steps:

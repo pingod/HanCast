@@ -1,7 +1,7 @@
 {
   "bundle": {
     "resources": [
-      "mpv/*",
+      "mpv/mpv.app/**/*",
       "mpv/portable_config/**/*",
       "*.so",
       "hancast_sidecar/**/*"
