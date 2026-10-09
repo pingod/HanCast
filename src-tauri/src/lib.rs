@@ -570,6 +570,7 @@ async fn export_logs(app: tauri::AppHandle) -> Result<bool, String> {
 const CAST_URL_LABEL: &str = "复制当前投屏地址";
 
 /// MSIX StartupTask ID（与 AppxManifest.xml 中的 TaskId 一致）
+#[cfg(target_os = "windows")]
 const STARTUP_TASK_ID: &str = "HanCastStartup";
 
 // ── Autostart ──
@@ -613,6 +614,23 @@ async fn set_autostart_msix(enabled: bool) -> Result<(), String> {
     }
 
     Ok(())
+}
+// 以下两个 stub 让非 Windows 平台也能通过编译。
+// is_store_version() 是运行时判断，但上面两个函数是编译期门控的，
+// 没有 stub 的话所有调用点（get_autostart_state / get_autostart /
+// set_autostart / 托盘菜单回调）在 macOS/Linux 上都会报 E0425。
+// 实际上非 Windows 上 is_store_version() 恒为 false，stub 不会被执行到。
+
+/// 非 Windows 平台没有 MSIX 概念，视为未启用
+#[cfg(not(target_os = "windows"))]
+async fn get_autostart_msix() -> Result<bool, String> {
+    Ok(false)
+}
+
+/// 非 Windows 平台不支持 MSIX 开机自启
+#[cfg(not(target_os = "windows"))]
+async fn set_autostart_msix(_enabled: bool) -> Result<(), String> {
+    Err("MSIX 开机自启仅在 Windows 上可用".to_string())
 }
 
 /// 统一获取开机自启状态（根据环境自动选择实现）
