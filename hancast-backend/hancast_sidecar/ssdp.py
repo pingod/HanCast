@@ -377,6 +377,17 @@ class SSDPService:
                                 data = '\r\n'.join(response).format(ip).encode()
                                 send_sock = socket.socket(
                                     socket.AF_INET, socket.SOCK_DGRAM)
+                                # 必须绑定到匹配的那个网卡：
+                                # 多网卡机器上不绑定的话，内核会按路由表选出口，
+                                # 响应可能从另一个网段发出，请求方收不到（或
+                                # 收到源地址与 LOCATION 不符的包而被丢弃）。
+                                try:
+                                    send_sock.bind((ip, 0))
+                                except OSError as e:
+                                    logger.debug(
+                                        f"Cannot bind M-SEARCH reply socket to {ip}: {e}")
+                                    send_sock.close()
+                                    continue
                                 send_sock.sendto(data, destination)
                                 send_sock.close()
                                 logger.debug(
