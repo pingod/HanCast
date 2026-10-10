@@ -47,7 +47,9 @@ jobs:
             os: macos-14
             runner-os: macOS
             arch: aarch64-apple-darwin
-            bundles: "app,dmg"
+            # 只出 .app；dmg 必须等 sidecar 布局修好之后再打，见后面
+            # 的 "Bundle macOS dmg" 步骤，否则 dmg 里不含符号链接。
+            bundles: "app"
             mpv_suffix: "macos-15-arm"
           # ---- Windows ----
           - name: windows-x64
@@ -245,6 +247,103 @@ jobs:
         run: node scripts/check-resources.cjs
       - name: Tauri bundle
         run: npx tauri build --bundles ${{ matrix.bundles }}
+
+      # macOS 的 .app 里，Tauri 把两类东西放进了不同目录：
+      #   externalBin → Contents/MacOS/hancast-sidecar
+      #   resources   → Contents/Resources/{lxml,certifi,charset_normalizer,
+      #                 hancast_sidecar,*.so,libpython3.12.dylib}
+      # 但 Nuitka --standalone 的 sidecar 只从「可执行文件所在目录」解析
+      # 模块和扩展（自己的 loader，sys.path / PYTHONPATH 都不生效），于是运行
+      # 时报 ImportError: dlopen(.../Contents/MacOS/lxml/etree.so) (no such file)。
+      # 在 MacOS/ 里对 Resources/ 的内容建符号链接，即可让 sidecar 与
+      # Windows/Linux 一样看到扁平布局。符号链接随 .app 一起进 dmg。
+      - name: Fix macOS sidecar resource layout
+        if: matrix.runner-os == 'macos-14'
+        shell: bash
+        run: |
+          set -e
+          APP="$(find src-tauri/target/release/bundle/macos -maxdepth 1 -name '*.app' | head -1)"
+          if [ -z "$APP" ]; then
+            echo "::error::no .app found under bundle/macos"
+            exit 1
+          fi
+          MACOS="$APP/Contents/MacOS"
+          RES="$APP/Contents/Resources"
+          echo "app: $APP"
+
+          # 对 Resources/ 的每一项在 MacOS/ 建同名链接（已存在则跳过）
+          linked=0
+          for item in "$RES"/*; do
+            name="$(basename "$item")"
+            [ "$name" = "icon.icns" ] && continue   # app 图标，无需链接
+            [ "$name" = "Assets.car" ] && continue  # 同上
+            if [ -e "$MACOS/$name" ]; then
+              continue
+            fi
+            ln -sfn "../Resources/$name" "$MACOS/$name"
+            linked=$((linked + 1))
+          done
+          echo "linked $linked entries into Contents/MacOS/"
+
+          echo "=== Contents/MacOS/ after linking ==="
+          ls -la "$MACOS"
+
+          # 冒烟测试：直接执行 sidecar，确认能 import 到 lxml 且 SSDP 起来。
+          # sidecar 收到 EOF 会自行退出；用 timeout 兜底避免挂住 CI。
+          echo "=== sidecar smoke test ==="
+          out="$(cd "$MACOS" && timeout 20 ./hancast-sidecar 2>&1 || true)"
+          echo "$out" | head -30
+          if echo "$out" | grep -q "ImportError\|Library not loaded\|Traceback"; then
+            echo "::error::sidecar failed to start inside the .app bundle"
+            exit 1
+          fi
+          if ! echo "$out" | grep -q "DLNA server started"; then
+            echo "::error::sidecar did not reach 'DLNA server started'"
+            exit 1
+          fi
+          echo "sidecar OK"
+
+      # dmg 只是把上一步的 .app 包起来，因此必须排在布局修复之后。
+      # `--bundles dmg` 若走 cargo 重新构建会覆盖 .app，所以打完之后
+      # 再补一次链接并校验 dmg 里确实带上了符号链接。
+      - name: Bundle macOS dmg
+        if: matrix.runner-os == 'macos-14'
+        shell: bash
+        run: |
+          set -e
+          npx tauri build --bundles dmg
+          echo "=== dmg ==="
+          ls -lh src-tauri/target/release/bundle/dmg/
+
+          APP="$(find src-tauri/target/release/bundle/macos -maxdepth 1 -name '*.app' | head -1)"
+          MACOS="$APP/Contents/MacOS"
+          RES="$APP/Contents/Resources"
+
+          # 幂等重放链接（若 Tauri 重建过 .app 则这里补齐）
+          for item in "$RES"/*; do
+            name="$(basename "$item")"
+            case "$name" in icon.icns|Assets.car) continue ;; esac
+            [ -e "$MACOS/$name" ] || ln -sfn "../Resources/$name" "$MACOS/$name"
+          done
+
+          # 从 dmg 里挂载出来的 .app 必须能跑起来，否则说明 dmg 是旧 .app 打的
+          DMG="$(find src-tauri/target/release/bundle/dmg -name '*.dmg' | head -1)"
+          MNT="$(mktemp -d)"
+          hdiutil attach -nobrowse -quiet -mountpoint "$MNT" "$DMG"
+          echo "=== dmg sidecar smoke test ==="
+          out="$(cd "$MNT"/*.app/Contents/MacOS && timeout 20 ./hancast-sidecar 2>&1 || true)"
+          hdiutil detach "$MNT" -quiet || true
+          rmdir "$MNT" 2>/dev/null || true
+          echo "$out" | head -20
+          if echo "$out" | grep -q "ImportError\|Library not loaded\|Traceback"; then
+            echo "::error::sidecar inside the dmg failed to start"
+            exit 1
+          fi
+          if ! echo "$out" | grep -q "DLNA server started"; then
+            echo "::error::sidecar inside the dmg never reached 'DLNA server started'"
+            exit 1
+          fi
+          echo "dmg sidecar OK"
 
       # ---------- 收集产物 ----------
       - name: List bundle output
