@@ -829,7 +829,12 @@ pub fn run() {
             app.manage(window_config_state);
 
             // Initialize Python sidecar
-            let sidecar = SidecarManager::new(app.handle().clone())?;
+            // 注意：这里失败会让 setup 返回 Err，Tauri 随即退出，表现为「窗口一闪就退」。
+            // 所以失败时必须把原因打出来，否则用户只看到闪退、无从排查。
+            let sidecar = SidecarManager::new(app.handle().clone()).map_err(|e| {
+                eprintln!("[FATAL] Failed to start sidecar, aborting startup: {e}");
+                e
+            })?;
             app.manage(sidecar);
 
             // Initialize cast URL state

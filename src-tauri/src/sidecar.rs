@@ -11,51 +11,68 @@ use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 use tokio::sync::{oneshot, Mutex};
 
-/// 在指定目录中查找以 `hancast-sidecar` 开头的可执行文件
+/// 在若干候选目录中查找以 `hancast-sidecar` 开头的可执行文件
 ///
 /// 不限定具体 triple 后缀，适配所有命名形式：
 ///   hancast-sidecar.exe / hancast-sidecar-{triple}.exe  (Windows)
 ///   hancast-sidecar    / hancast-sidecar-{triple}       (Linux/macOS)
 ///
+/// ## 为什么需要多个目录
+///
+/// Tauri 放 `externalBin` 的位置**各平台不一致**（实测 CI 产物的 bundle 结构）：
+///
+/// | 平台    | externalBin 落点                        |
+/// |---------|-----------------------------------------|
+/// | macOS   | `HanCast.app/Contents/MacOS/`            |
+/// | Windows | 安装目录根（= `resource_dir`）           |
+/// | Linux   | 安装目录根（= `resource_dir`）           |
+///
+/// macOS 的 `.app` 是 bundle，externalBin 与主程序并排放在 `Contents/MacOS/`，
+/// **不在** `Contents/Resources/` 里。早期只查 `resource_dir()`（Resources），
+/// 于是 macOS 上必然找不到 sidecar → `SidecarManager::new` 返回 Err →
+/// `lib.rs` 的 setup 用 `?` 直接中断 → 窗口一闪就退。
+///
 /// - 按文件名排序，确保同目录下多个候选时选择结果稳定
 /// - Linux/macOS 下验证文件具有执行权限
-/// - 错误信息中包含目录实际内容，便于调试
+/// - 错误信息中包含各目录实际内容，便于调试
 #[cfg(not(debug_assertions))]
-fn find_sidecar_binary(resource_dir: &std::path::Path) -> Result<std::path::PathBuf, String> {
-    if !resource_dir.is_dir() {
-        return Err(format!("Resource directory not found: {:?}", resource_dir));
-    }
-
-    let entries = std::fs::read_dir(resource_dir)
-        .map_err(|e| format!("Failed to read resource dir {}: {}", resource_dir.display(), e))?;
-
+fn find_sidecar_binary(dirs: &[std::path::PathBuf]) -> Result<std::path::PathBuf, String> {
     // 收集所有候选文件，按文件名排序确保选择结果稳定
     let mut candidates: Vec<std::path::PathBuf> = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(|e| format!("Failed to read directory entry: {e}"))?;
-        let path = entry.path();
 
-        if !path.is_file() {
-            continue;
-        }
+    for dir in dirs {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(e) => {
+                eprintln!("[Sidecar] Skipping unreadable dir {:?}: {e}", dir);
+                continue;
+            }
+        };
 
-        if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
-            // 匹配所有 hancast-sidecar 开头的可执行文件（不限 triple）
-            if !file_name.starts_with("hancast-sidecar") {
+        for entry in entries {
+            let Ok(entry) = entry else { continue };
+            let path = entry.path();
+
+            if !path.is_file() {
                 continue;
             }
 
-            if cfg!(target_os = "windows") {
-                if !file_name.ends_with(".exe") {
+            if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
+                // 匹配所有 hancast-sidecar 开头的可执行文件（不限 triple）
+                if !file_name.starts_with("hancast-sidecar") {
                     continue;
                 }
-            } else {
-                if file_name.ends_with(".exe") {
-                    continue;
-                }
-            }
 
-            candidates.push(path);
+                if cfg!(target_os = "windows") {
+                    if !file_name.ends_with(".exe") {
+                        continue;
+                    }
+                } else if file_name.ends_with(".exe") {
+                    continue;
+                }
+
+                candidates.push(path);
+            }
         }
     }
 
@@ -77,21 +94,31 @@ fn find_sidecar_binary(resource_dir: &std::path::Path) -> Result<std::path::Path
         return Ok(path);
     }
 
-    // 构建详细的错误信息，列出目录实际内容
-    let dir_listing = std::fs::read_dir(resource_dir)
-        .map(|entries| {
-            entries
-                .filter_map(|e| e.ok())
-                .map(|e| format!("  {}", e.file_name().to_string_lossy()))
-                .collect::<Vec<_>>()
-                .join("\n")
-        })
-        .unwrap_or_else(|e| format!("  (无法读取: {e})"));
+    // 构建详细的错误信息，列出各目录实际内容
+    let mut listing = String::new();
+    for dir in dirs {
+        listing.push_str(&format!("  {}:\n", dir.display()));
+        match std::fs::read_dir(dir) {
+            Ok(entries) => {
+                let mut names: Vec<String> = entries
+                    .filter_map(|e| e.ok())
+                    .map(|e| format!("    {}", e.file_name().to_string_lossy()))
+                    .collect();
+                names.sort();
+                if names.is_empty() {
+                    listing.push_str("    (empty)\n");
+                } else {
+                    listing.push_str(&names.join("\n"));
+                    listing.push('\n');
+                }
+            }
+            Err(e) => listing.push_str(&format!("    (无法读取: {e})\n")),
+        }
+    }
 
     let expected_ext = if cfg!(target_os = "windows") { ".exe" } else { "" };
     Err(format!(
-        "No hancast-sidecar-*{expected_ext} binary found in {}\nDirectory contents:\n{dir_listing}",
-        resource_dir.display(),
+        "No hancast-sidecar*{expected_ext} binary found. Searched:\n{listing}"
     ))
 }
 
@@ -148,16 +175,28 @@ impl SidecarManager {
 
                 eprintln!("[Sidecar] resource_dir: {:?}", resource_dir);
 
-                // 模糊查找 hancast-sidecar- 开头的可执行文件（自动适配任意平台 triple）
-                let sidecar_path = find_sidecar_binary(&resource_dir)?;
+                // externalBin 的落点各平台不同：Windows/Linux 在 resource_dir，
+                // macOS 在 .app/Contents/MacOS/（与主程序并排）。两个都查。
+                let mut search_dirs = vec![resource_dir.clone()];
+                if let Ok(exe) = std::env::current_exe() {
+                    if let Some(exe_dir) = exe.parent() {
+                        if exe_dir != resource_dir {
+                            search_dirs.push(exe_dir.to_path_buf());
+                        }
+                    }
+                }
+
+                // 模糊查找 hancast-sidecar 开头的可执行文件（自动适配任意平台 triple）
+                let sidecar_path = find_sidecar_binary(&search_dirs)?;
                 eprintln!("[Sidecar] Found sidecar: {:?}", sidecar_path);
 
-                // 使用 command() + 绝对路径，绕过 sidecar() 的目录剥离问题
-                // current_dir 设为 sidecar 同级目录，确保 DLL/SO 依赖能正确加载
-                let work_dir = sidecar_path
-                    .parent()
-                    .unwrap_or(&resource_dir)
-                    .to_path_buf();
+                // 使用 command() + 绝对路径，绕过 sidecar() 的目录剥离问题。
+                //
+                // current_dir 必须指向**依赖所在目录**（resource_dir），而不是
+                // sidecar 可执行文件所在目录：macOS 上二者不同——sidecar 在
+                // Contents/MacOS/，而 hancast_sidecar/ 与 *.so 都在 Contents/Resources/。
+                // 把 current_dir 设成 MacOS/ 会让 Nuitka 找不到依赖。
+                let work_dir = resource_dir.clone();
 
                 app.shell()
                     .command(&sidecar_path)
