@@ -289,9 +289,30 @@ jobs:
           ls -la "$MACOS"
 
           # 冒烟测试：直接执行 sidecar，确认能 import 到 lxml 且 SSDP 起来。
-          # sidecar 收到 EOF 会自行退出；用 timeout 兜底避免挂住 CI。
+          # sidecar 收到 stdin EOF 会自行退出；但 CI 里 stdin 不一定是 EOF，
+          # 所以要有超时兜底。注意 macOS runner 上没有 GNU 的 timeout
+          # （那是 coreutils 的 gtimeout），所以这里自己实现一个。
+          cat > "$RUNNER_TEMP/sidecar_timeout.sh" <<'HELPER'
+          # 在指定秒数后杀掉命令并回收，替代 GNU timeout（macOS runner 上没有）。
+          run_sidecar_with_timeout() {
+            secs="$1"; shift
+            "$@" &
+            pid=$!
+            waited=0
+            while kill -0 "$pid" 2>/dev/null && [ "$waited" -lt "$secs" ]; do
+              sleep 1
+              waited=$((waited + 1))
+            done
+            if kill -0 "$pid" 2>/dev/null; then
+              kill -TERM "$pid" 2>/dev/null || true
+            fi
+            wait "$pid" 2>/dev/null || true
+          }
+          HELPER
+          # shellcheck disable=SC1091
+          . "$RUNNER_TEMP/sidecar_timeout.sh"
           echo "=== sidecar smoke test ==="
-          out="$(cd "$MACOS" && timeout 20 ./hancast-sidecar 2>&1 || true)"
+          out="$(cd "$MACOS" && run_sidecar_with_timeout 20 ./hancast-sidecar 2>&1 || true)"
           echo "$out" | head -30
           if echo "$out" | grep -q "ImportError\|Library not loaded\|Traceback"; then
             echo "::error::sidecar failed to start inside the .app bundle"
@@ -330,8 +351,10 @@ jobs:
           DMG="$(find src-tauri/target/release/bundle/dmg -name '*.dmg' | head -1)"
           MNT="$(mktemp -d)"
           hdiutil attach -nobrowse -quiet -mountpoint "$MNT" "$DMG"
+          # shellcheck disable=SC1091
+          . "$RUNNER_TEMP/sidecar_timeout.sh"
           echo "=== dmg sidecar smoke test ==="
-          out="$(cd "$MNT"/*.app/Contents/MacOS && timeout 20 ./hancast-sidecar 2>&1 || true)"
+          out="$(cd "$MNT"/*.app/Contents/MacOS && run_sidecar_with_timeout 20 ./hancast-sidecar 2>&1 || true)"
           hdiutil detach "$MNT" -quiet || true
           rmdir "$MNT" 2>/dev/null || true
           echo "$out" | head -20
