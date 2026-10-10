@@ -81,6 +81,10 @@ def flatten_dependencies(src_tauri_dir, output_name):
     ext = ".exe" if sys.platform == "win32" else ""
     skip_names = {f"{output_name}{ext}"}
 
+    # 必须在复制之前改：这样 src-tauri/hancast-sidecar/ 与 src-tauri/ 根目录
+    # 两份 dylib 的 install name 都是 @rpath，不会出现只改一半的情况。
+    fix_macos_dylib_paths(src_tauri_dir)
+
     copied = 0
     for name in os.listdir(dist_dir):
         if name in skip_names:
@@ -102,6 +106,131 @@ def flatten_dependencies(src_tauri_dir, output_name):
 
     if copied:
         print(f"Flattened {copied} dependency entries: {dist_dir} -> {src_tauri_dir}")
+
+
+def fix_macos_dylib_paths(src_tauri_dir):
+    """把 libpython*.dylib 的加载路径改成 @rpath，并补上指向 Resources/ 的 rpath。
+
+    背景（macOS 打包的坑，实测确认）：
+      Nuitka 产出的 hancast-sidecar 通过
+          @executable_path/libpython3.12.dylib
+      引用 Python 运行时，即「和可执行文件同级」。
+
+      而 Tauri 打包时两者落点不同：
+        externalBin  →  HanCast.app/Contents/MacOS/hancast-sidecar
+        resources    →  HanCast.app/Contents/Resources/*.so, hancast_sidecar/, ...
+      于是 @executable_path 指向 Contents/MacOS/，dylib 却在 Contents/Resources/，
+      运行时 dyld 报：
+          Library not loaded: @executable_path/libpython3.12.dylib
+      sidecar 进程直接退出 → 设备发现 / 投屏全部失效（用户表现为「发现不了设备」）。
+
+    修法（已在真机上验证三种布局都能加载）：
+      1) dylib 的 install name 改成 @rpath/libpython3.12.dylib
+      2) sidecar 里对该 dylib 的引用同样改成 @rpath/...
+      3) sidecar 补一条 rpath 指向 .app 内的 Resources/
+    这样无论 dylib 落在 sidecar 同级还是 Contents/Resources/，dyld 都能找到。
+
+    注意：@loader_path 在这里**不行**——作为依赖路径时它只解析成引用方所在目录，
+    不会去 Resources/ 找；只有 @rpath + rpath 才有多目录回退能力。
+
+    详见 install_name_tool(1) / dyld(1)。
+    """
+    if sys.platform != "darwin":
+        return
+
+    sidecar_dir = os.path.join(src_tauri_dir, "hancast-sidecar")
+    if not os.path.isdir(sidecar_dir):
+        return
+
+    if shutil.which("install_name_tool") is None:
+        print("Warning: install_name_tool not found, skip dylib path rewrite")
+        return
+
+    dylibs = [n for n in os.listdir(sidecar_dir) if n.endswith(".dylib")]
+    if not dylibs:
+        print("No .dylib found, skip install_name rewrite")
+        return
+
+    exes = [
+        n for n in os.listdir(sidecar_dir)
+        if not n.endswith(".dylib")
+        and os.path.isfile(os.path.join(sidecar_dir, n))
+        and os.access(os.path.join(sidecar_dir, n), os.X_OK)
+    ]
+
+    for dylib in dylibs:
+        dylib_path = os.path.join(sidecar_dir, dylib)
+        rpath_ref = f"@rpath/{dylib}"
+
+        # 1) dylib 自身的 install name
+        r = subprocess.run(
+            ["install_name_tool", "-id", rpath_ref, dylib_path],
+            capture_output=True, text=True,
+        )
+        if r.returncode != 0:
+            print(f"Warning: failed to set install name of {dylib}: {r.stderr.strip()}")
+            continue
+        print(f"  install_name  {dylib} -> {rpath_ref}")
+
+        # 2) 每个可执行文件里的引用
+        for exe in exes:
+            exe_path = os.path.join(sidecar_dir, exe)
+            r2 = subprocess.run(
+                ["install_name_tool", "-change",
+                 f"@executable_path/{dylib}", rpath_ref, exe_path],
+                capture_output=True, text=True,
+            )
+            if r2.returncode == 0:
+                print(f"  changed ref   {exe}: @executable_path -> {rpath_ref}")
+
+    # 3) 给可执行文件补 rpath（两条，覆盖两种可能布局）
+    #
+    #   @loader_path                  → dylib 与 sidecar 同级（externalBin 风格）
+    #   @loader_path/../Resources     → dylib 在 .app 的 Resources/ 里
+    #
+    # 「改」已有的 @executable_path 那条（Nuitka 生成的，语义已失效）而不是
+    # 盲目 -add_rpath，避免 headerpad 不足导致的失败——真实踩过的坑：
+    #   changing install names or rpaths can't be redone ... larger updated
+    #   load commands do not fit (the program must be relinked, and you may
+    #   need to use -headerpad or -headerpad_max_install_names)
+    targets = ["@loader_path", "@loader_path/../Resources"]
+
+    for exe in exes:
+        exe_path = os.path.join(sidecar_dir, exe)
+
+        def current_rpaths():
+            out = subprocess.run(
+                ["otool", "-l", exe_path], capture_output=True, text=True,
+            ).stdout
+            return [
+                line.split("path ", 1)[1].split(" (offset", 1)[0].strip()
+                for line in out.splitlines()
+                if line.strip().startswith("path ") and "(offset" in line
+            ]
+
+        # @executable_path 对 sidecar 来说是错误目录，优先回收它的槽位
+        for target in targets:
+            old_rpaths_now = current_rpaths()
+            if target in old_rpaths_now:
+                continue
+            victim = "@executable_path" if "@executable_path" in old_rpaths_now else None
+            if victim is not None:
+                r = subprocess.run(
+                    ["install_name_tool", "-rpath", victim, target, exe_path],
+                    capture_output=True, text=True,
+                )
+            else:
+                r = subprocess.run(
+                    ["install_name_tool", "-add_rpath", target, exe_path],
+                    capture_output=True, text=True,
+                )
+            if r.returncode == 0:
+                print(f"  rpath         {exe}: +{target}")
+            else:
+                print(f"  Warning: rpath {target} failed for {exe}: {r.stderr.strip()}")
+
+        print(f"  rpaths final  {exe}: {current_rpaths()}")
+
 
 def build(force=False):
     """

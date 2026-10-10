@@ -90,13 +90,13 @@ async function onCheckUpdate() {
 
 <template>
   <div class="settings">
-    <header class="settings__header">
+    <header class="settings__header" data-tauri-drag-region>
       <button class="settings__back" @click="goBack">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M19 12H5M12 19l-7-7 7-7" />
         </svg>
       </button>
-      <span class="settings__title">{{ t('settings.title') }}</span>
+      <span class="settings__title" data-tauri-drag-region>{{ t('settings.title') }}</span>
     </header>
 
     <div class="settings__body">

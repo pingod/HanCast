@@ -44,10 +44,12 @@ function cancelClose() {
 </script>
 
 <template>
-  <header class="title-bar">
-    <div class="title-bar__left">
-      <img class="title-bar__logo" src="@/assets/icon.svg" alt="HanCast" width="22" height="22" />
-      <span class="title-bar__title">{{ t('app.title') }}</span>
+  <!-- data-tauri-drag-region 是 Tauri 官方的拖拽机制，走 IPC start_dragging；
+       -webkit-app-region 在 macOS WKWebView 上是空操作，必须两者都留。 -->
+  <header class="title-bar" data-tauri-drag-region>
+    <div class="title-bar__left" data-tauri-drag-region>
+      <img class="title-bar__logo" src="@/assets/icon.svg" alt="HanCast" width="22" height="22" data-tauri-drag-region />
+      <span class="title-bar__title" data-tauri-drag-region>{{ t('app.title') }}</span>
     </div>
 
     <div class="title-bar__right">

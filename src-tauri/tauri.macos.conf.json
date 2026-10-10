@@ -4,7 +4,11 @@
       "mpv/mpv.app/**/*",
       "mpv/portable_config/**/*",
       "*.so",
-      "hancast_sidecar/**/*"
+      "*.dylib",
+      "hancast_sidecar/**/*",
+      "certifi/**/*",
+      "lxml/**/*",
+      "charset_normalizer/**/*"
     ]
   }
 }

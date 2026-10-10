@@ -5,7 +5,10 @@
       "mpv/portable_config/**/*",
       "*.dll",
       "*.pyd",
-      "hancast_sidecar/**/*"
+      "hancast_sidecar/**/*",
+      "certifi/**/*",
+      "lxml/**/*",
+      "charset_normalizer/**/*"
     ]
   }
 }
