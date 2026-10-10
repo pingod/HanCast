@@ -12,7 +12,7 @@ const emit = defineEmits<{
   (e: 'close'): void
 }>()
 
-const GITHUB_URL = 'https://github.com/lanzeweie/HanCast/releases/latest'
+const GITHUB_URL = 'https://github.com/pingod/HanCast/releases/latest'
 const GITEE_URL = 'https://gitee.com/buxiangqumingzi/han-cast/releases/latest'
 const STORE_URL = 'https://apps.microsoft.com/detail/9nk1xwpg6hd5?launch=true&mode=mini'
 

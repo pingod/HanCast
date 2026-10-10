@@ -568,7 +568,7 @@ class CommandHandler:
         # 更新源配置: (api_url, timeout)
         source_configs = {
             "github": (
-                "https://api.github.com/repos/lanzeweie/HanCast/releases/latest",
+                "https://api.github.com/repos/pingod/HanCast/releases/latest",
                 1,   # GitHub 超时 1 秒
             ),
             "gitee": (
