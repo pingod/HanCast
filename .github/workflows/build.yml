@@ -210,11 +210,22 @@ jobs:
         shell: bash
         run: |
           set -e
-          if [ -n "${GITHUB_REF_NAME}" ]; then
+          # 只有 tag 推送才把 ref 当版本号；分支推送（如 main）绝不能用分支名，
+          # 否则会产出 "vmain" 这种荒谬的版本。非 tag 一律回退到 package.json。
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             ver="${GITHUB_REF_NAME#v}"
           else
-            ver=$(node -e "console.log(require('./package.json').version)" 2>/dev/null || echo dev)
+            ver=$(node -e "console.log(require('./package.json').version)" 2>/dev/null || echo 0.0.0)
           fi
+
+          # 兜底：万一 package.json 读不到，也不能让版本变成 "main" / "undefined"
+          case "$ver" in
+            ''|main|master|HEAD|dev|undefined|null)
+              echo "::error::could not resolve a sane version (got '$ver')"
+              exit 1
+              ;;
+          esac
+
           echo "Resolved version: $ver"
           echo "VERSION=$ver" >> "$GITHUB_ENV"
 
@@ -260,10 +271,12 @@ jobs:
           echo "=== staged ==="
           ls -lh dist/
 
+      # 合一 artifact（供 release 使用）。用 bundle- 前缀与其他区分开，
+      # release job 只按 bundle-* 下载，不会重复拿到下面按格式拆分的那些。
       - name: Upload artifacts (all installers)
         uses: actions/upload-artifact@v4
         with:
-          name: HanCast-${{ matrix.name }}-v${{ env.VERSION }}
+          name: bundle-HanCast-${{ env.VERSION }}-${{ matrix.name }}
           path: dist/*
           if-no-files-found: error
           retention-days: 14
@@ -275,7 +288,7 @@ jobs:
       - name: Upload artifacts (dmg)
         uses: actions/upload-artifact@v4
         with:
-          name: split-${{ matrix.name }}-dmg-v${{ env.VERSION }}
+          name: HanCast-${{ env.VERSION }}-${{ matrix.name }}.dmg
           path: dist/*.dmg
           if-no-files-found: ignore
           retention-days: 14
@@ -283,7 +296,7 @@ jobs:
       - name: Upload artifacts (exe)
         uses: actions/upload-artifact@v4
         with:
-          name: split-${{ matrix.name }}-exe-v${{ env.VERSION }}
+          name: HanCast-${{ env.VERSION }}-${{ matrix.name }}.exe
           path: dist/*.exe
           if-no-files-found: ignore
           retention-days: 14
@@ -291,7 +304,7 @@ jobs:
       - name: Upload artifacts (deb)
         uses: actions/upload-artifact@v4
         with:
-          name: split-${{ matrix.name }}-deb-v${{ env.VERSION }}
+          name: HanCast-${{ env.VERSION }}-${{ matrix.name }}.deb
           path: dist/*.deb
           if-no-files-found: ignore
           retention-days: 14
@@ -299,7 +312,7 @@ jobs:
       - name: Upload artifacts (rpm)
         uses: actions/upload-artifact@v4
         with:
-          name: split-${{ matrix.name }}-rpm-v${{ env.VERSION }}
+          name: HanCast-${{ env.VERSION }}-${{ matrix.name }}.rpm
           path: dist/*.rpm
           if-no-files-found: ignore
           retention-days: 14
@@ -307,7 +320,7 @@ jobs:
       - name: Upload artifacts (AppImage)
         uses: actions/upload-artifact@v4
         with:
-          name: split-${{ matrix.name }}-appimage-v${{ env.VERSION }}
+          name: HanCast-${{ env.VERSION }}-${{ matrix.name }}.AppImage
           path: dist/*.AppImage
           if-no-files-found: ignore
           retention-days: 14
@@ -325,11 +338,18 @@ jobs:
         id: v
         run: |
           set -e
-          if [ -n "${GITHUB_REF_NAME}" ]; then
+          # 同 build job：只有 tag 才把 ref 当版本号，分支名不能当版本
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             ver="${GITHUB_REF_NAME#v}"
           else
-            ver=$(node -e "console.log(require('./package.json').version)" 2>/dev/null || echo "dev")
+            ver=$(node -e "console.log(require('./package.json').version)" 2>/dev/null || echo 0.0.0)
           fi
+          case "$ver" in
+            ''|main|master|HEAD|dev|undefined|null)
+              echo "::error::could not resolve a sane version (got '$ver')"
+              exit 1
+              ;;
+          esac
           echo "version=$ver" >> "$GITHUB_OUTPUT"
 
   release:
@@ -344,10 +364,10 @@ jobs:
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
         with:
-          # 只取每个平台「全格式合一」的那个 artifact。
-          # 按格式拆分的那些名字以 split- 开头，不在这个 pattern 里，
-          # 否则同一个安装包会被下载两次，release 上传时重复报错。
-          pattern: HanCast-*
+          # 只取每个平台「全格式合一」的 bundle-* artifact。
+          # 按格式拆分的那些（HanCast-<ver>-<platform>-linux-deb 等）不在
+          # 这个 pattern 里；否则同一个安装包会被下载两次，release 上传报错。
+          pattern: bundle-*
           path: artifacts
           merge-multiple: true
 
