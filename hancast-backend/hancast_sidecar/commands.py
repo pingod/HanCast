@@ -550,10 +550,52 @@ class CommandHandler:
 
     @staticmethod
     def _parse_version(v: str) -> tuple:
-        """将版本号字符串解析为可比较的元组，忽略非数字前缀"""
+        """将版本号解析为可比较的元组，符合语义化版本（SemVer）排序
+
+        返回 `(major, minor, patch, prerelease_key)`：
+
+        * 正式版（无 `-` 后缀）的 prerelease_key 为 `(1, ())`，预发布版为
+          `(0, ids)`。首位 1 > 0，所以 "2.1.0" > "2.1.0-beta.1"。
+        * 预发布版之间按标识符逐段比较，所以 "2.1.0-rc.2" > "2.1.0-rc.1"。
+        * `+` 之后的构建元数据按规范忽略，所以 "2.1.0+build.5" == "2.1.0"。
+
+        此前实现是 `re.findall(r'\\d+', v)`，会把 "2.1.0-beta.1" 解析成
+        (2, 1, 0, 1)，比正式版 "2.1.0" 的 (2, 1, 0) 还大——于是用户装了
+        正式版 2.1.0，却被提示"有新版本 2.1.0-beta.1"，被推向 beta。
+        """
         import re
-        nums = re.findall(r'\d+', v)
-        return tuple(int(n) for n in nums) if nums else (0,)
+        core = v.strip().lstrip('vV')
+        # 忽略 + 之后的构建元数据（SemVer 规范：不参与优先级比较）
+        core = core.split('+', 1)[0]
+
+        m = re.match(r'^\s*(\d+(?:\.\d+)*)\s*(?:-([0-9A-Za-z.\-]*))?\s*$', core)
+        if not m:
+            # 兜底：抓出所有数字，按正式版处理
+            nums = tuple(int(n) for n in re.findall(r'\d+', core)) or (0,)
+            nums = (nums + (0, 0, 0))[:3]
+            return nums + (1, ())
+
+        nums = tuple(int(n) for n in m.group(1).split('.'))
+        nums = (nums + (0, 0, 0))[:3]
+
+        pre = m.group(2)
+        if not pre:
+            # 正式版：用 (1, ()) 表示，排在所有预发布版之上
+            return nums + (1, ())
+
+        # 预发布标识符逐段比较：数字按数值比，其余按字典序；
+        # 数字标识符优先级低于非数字标识符（SemVer 规则 11.4）。
+        ids = []
+        for part in pre.split('.'):
+            if part == '':
+                continue
+            if part.isdigit():
+                ids.append((0, int(part), ''))
+            else:
+                ids.append((1, 0, part))
+        # 预发布版：用 (0, ids) 表示。正式版首元素 1 > 预发布版 0，
+        # 所以 2.1.0 > 2.1.0-beta.1；同为预发布版时再比 ids。
+        return nums + (0, tuple(ids))
 
     def _check_update(self, params: dict) -> dict:
         """
