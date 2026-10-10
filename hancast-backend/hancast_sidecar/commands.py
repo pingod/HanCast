@@ -9,6 +9,7 @@ import logging
 import threading
 from typing import Any, Dict, Optional
 from .ssdp import SSDPService
+from .protocol import dlna
 from .protocol.dlna import DLNAProtocol
 from .protocol.server import DLNAServer, DLNAHandler
 from .renderer.mpv import MPVRenderer
@@ -81,6 +82,8 @@ class CommandHandler:
     def __init__(self):
         self.config = Config()
         self.protocol = DLNAProtocol()
+        # 把真实版本号注入 DLNA 协议层（UPnP SERVER / modelNumber 用）
+        dlna.set_app_version(self.config.version)
 
         # MPV 管理器
         self.mpv_manager = MpvManager(self.config)
@@ -103,7 +106,8 @@ class CommandHandler:
             friendly_name=friendly_name,
             usn=device_usn,
             ip=self._get_local_ip(),
-            port=8080
+            port=8080,
+            version=self.config.version
         )
         self.dlna_server.set_command_handler(self)
 
@@ -111,7 +115,8 @@ class CommandHandler:
         self.ssdp = SSDPService(
             friendly_name=friendly_name,
             port=8080,
-            usn=device_usn
+            usn=device_usn,
+            version=self.config.version
         )
 
         # 设备投屏确认 (Device Guard)

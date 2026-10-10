@@ -68,7 +68,7 @@ class SSDPService:
     """SSDP 服务"""
 
     def __init__(self, friendly_name: str = "HanCast", port: int = 8080,
-                 usn: str = None):
+                 usn: str = None, version: str = "0.0.0"):
         self._devices: Dict[str, Device] = {}
         self._lock = threading.Lock()
         self._running = False
@@ -78,7 +78,9 @@ class SSDPService:
         self._port = port
         self._usn = usn or f"uuid:{self._generate_uuid()}"
         self._ip = self._get_local_ip()
-        self._server_info = 'Windows/10 UPnP/1.0 HanCast/2.0'
+        # SERVER 头按运行平台和真实版本号组装（此前硬编码 Windows/10 + 2.0）
+        from .utils.platform_info import build_server_info
+        self._server_info = build_server_info(version)
 
         # SSDP 状态
         self._known: Dict[str, dict] = {}

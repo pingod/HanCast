@@ -19,8 +19,19 @@ from lxml import etree
 from queue import Queue
 from typing import Optional, Dict, List, Callable
 from ..models.device import Device
+from ..utils.platform_info import build_server_info
 
 logger = logging.getLogger("hancast.dlna")
+
+# 应用版本，由 CommandHandler 构造 DLNAProtocol 时注入（见 set_app_version）。
+# 默认值仅用于单元测试直接实例化本模块的场景。
+_APP_VERSION = "0.0.0"
+
+
+def set_app_version(version: str) -> None:
+    """注入应用版本号，供 UPnP SERVER 头使用"""
+    global _APP_VERSION
+    _APP_VERSION = version
 
 NS_AVTRANSPORT = "urn:schemas-upnp-org:service:AVTransport:1"
 NS_RENDERING = "urn:schemas-upnp-org:service:RenderingControl:1"
@@ -66,7 +77,7 @@ class ObserveClient:
         headers = {"NT": "upnp:event",
                    "NTS": "upnp:propchange",
                    "CONTENT-TYPE": 'text/xml; charset="utf-8"',
-                   "SERVER": "Windows/10 UPnP/1.0 HanCast/2.0",
+                   "SERVER": build_server_info(_APP_VERSION),
                    "SID": self.sid,
                    "SEQ": self.seq,
                    "TIMEOUT": f"Second-{self.timeout}"

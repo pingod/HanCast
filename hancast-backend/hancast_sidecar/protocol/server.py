@@ -10,6 +10,8 @@ import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 
+from ..utils.platform_info import build_server_info
+
 logger = logging.getLogger("hancast.dlna.server")
 
 
@@ -19,6 +21,7 @@ class DLNAHandler(BaseHTTPRequestHandler):
     使用 HTTP/1.0 以确保与各种 DLNA 控制器的兼容性。
     """
 
+
     # 类变量，由外部设置
     friendly_name = "HanCast"
     usn = "uuid:test"
@@ -26,8 +29,14 @@ class DLNAHandler(BaseHTTPRequestHandler):
     port = 8080
     xml_dir = ""
     command_handler = None
+    # 应用版本，由 ServerHandler.start() 从 Config 注入
+    app_version = "0.0.0"
     # 服务器信息，格式: {OS}/{OSVersion} UPnP/1.0 {App}/{AppVersion}
-    server_info = "Windows/10 UPnP/1.0 HanCast/2.0"
+    #
+    # 这里只用占位，实际值在 `start()` 里按运行平台和真实版本号组装。
+    # 之前硬编码成 "Windows/10 UPnP/1.0 HanCast/2.0"，导致 macOS/Linux
+    # 上向控制点谎报操作系统，版本号也永远停在 2.0。
+    server_info = ""
 
     def do_GET(self):
         """处理 GET 请求"""
@@ -157,11 +166,11 @@ class DLNAHandler(BaseHTTPRequestHandler):
                 '{uuid}': self.usn,
                 '{friendly_name}': self.friendly_name,
                 '{manufacturer}': 'HanCast',
-                '{manufacturer_url}': 'https://github.com/your-username/HanCast',
+                '{manufacturer_url}': 'https://github.com/pingod/HanCast',
                 '{model_description}': 'AVTransport Media Renderer',
                 '{model_name}': 'HanCast',
-                '{model_url}': 'https://github.com/your-username/HanCast',
-                '{model_number}': '2.0.0',
+                '{model_url}': 'https://github.com/pingod/HanCast',
+                '{model_number}': self.app_version,
                 '{serial_num}': '1024',
                 '{header_extra}': '',
                 '{service_extra}': '',
@@ -225,7 +234,7 @@ class DLNAHandler(BaseHTTPRequestHandler):
         <!DOCTYPE html>
         <html>
         <head>
-            <title>HanCast 2.0</title>
+            <title>HanCast {version}</title>
             <style>
                 body { font-family: sans-serif; text-align: center; padding: 50px; }
                 h1 { color: #333; }
@@ -233,13 +242,13 @@ class DLNAHandler(BaseHTTPRequestHandler):
             </style>
         </head>
         <body>
-            <h1>HanCast 2.0</h1>
+            <h1>HanCast {version}</h1>
             <p>DLNA Media Renderer</p>
             <p>Device: {name}</p>
             <p><a href="/description.xml">Device Description (XML)</a></p>
         </body>
         </html>
-        """.format(name=self.friendly_name)
+        """.format(name=self.friendly_name, version=self.app_version)
 
         self.send_response(200)
         self.send_header('Content-Type', 'text/html; charset="utf-8"')
@@ -266,11 +275,13 @@ class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
 class DLNAServer:
     """DLNA 描述服务器"""
 
-    def __init__(self, friendly_name: str, usn: str, ip: str, port: int = 8080):
+    def __init__(self, friendly_name: str, usn: str, ip: str, port: int = 8080,
+                 version: str = "0.0.0"):
         self.friendly_name = friendly_name
         self.usn = usn
         self.ip = ip
         self.port = port
+        self.version = version
         self._server: HTTPServer = None
         self._thread: threading.Thread = None
         self._command_handler = None
@@ -291,6 +302,8 @@ class DLNAServer:
         DLNAHandler.port = self.port
         DLNAHandler.xml_dir = self.xml_dir
         DLNAHandler.command_handler = self._command_handler
+        DLNAHandler.app_version = self.version
+        DLNAHandler.server_info = build_server_info(self.version)
 
         try:
             self._server = ThreadingHTTPServer(('0.0.0.0', self.port), DLNAHandler)
