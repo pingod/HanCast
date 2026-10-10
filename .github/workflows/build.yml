@@ -242,12 +242,74 @@ jobs:
           echo "=== bundle dir ==="
           find src-tauri/target/release/bundle -type f 2>/dev/null || true
 
-      - name: Upload artifacts
+      # bundle/ 里除最终安装包外还有一堆中间产物（未压缩的 .app 树、
+      # AppDir/、deb 解包目录、bundle_dmg.sh 等），全传上去既臃肿又难挑。
+      # 这里只把「用户真正要下载的东西」归拢到 dist/。
+      - name: Stage final installers
+        shell: bash
+        run: |
+          set -e
+          B="src-tauri/target/release/bundle"
+          rm -rf dist && mkdir -p dist
+          # 必须 -type f 且只吃最终安装包扩展名；
+          # 目录（*.app / *.AppDir / deb 解包目录）一律不进 dist。
+          find "$B" -type f \( \
+              -name '*.dmg' -o -name '*.exe' -o -name '*.msi' \
+              -o -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \
+            \) -exec cp -v {} dist/ \;
+          echo "=== staged ==="
+          ls -lh dist/
+
+      - name: Upload artifacts (all installers)
         uses: actions/upload-artifact@v4
         with:
           name: HanCast-${{ matrix.name }}-v${{ env.VERSION }}
-          path: src-tauri/target/release/bundle/*
+          path: dist/*
           if-no-files-found: error
+          retention-days: 14
+
+      # ---------- 按格式拆分 ----------
+      # Linux 同时产出 deb / rpm / AppImage，混在一个包里用户得整个下载。
+      # 拆成独立 artifact 后可只取需要的格式；其他平台上对应 glob 匹配不到，
+      # 用 if-no-files-found: ignore 静默跳过。
+      - name: Upload artifacts (dmg)
+        uses: actions/upload-artifact@v4
+        with:
+          name: split-${{ matrix.name }}-dmg-v${{ env.VERSION }}
+          path: dist/*.dmg
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload artifacts (exe)
+        uses: actions/upload-artifact@v4
+        with:
+          name: split-${{ matrix.name }}-exe-v${{ env.VERSION }}
+          path: dist/*.exe
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload artifacts (deb)
+        uses: actions/upload-artifact@v4
+        with:
+          name: split-${{ matrix.name }}-deb-v${{ env.VERSION }}
+          path: dist/*.deb
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload artifacts (rpm)
+        uses: actions/upload-artifact@v4
+        with:
+          name: split-${{ matrix.name }}-rpm-v${{ env.VERSION }}
+          path: dist/*.rpm
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload artifacts (AppImage)
+        uses: actions/upload-artifact@v4
+        with:
+          name: split-${{ matrix.name }}-appimage-v${{ env.VERSION }}
+          path: dist/*.AppImage
+          if-no-files-found: ignore
           retention-days: 14
 
   # 汇总版本（供 release 步骤读取）
@@ -282,6 +344,10 @@ jobs:
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
         with:
+          # 只取每个平台「全格式合一」的那个 artifact。
+          # 按格式拆分的那些名字以 split- 开头，不在这个 pattern 里，
+          # 否则同一个安装包会被下载两次，release 上传时重复报错。
+          pattern: HanCast-*
           path: artifacts
           merge-multiple: true
 
