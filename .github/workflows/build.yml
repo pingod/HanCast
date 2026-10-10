@@ -324,45 +324,49 @@ jobs:
           fi
           echo "sidecar OK"
 
-      # dmg 只是把上一步的 .app 包起来，因此必须排在布局修复之后。
-      # `--bundles dmg` 若走 cargo 重新构建会覆盖 .app，所以打完之后
-      # 再补一次链接并校验 dmg 里确实带上了符号链接。
+      # 自己打 dmg，而不是再调一次 `tauri build --bundles dmg`。
+      # 原因：dmg bundler 会重新跑一遍 cargo 并重建 .app（日志里能看到
+      # Compiling → Bundling HanCast.app），重建出来的 .app 没有上一步的
+      # 符号链接，等于白修；打完它还会把 bundle/macos 下的 .app 删掉。
+      # 这里直接用已修好的 .app 造 dmg，产出可控，也让 dmg 与 .app 内容一致。
       - name: Bundle macOS dmg
         if: matrix.runner-os == 'macOS'
         shell: bash
         run: |
           set -e
-          npx tauri build --bundles dmg
-          echo "=== dmg ==="
-          ls -lh src-tauri/target/release/bundle/dmg/
-
           APP="$(find src-tauri/target/release/bundle/macos -maxdepth 1 -name '*.app' | head -1)"
-          MACOS="$APP/Contents/MacOS"
-          RES="$APP/Contents/Resources"
+          if [ -z "$APP" ]; then
+            echo "::error::no .app found under bundle/macos"
+            exit 1
+          fi
 
-          # 幂等重放链接（若 Tauri 重建过 .app 则这里补齐）
-          for item in "$RES"/*; do
-            name="$(basename "$item")"
-            case "$name" in icon.icns|Assets.car) continue ;; esac
-            [ -e "$MACOS/$name" ] || ln -sfn "../Resources/$name" "$MACOS/$name"
-          done
+          STAGE="$(mktemp -d)"
+          cp -R "$APP" "$STAGE/"
+          ln -s /Applications "$STAGE/Applications"
 
-          # 从 dmg 里挂载出来的 .app 必须能跑起来，否则说明 dmg 是旧 .app 打的
-          DMG="$(find src-tauri/target/release/bundle/dmg -name '*.dmg' | head -1)"
+          out="src-tauri/target/release/bundle/dmg/HanCast_${VERSION}_aarch64.dmg"
+          mkdir -p "$(dirname "$out")"
+          rm -f "$out"
+          hdiutil create -volname "HanCast" -srcfolder "$STAGE" -ov -format UDZO "$out"
+          rm -rf "$STAGE"
+          echo "=== dmg ==="
+          ls -lh "$out"
+
+          # 挂载 dmg 里的 .app 真跑一次 sidecar，确保链接确实进了 dmg
           MNT="$(mktemp -d)"
-          hdiutil attach -nobrowse -quiet -mountpoint "$MNT" "$DMG"
+          hdiutil attach -nobrowse -quiet -mountpoint "$MNT" "$out"
           # shellcheck disable=SC1091
           . "$RUNNER_TEMP/sidecar_timeout.sh"
           echo "=== dmg sidecar smoke test ==="
-          out="$(cd "$MNT"/*.app/Contents/MacOS && run_sidecar_with_timeout 20 ./hancast-sidecar 2>&1 || true)"
+          out_log="$(cd "$MNT"/*.app/Contents/MacOS && run_sidecar_with_timeout 20 ./hancast-sidecar 2>&1 || true)"
           hdiutil detach "$MNT" -quiet || true
           rmdir "$MNT" 2>/dev/null || true
-          echo "$out" | head -20
-          if echo "$out" | grep -q "ImportError\|Library not loaded\|Traceback"; then
+          echo "$out_log" | head -20
+          if echo "$out_log" | grep -q "ImportError\|Library not loaded\|Traceback"; then
             echo "::error::sidecar inside the dmg failed to start"
             exit 1
           fi
-          if ! echo "$out" | grep -q "DLNA server started"; then
+          if ! echo "$out_log" | grep -q "DLNA server started"; then
             echo "::error::sidecar inside the dmg never reached 'DLNA server started'"
             exit 1
           fi
