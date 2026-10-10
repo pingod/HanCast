@@ -43,8 +43,10 @@ class DLNAHandler(BaseHTTPRequestHandler):
     def do_SUBSCRIBE(self):
         """处理 SUBSCRIBE 请求 (事件订阅)
 
-        RENEW (SID 存在): TIMEOUT 发送纯数字
-        ADD (CALLBACK 存在): TIMEOUT 发送 "Second-{timeout}" 格式
+        RENEW (SID 存在) 与 ADD (CALLBACK 存在) 的 TIMEOUT 都必须回
+        `Second-{timeout}`：UPnP 规范定义的是 time-out header value，
+        `Second-N` 与 `infinite` 是仅有的两种合法形式。此前 RENEW 路径
+        直接把整数塞进响应头，违反规范且部分控制点会解析失败。
         """
         logger.info(f"SUBSCRIBE: {self.path}")
 
@@ -67,7 +69,7 @@ class DLNAHandler(BaseHTTPRequestHandler):
                     return
             self.send_response(200)
             self.send_header('SID', sid_header)
-            self.send_header('TIMEOUT', timeout)
+            self.send_header('TIMEOUT', f'Second-{timeout}')
             self.send_header('Content-Length', '0')
             self.end_headers()
         elif callback_header:
