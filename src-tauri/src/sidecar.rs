@@ -11,6 +11,12 @@ use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 use tokio::sync::{oneshot, Mutex};
 
+/// 单条命令等待 sidecar 响应的上限。
+///
+/// 取 60s 是因为最慢的正常命令（媒体解析 + B 站解析）在网络较差时也需要
+/// 十几秒；再长则用户已经在盯着卡住的界面了。
+const COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// 在若干候选目录中查找以 `hancast-sidecar` 开头的可执行文件
 ///
 /// 不限定具体 triple 后缀，适配所有命名形式：
@@ -346,10 +352,29 @@ impl SidecarManager {
                 .map_err(|e| format!("Failed to write to sidecar: {e}"))?;
         }
 
-        // Wait for response
-        let response = rx
-            .await
-            .map_err(|_| "Sidecar process exited unexpectedly".to_string())?;
+        // Wait for response.
+        //
+        // 必须有超时：如果 sidecar 存活但吞掉了某个请求（例如命令分发
+        // 里出现未被捕获的异常、或响应行因任何原因丢失），oneshot 永远
+        // 不会收到值，UI 会永久卡在等待状态。
+        //
+        // 超时后必须把 pending 里的条目摘掉，否则这张表只增不减，长时
+        // 间运行会持续泄漏。
+        let response = match tokio::time::timeout(COMMAND_TIMEOUT, rx).await {
+            Ok(Ok(value)) => value,
+            Ok(Err(_)) => {
+                // 发送端被丢弃（sidecar 退出时 reader_loop 会 drain 并发送错误）
+                self.pending.lock().await.remove(&id);
+                return Err("Sidecar process exited unexpectedly".to_string());
+            }
+            Err(_) => {
+                self.pending.lock().await.remove(&id);
+                return Err(format!(
+                    "Sidecar did not respond to '{cmd}' within {}s",
+                    COMMAND_TIMEOUT.as_secs()
+                ));
+            }
+        };
 
         // Check success
         if response

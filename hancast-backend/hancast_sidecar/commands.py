@@ -22,6 +22,7 @@ from .models.session import DeviceCastSession
 from .utils.config import Config
 from .security.guard import DeviceGuard
 from .utils.mpv_manager import MpvManager
+from .utils import protocol_io
 
 import requests
 
@@ -236,10 +237,7 @@ class CommandHandler:
         })
 
         # 发送事件到前端
-        print(json.dumps({
-            "event": "device_found",
-            "data": device.to_dict()
-        }), flush=True)
+        protocol_io.emit_event("device_found", device.to_dict())
 
     def _should_ignore_device(self, device_udn: str) -> bool:
         """检查设备是否应该被忽略（隐藏）"""
@@ -247,10 +245,7 @@ class CommandHandler:
 
     def _emit_event(self, event_name: str, data: dict):
         """推送事件到前端"""
-        print(json.dumps({
-            "event": event_name,
-            "data": data
-        }, ensure_ascii=False), flush=True)
+        protocol_io.emit_event(event_name, data)
 
     def _on_protocol_state_change(self, name: str, value) -> None:
         """DLNA 状态变化回调 → 推送事件到前端"""
@@ -280,10 +275,7 @@ class CommandHandler:
             if self.cast_state.media:
                 event_data["media"] = self.cast_state.media.to_dict()
 
-            print(json.dumps({
-                "event": "cast_state_changed",
-                "data": event_data
-            }), flush=True)
+            protocol_io.emit_event("cast_state_changed", event_data)
 
     # ── 设备管理 ──
 
@@ -363,10 +355,7 @@ class CommandHandler:
         if state.media:
             event_data["media"] = state.media.to_dict()
 
-        print(json.dumps({
-            "event": "cast_state_changed",
-            "data": event_data
-        }), flush=True)
+        protocol_io.emit_event("cast_state_changed", event_data)
 
     def _start_cast(self, params: dict) -> None:
         device_id = params["device_id"]
@@ -396,10 +385,7 @@ class CommandHandler:
         if state.media:
             event_data["media"] = state.media.to_dict()
 
-        print(json.dumps({
-            "event": "cast_state_changed",
-            "data": event_data
-        }), flush=True)
+        protocol_io.emit_event("cast_state_changed", event_data)
 
         # 同时更新全局 cast_state（兼容旧前端）
         self.cast_state.status = "playing"
@@ -670,10 +656,7 @@ class CommandHandler:
             "device": pending.device_info,
             "timeout": self.device_guard.confirm_timeout,
         }
-        print(json.dumps({
-            "event": "cast_confirm_request",
-            "data": event_data
-        }), flush=True)
+        protocol_io.emit_event("cast_confirm_request", event_data)
 
     def _respond_cast_confirm(self, params: dict) -> bool:
         """用户响应投屏确认"""

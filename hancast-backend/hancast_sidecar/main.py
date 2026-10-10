@@ -23,9 +23,11 @@ import subprocess
 try:
     from .commands import CommandHandler
     from .utils.logger import setup_logger, get_logger
+    from .utils import protocol_io
 except ImportError:
     from hancast_sidecar.commands import CommandHandler
     from hancast_sidecar.utils.logger import setup_logger, get_logger
+    from hancast_sidecar.utils import protocol_io
 
 # Windows 下强制 stdin/stdout/stderr 使用 UTF-8 编码
 if sys.platform == 'win32':
@@ -40,9 +42,8 @@ logger = get_logger("hancast.sidecar")
 
 
 def _emit_event(event_name: str, data: dict = None):
-    """发送事件到 Rust 端"""
-    event = {"event": event_name, "data": data or {}}
-    print(json.dumps(event, ensure_ascii=False), flush=True)
+    """发送事件到 Rust 端（经 stdout 单写者，避免与响应交错）"""
+    protocol_io.emit_event(event_name, data)
 
 
 def _launch_main_if_standalone():
@@ -125,34 +126,15 @@ def main():
 
             # 执行命令
             result = handler.execute(cmd, params)
-
-            response = {
-                "id": req_id,
-                "success": True,
-                "data": result
-            }
+            protocol_io.emit_response(req_id, True, data=result)
 
         except json.JSONDecodeError as e:
-            response = {
-                "id": req_id,
-                "success": False,
-                "error": f"Invalid JSON: {e}"
-            }
+            protocol_io.emit_response(req_id, False, error=f"Invalid JSON: {e}")
         except KeyError as e:
-            response = {
-                "id": req_id,
-                "success": False,
-                "error": f"Missing field: {e}"
-            }
+            protocol_io.emit_response(req_id, False, error=f"Missing field: {e}")
         except Exception as e:
             logger.exception(f"Command error: {e}")
-            response = {
-                "id": req_id,
-                "success": False,
-                "error": str(e)
-            }
-
-        print(json.dumps(response, ensure_ascii=False), flush=True)
+            protocol_io.emit_response(req_id, False, error=str(e))
 
     # stdin EOF 或 exit 命令后，确保清理完成（atexit 兜底 + 显式调用）
     handler.cleanup()
