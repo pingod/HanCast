@@ -141,7 +141,8 @@ class TestHttpd(unittest.TestCase):
     """HTTP 服务"""
 
     def test_safe_hls_path_traversal(self):
-        httpd = ScreenCastHttpd(hls_root="C:\\tmp\\hls")
+        import tempfile
+        httpd = ScreenCastHttpd(hls_root=tempfile.mkdtemp(prefix="hancast-hls-test-"))
         # 目录穿越被拒绝
         self.assertIsNone(httpd._safe_hls_path("dlna", "../secret.txt"))
         self.assertIsNone(httpd._safe_hls_path("dlna", "..\\secret.txt"))

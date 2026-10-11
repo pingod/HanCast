@@ -97,7 +97,10 @@ class CommandHandler:
         self.renderer = MPVRenderer(path=mpv_path)
 
         self.media_parser = MediaParser()
-        self.media_server = MediaServer()
+        # 投本地文件走 MediaServer 的 HTTP 链接：必须用选定网卡 IP，
+        # 否则多网卡/VPN 机器上电视拿到的是默认路由 IP，拉不到流
+        self.media_server = MediaServer(
+            lan_ip=self.config.network_interface or None)
         self.cast_state = CastState()
 
         # 多设备投屏会话 {device_id: DeviceCastSession}
@@ -580,6 +583,9 @@ class CommandHandler:
         new_iface = self.config.network_interface
         if new_iface != old_iface:
             self.ssdp.preferred_ip = new_iface or None
+            # 媒体服务器 LAN 链接同步切到选定网卡
+            self.media_server._lan_ip = (
+                new_iface or MediaServer._get_local_ip())
             threading.Thread(
                 target=self._restart_ssdp, name="SSDP_RESTART",
                 daemon=True).start()

@@ -387,10 +387,13 @@ class FfmpegManager:
         return args
 
     @staticmethod
-    def build_audio_input(audio_cfg: Dict) -> List[str]:
+    def build_audio_input(audio_cfg: Dict, input_offset: int = 0) -> List[str]:
         """构造音频捕获输入参数（含多路混音 filter）
 
         audio_cfg: {"mic": bool, "mic_device": str|None, "system": bool, "system_device": str|None}
+        input_offset: 音频输入在整条命令中的输入序号（HLS 模式视频占 0，
+        音频从 1 起；raw 模式音频是独立进程，从 0 起）——amix 标签须按
+        此偏移引用，否则会指向无音频流的视频输入导致 FFmpeg 启动失败。
         返回 [] 表示不捕获音频；返回的最后若含 -filter_complex 则由调用方拼接。
         """
         use_mic = bool(audio_cfg.get("mic"))
@@ -408,9 +411,10 @@ class FfmpegManager:
             for _kind, dev in devices:
                 args += ["-f", "dshow", "-i", f"audio={dev}"]
             if len(devices) > 1:
-                # 0:a + 1:a 混音；amix 输入标签从 0 起
+                # 两路音频混音；amix 输入标签按音频起始序号引用
                 args += ["-filter_complex",
-                         "[0:a][1:a]amix=inputs=2:duration=longest:dropout_transition=0"]
+                         f"[{input_offset}:a][{input_offset + 1}:a]"
+                         f"amix=inputs=2:duration=longest:dropout_transition=0"]
         elif sys.platform == "darwin":
             # avfoundation 音频：
             #   - 麦克风：物理输入设备（如 "0:Built-in Microphone"）
@@ -428,7 +432,8 @@ class FfmpegManager:
                 args += ["-f", "avfoundation", "-i", f":{mic_idx}",
                          "-f", "avfoundation", "-i", f":{sys_idx}"]
                 args += ["-filter_complex",
-                         "[0:a][1:a]amix=inputs=2:duration=longest:dropout_transition=0"]
+                         f"[{input_offset}:a][{input_offset + 1}:a]"
+                         f"amix=inputs=2:duration=longest:dropout_transition=0"]
             elif mic_idx:
                 args += ["-f", "avfoundation", "-i", f":{mic_idx}"]
             elif sys_idx:

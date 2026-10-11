@@ -69,15 +69,11 @@ async function togglePlayPause() {
   else await castStore.resumeCast()
 }
 
-// ── Volume (extracted to avoid repeated import) ──
-let _invoke: ((cmd: string, args?: any) => Promise<any>) | null = null
-
+// ── Volume ──
 async function setVolume(e: Event) {
   const v = Number((e.target as HTMLInputElement).value)
-  if (!_invoke) {
-    _invoke = (await import('@tauri-apps/api/core')).invoke
-  }
-  await _invoke('set_volume', { volume: v })
+  // 走 store：带 device_id 打到电视；裸 invoke 会落到本地 MPV
+  await castStore.setVolume(v)
 }
 
 onMounted(async () => {

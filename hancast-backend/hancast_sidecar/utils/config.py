@@ -13,6 +13,7 @@ import uuid
 import json
 import platform
 import logging
+import threading
 from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger("hancast.config")
@@ -37,6 +38,7 @@ class Config:
         self.friendly_name = f"HanCast({node_name})"
         self.version = "2.2.4"
         self.usn = str(uuid.uuid4())
+        self._save_lock = threading.Lock()
 
         # 确保配置目录存在
         os.makedirs(SETTING_DIR, exist_ok=True)
@@ -66,10 +68,13 @@ class Config:
             self.settings.pop('friendly_name', None)
 
     def save(self):
-        """保存配置"""
+        """保存配置（原子写：临时文件 + rename，加锁串行化并发写盘）"""
         try:
-            with open(self.setting_path, 'w', encoding='utf-8') as f:
-                json.dump(self.settings, f, indent=2, ensure_ascii=False)
+            with self._save_lock:
+                tmp = self.setting_path + '.tmp'
+                with open(tmp, 'w', encoding='utf-8') as f:
+                    json.dump(self.settings, f, indent=2, ensure_ascii=False)
+                os.replace(tmp, self.setting_path)
             logger.info(f"Saved settings to {self.setting_path}")
         except Exception as e:
             logger.error(f"Failed to save settings: {e}")

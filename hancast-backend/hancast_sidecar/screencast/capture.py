@@ -62,8 +62,6 @@ class RawCaptureThread(threading.Thread):
                 data = _read_exact(self._proc.stdout, self._frame_size)
                 if data is None:
                     break
-                if len(data) < self._frame_size:
-                    break
                 try:
                     self._on_frame(data)
                 except Exception:
@@ -71,12 +69,19 @@ class RawCaptureThread(threading.Thread):
         except Exception as e:
             self._on_error(str(e))
         finally:
-            # 进程可能还有 stderr 未消费，关闭管道
             try:
                 if self._proc.stdout:
                     self._proc.stdout.close()
             except Exception:
                 pass
+            # 非 stop() 路径的 EOF = FFmpeg 意外退出：上报并回收僵尸进程，
+            # 否则前端一直显示 running 且残留子进程
+            if not self._stop.is_set():
+                try:
+                    rc = self._proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    rc = None
+                self._on_error(f"FFmpeg 输出流中断（退出码 {rc}）")
 
 
 class FfmpegCapture:
@@ -128,8 +133,26 @@ class FfmpegCapture:
             return {"ok": False, "error": f"启动视频捕获失败: {e}"}
 
         frame_size = width * height * 3
-        vt = RawCaptureThread(vproc, frame_size, on_video_frame, _err, "video")
         self._procs.append(vproc)
+
+        # 预读一帧校验管线：必须在 RawCaptureThread 启动前读（否则两个
+        # reader 抢同一管道造成帧撕裂），且限时——macOS 屏幕录制权限被
+        # 弹窗挂起时 FFmpeg 永不吐帧，裸读会卡死整个 sidecar 命令循环
+        first: Dict = {}
+
+        def _peek():
+            first["data"] = _read_exact(vproc.stdout, frame_size)
+
+        peeker = threading.Thread(target=_peek, daemon=True)
+        peeker.start()
+        peeker.join(10)
+        if peeker.is_alive() or not first.get("data"):
+            msg = "屏幕捕获无输出（可能是权限弹窗未确认/窗口不存在）"
+            _err(msg)
+            self.stop()
+            return {"ok": False, "error": msg}
+
+        vt = RawCaptureThread(vproc, frame_size, on_video_frame, _err, "video")
         self._threads.append(vt)
 
         # ── 音频进程（可选）──
@@ -155,21 +178,9 @@ class FfmpegCapture:
                 logger.warning("[ScreenCast] Audio requested but no capture device available")
 
         self._running = True
+        on_video_frame(first["data"])
         for t in self._threads:
             t.start()
-
-        # 预读一帧校验管线（1s 内无输出说明捕获失败）
-        try:
-            first = _read_exact(vproc.stdout, frame_size)
-            if not first:
-                _err("屏幕捕获无输出（可能是权限/窗口不存在）")
-                self.stop()
-                return {"ok": False, "error": "屏幕捕获无输出（可能是权限/窗口不存在）"}
-            on_video_frame(first)
-        except Exception as e:
-            _err(f"屏幕捕获校验失败: {e}")
-            self.stop()
-            return {"ok": False, "error": f"屏幕捕获校验失败: {e}"}
 
         logger.info(f"[ScreenCast] Raw capture started: {width}x{height}@{fps}fps")
         return {"ok": True, "width": width, "height": height, "fps": fps}
@@ -205,7 +216,8 @@ class FfmpegCapture:
         cmd = [self.ffmpeg, "-hide_banner", "-loglevel", "error",
                "-nostdin"]
         cmd += self._video_input_args(source, fps, scale)
-        audio_input = self._audio_input_args(audio_cfg)
+        # 视频占输入 0，音频输入从 1 起（amix 标签需此偏移）
+        audio_input = self._audio_input_args(audio_cfg, input_offset=1)
         if audio_input:
             cmd += audio_input
         # 输出段
@@ -278,9 +290,9 @@ class FfmpegCapture:
         from .ffmpeg_manager import FfmpegManager
         return FfmpegManager.build_video_input(source, fps, scale, self.ffmpeg)
 
-    def _audio_input_args(self, audio_cfg: Dict) -> List[str]:
+    def _audio_input_args(self, audio_cfg: Dict, input_offset: int = 0) -> List[str]:
         from .ffmpeg_manager import FfmpegManager
-        return FfmpegManager.build_audio_input(audio_cfg)
+        return FfmpegManager.build_audio_input(audio_cfg, input_offset)
 
     def stop(self):
         """停止所有捕获进程（幂等）"""

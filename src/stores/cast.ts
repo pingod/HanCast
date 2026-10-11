@@ -193,13 +193,15 @@ export const useCastStore = defineStore('cast', () => {
         PLAYING: 'playing',
         PAUSED: 'paused',
         STOPPED: 'stopped',
+        IDLE: 'idle',
       }
       for (const id of ids) {
         try {
           const info = await getCastUrl(id)
           const session = sessions.value[id]
           if (!session) continue
-          const newStatus = statusMap[info.status] ?? session.status
+          // 后端带 device_id 返回小写（playing/idle）、不带返回 DLNA 大写，统一归一
+          const newStatus = statusMap[info.status.toUpperCase()] ?? session.status
           const updates: Partial<CastSession> = {}
 
           // Status: only upgrade (connecting→playing, paused→playing)

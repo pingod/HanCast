@@ -373,6 +373,8 @@ class SSDPService:
 
         if not self.sock_list:
             logger.error("No valid network interfaces found!")
+            self.sock.close()
+            self.sock = None
             return
 
         try:
@@ -380,6 +382,13 @@ class SSDPService:
             logger.info(f"SSDP bound to port {SSDP_PORT}")
         except Exception as e:
             logger.error(f"SSDP bind error: {e}")
+            # 失败也要释放已建立的成员关系与 socket，否则 1900 端口被
+            # 漏掉的 socket 占住，后续 restart 持续失败
+            for s in self.sock_list:
+                s.close()
+            self.sock_list = []
+            self.sock.close()
+            self.sock = None
             return
 
         self.sock.settimeout(1)

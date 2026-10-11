@@ -99,6 +99,7 @@ class ScreenCastHttpd:
     def stop(self):
         """停止服务（幂等）"""
         loop = self._loop
+        thread = self._thread
         if loop is not None:
             try:
                 async def _shutdown():
@@ -108,9 +109,18 @@ class ScreenCastHttpd:
                 fut.result(timeout=5)
             except Exception as e:
                 logger.warning(f"[ScreenCast] Httpd shutdown: {e}")
+            # 必须停掉 run_forever，否则线程存活、下次 start() 被
+            # is_alive() 短路返回 True，但服务实际已死（房间注册静默失败）
+            try:
+                loop.call_soon_threadsafe(loop.stop)
+            except RuntimeError:
+                pass
         self._runner = None
         self._site = None
         self._loop = None
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=5)
+        self._thread = None
 
     def run_coro(self, coro):
         """在 httpd 事件循环线程中执行协程（线程安全，返回 asyncio.Future）"""

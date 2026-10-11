@@ -253,11 +253,16 @@ async fn start_cast(
     sidecar: State<'_, SidecarManager>,
     device_id: String,
     media_uri: String,
+    mime_type: Option<String>,
 ) -> Result<(), String> {
     sidecar
         .send_command(
             "start_cast",
-            serde_json::json!({"device_id": device_id, "media_uri": media_uri}),
+            serde_json::json!({
+                "device_id": device_id,
+                "media_uri": media_uri,
+                "mime_type": mime_type,
+            }),
         )
         .await?;
     Ok(())

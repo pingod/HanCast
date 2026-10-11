@@ -198,7 +198,13 @@ class ScreenCastManager:
         m3u8_url = f"http://{self._local_ip()}:{self.httpd.port}/hls/dlna/live.m3u8"
         logger.info(f"[ScreenCast] DLNA push: {device_id} <- {m3u8_url}")
         session = self.handler._get_or_create_session(device_id)
-        session.play(m3u8_url, "application/vnd.apple.mpegurl")
+        try:
+            session.play(m3u8_url, "application/vnd.apple.mpegurl")
+        except Exception:
+            # play 失败时 self._capture 尚未赋值，必须停掉局部 capture，
+            # 否则 FFmpeg 子进程成为孤儿一直编码
+            capture.stop()
+            raise
 
         self._capture = capture
         self._state.update({
@@ -293,13 +299,22 @@ class ScreenCastManager:
         """捕获线程错误回调"""
         logger.error(f"[ScreenCast] capture error: {msg}")
         if self._state.get("running"):
+            target = self._state.get("target")
             self._state["error"] = msg
-            self._emit()
             # 停止捕获（保留状态供前端展示错误）
             if self._capture:
                 self._capture.stop()
             self._state["running"] = False
-            self._state["error"] = msg
+            # 释放通道：否则旧房间留在 httpd.rooms、DLNA 会话继续拉死流
+            if target == "webrtc":
+                self._close_room()
+            elif target == "dlna":
+                try:
+                    device_id = self._state.get("device_id")
+                    self.handler._stop_cast(
+                        {"device_id": device_id} if device_id else {})
+                except Exception as e:
+                    logger.warning(f"[ScreenCast] dlna stop after error: {e}")
             self._emit()
 
     # ────────────────────────────────────────
