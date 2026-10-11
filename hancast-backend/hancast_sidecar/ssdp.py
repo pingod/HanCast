@@ -131,6 +131,10 @@ class SSDPService:
         self.sock_list: List[Sock] = []
         self.sock: Optional[socket.socket] = None
 
+        # restart 串行化 + 代际号：join 超时的旧线程不得清理新实例状态
+        self._restart_lock = threading.Lock()
+        self._gen = 0
+
         # M-SEARCH 组播不可用时只告警一次，避免 30s 一轮刷屏（并提示用户排查）
         self._msearch_warned = False
         # 最近一次设备发现走的通道（multicast / broadcast），用于日志定位
@@ -263,6 +267,7 @@ class SSDPService:
             logger.warning("SSDP already running")
             return
         self._running = True
+        self._gen += 1
         self._register()
 
         # 启动 SSDP 监听线程
@@ -293,14 +298,15 @@ class SSDPService:
 
     def restart(self):
         """重新绑定网络接口后重启服务（停止旧线程→重新注册→重新监听）"""
-        self.stop()
-        for t in (self._ssdp_thread, self._notify_thread):
-            if t and t.is_alive():
-                t.join(timeout=6)
-        self._ssdp_thread = None
-        self._notify_thread = None
-        self._ip = self._get_local_ip()
-        self.start()
+        with self._restart_lock:
+            self.stop()
+            for t in (self._ssdp_thread, self._notify_thread):
+                if t and t.is_alive():
+                    t.join(timeout=6)
+            self._ssdp_thread = None
+            self._notify_thread = None
+            self._ip = self._get_local_ip()
+            self.start()
 
     def _register(self):
         """注册 6 个 SSDP 条目"""
@@ -333,6 +339,7 @@ class SSDPService:
 
     def _run_ssdp(self):
         """SSDP 主循环"""
+        my_gen = self._gen
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0)
 
@@ -388,7 +395,10 @@ class SSDPService:
             except Exception as e:
                 logger.debug(f"SSDP receive error: {e}")
 
-        # 清理
+        # 清理（仅当代际未被 restart 推进：旧线程不得关闭新实例的 socket）
+        if self._gen != my_gen:
+            logger.debug("Stale SSDP thread exiting; skip cleanup")
+            return
         self._do_byebye()
         for ip, mask in self.ip_list:
             mreq = socket.inet_aton(SSDP_ADDR) + socket.inet_aton(ip)
