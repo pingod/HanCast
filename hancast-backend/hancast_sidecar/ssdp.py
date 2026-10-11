@@ -93,6 +93,19 @@ class SSDPService:
         # 最近一次设备发现走的通道（multicast / broadcast），用于日志定位
         self._discovery_via = "multicast"
 
+        # 已抓取过的设备描述缓存：location → 抓取时间。
+        # 同一设备每 30s 会广播多条 NOTIFY（rootdevice/uuid/device/3×service），
+        # 若不缓存，每条都会触发一次 HTTP GET + XML 解析，设备多时放大成
+        # 大量重复请求，占用线程和带宽。
+        self._fetched_locations: Dict[str, float] = {}
+        self._fetched_locations_lock = threading.Lock()
+        # 设备描述抓取去重窗口（秒）：同一设备 30s 广播多条 NOTIFY，
+        # 窗口内只抓取一次
+        self.fetch_dedup_window = 30.0
+
+        # 同一时刻只允许一个 M-SEARCH 扫描线程（避免用户连续点刷新时线程堆积）
+        self._scan_lock = threading.Lock()
+
         # 回调函数
         self._on_device_found: Optional[Callable[[Device], None]] = None
         self._on_device_lost: Optional[Callable[[str], None]] = None
@@ -436,6 +449,14 @@ class SSDPService:
         if not location:
             return
 
+        # 去重：同一 location 在去重窗口内不重复抓取
+        with self._fetched_locations_lock:
+            now = time.time()
+            if location in self._fetched_locations:
+                if now - self._fetched_locations[location] < self.fetch_dedup_window:
+                    return
+            self._fetched_locations[location] = now
+
         logger.debug(f"NOTIFY alive from {host}:{port}, location: {location}")
 
         # 异步获取设备描述
@@ -469,8 +490,11 @@ class SSDPService:
                         if self._on_device_found:
                             self._on_device_found(device)
                     else:
-                        # 更新已有设备的状态
-                        self._devices[device.id].status = "online"
+                        # 更新已有设备（保留用户自定义名称），不重复触发发现事件
+                        old = self._devices[device.id]
+                        if old.custom_name:
+                            device.custom_name = old.custom_name
+                        self._devices[device.id] = device
         except Exception as e:
             logger.debug(f"Failed to fetch device from NOTIFY: {e}")
 
@@ -543,7 +567,16 @@ class SSDPService:
                     "error building byebye notification: %r" % msg)
 
     def scan(self):
-        threading.Thread(target=self._send_msearch, daemon=True).start()
+        # 同一时刻只允许一个扫描线程：若上一次 M-SEARCH 监听窗口
+        # （约 SSDP_MX+1 秒）尚未结束，直接复用，避免线程堆积
+        if not self._scan_lock.acquire(blocking=False):
+            logger.debug("M-SEARCH scan already in progress, skipping")
+            return
+        try:
+            threading.Thread(target=self._send_msearch, daemon=True).start()
+        finally:
+            # 注意：锁由 _send_msearch 结束时释放，这里不释放
+            pass
 
     def _send_msearch(self):
         # 搜索多种设备类型以提高发现率
@@ -623,6 +656,7 @@ class SSDPService:
         finally:
             if sock is not None:
                 sock.close()
+            self._scan_lock.release()
 
     def _parse_response(self, data: str, addr: tuple):
         headers = {}
@@ -634,6 +668,14 @@ class SSDPService:
         location = headers.get("LOCATION")
         if not location:
             return
+
+        # 去重：与 NOTIFY 路径共用缓存，避免同一设备被重复抓取描述
+        with self._fetched_locations_lock:
+            now = time.time()
+            if location in self._fetched_locations:
+                if now - self._fetched_locations[location] < self.fetch_dedup_window:
+                    return
+            self._fetched_locations[location] = now
 
         try:
             from urllib.parse import urlparse
@@ -654,10 +696,17 @@ class SSDPService:
                     return
 
                 with self._lock:
-                    self._devices[device.id] = device
-                logger.debug(f"Found device: {device.name} ({device.ip})")
-                if self._on_device_found:
-                    self._on_device_found(device)
+                    if device.id not in self._devices:
+                        self._devices[device.id] = device
+                        logger.debug(f"Found device: {device.name} ({device.ip})")
+                        if self._on_device_found:
+                            self._on_device_found(device)
+                    else:
+                        # 更新已有设备（保留用户自定义名称），不重复触发发现事件
+                        old = self._devices[device.id]
+                        if old.custom_name:
+                            device.custom_name = old.custom_name
+                        self._devices[device.id] = device
         except Exception as e:
             logger.debug(f"Failed to fetch device description: {e}")
 

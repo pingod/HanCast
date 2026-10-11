@@ -68,12 +68,20 @@ export const useDeviceStore = defineStore('device', () => {
     try {
       const { listen } = await import('@tauri-apps/api/event')
 
-      // Device found
+      // Device found（upsert：新设备加入，已有设备就地更新，
+      // 保证状态变化如 offline→online 能实时反映，而不是等 30s 自动刷新）
       unlistenFns.push(
         await listen<Device>('device_found', (event) => {
           const device = event.payload
-          if (!devices.value.find((d) => d.id === device.id)) {
+          const idx = devices.value.findIndex((d) => d.id === device.id)
+          if (idx === -1) {
             devices.value.push(device)
+          } else {
+            // 保留用户自定义名称（后端 custom_name 已并入 name，
+            // 直接整体替换即可；is_default 标志以当前列表为准）
+            devices.value = devices.value.map((d) =>
+              d.id === device.id ? { ...d, ...device, is_default: d.is_default } : d
+            )
           }
         })
       )

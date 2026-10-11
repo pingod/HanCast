@@ -62,8 +62,10 @@ class MediaParser:
         content_length = None
 
         # 先尝试 HEAD 请求，失败则用 GET
+        # 超时不宜过长：该调用在 sidecar 单线程命令循环中执行，
+        # 长时间阻塞会拖住每秒一次的 get_cast_url 轮询等其他命令
         try:
-            resp = requests.head(url, timeout=15, allow_redirects=True, headers=headers)
+            resp = requests.head(url, timeout=8, allow_redirects=True, headers=headers)
             if resp.status_code < 400:
                 content_type = resp.headers.get("Content-Type", "")
                 content_length = resp.headers.get("Content-Length")
@@ -72,7 +74,7 @@ class MediaParser:
         except requests.RequestException:
             # HEAD 请求失败，尝试 GET 请求（只读取头部）
             try:
-                resp = requests.get(url, timeout=15, allow_redirects=True,
+                resp = requests.get(url, timeout=8, allow_redirects=True,
                                    headers=headers, stream=True)
                 content_type = resp.headers.get("Content-Type", "")
                 content_length = resp.headers.get("Content-Length")
@@ -143,7 +145,7 @@ class MediaParser:
                     "-show_entries", "format=duration",
                     "-of", "csv=p=0", path
                 ],
-                capture_output=True, text=True, timeout=5
+                capture_output=True, text=True, timeout=3
             )
             if result.returncode == 0:
                 return float(result.stdout.strip())

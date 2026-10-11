@@ -107,6 +107,9 @@ class DeviceGuard:
         # 由后台组播监听线程维护
         self._ssdp_cache: Dict[str, dict] = {}
         self._ssdp_cache_lock = threading.Lock()
+        # 每次更新时顺带清理过期条目（上次清理时间戳），避免缓存无限增长
+        self._last_cache_cleanup: float = 0.0
+        self._ssdp_cache_max_age = 300
 
         # 历史端口成功率：port -> success_count
         # 用于智能预测端口排序
@@ -137,6 +140,18 @@ class DeviceGuard:
                 **device_info,
                 "last_seen": time.time(),
             }
+            # 周期性清理过期条目（默认每 60 秒最多清一次）
+            now = time.time()
+            if now - self._last_cache_cleanup > 60:
+                self._last_cache_cleanup = now
+                expired_ips = [
+                    cip for cip, info in self._ssdp_cache.items()
+                    if now - info.get("last_seen", 0) > self._ssdp_cache_max_age
+                ]
+                for cip in expired_ips:
+                    del self._ssdp_cache[cip]
+                if expired_ips:
+                    logger.debug(f"Cleaned up {len(expired_ips)} expired SSDP cache entries")
             logger.debug(f"SSDP cache updated: {ip} -> {device_info.get('friendly_name', 'unknown')}")
 
     def get_ssdp_cache(self) -> Dict[str, dict]:

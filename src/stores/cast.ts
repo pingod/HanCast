@@ -140,32 +140,43 @@ export const useCastStore = defineStore('cast', () => {
 
   async function fetchState() {
     try {
-      const state = await getCastState()
-      // If backend returns a session, merge into existing sessions
-      // But skip if a session with this device_id is already 'connecting'
-      // (i.e. startCast already created it and is still awaiting apiStartCast)
-      if (state.device_id && state.status !== 'idle') {
-        const existing = sessions.value[state.device_id]
-        if (!existing || existing.status !== 'connecting') {
-          sessions.value = {
-            ...sessions.value,
-            [state.device_id]: {
-              device_id: state.device_id,
-              device_name: state.device_name ?? state.device_id,
-              status: state.status,
-              media: state.media,
-              position: state.position,
-              volume: state.volume,
-              is_muted: state.is_muted,
-              positionTime: state.positionTime,
-              durationTime: state.durationTime,
-            },
-          }
+      const state = await getCastState() as any
+      // 后端无 device_id 参数时返回 { sessions: {device_id: state}, current: state }
+      // （sessions 包含所有设备的 CastState，current 是主渲染器的兼容状态）
+      // 恢复所有非 idle 的活跃会话，避免应用重启后丢失正在投屏的会话。
+      const sessionMap: Record<string, any> = state?.sessions ?? {}
+      let restored = false
+      for (const [deviceId, s] of Object.entries(sessionMap)) {
+        if (!s || s.status === 'idle') continue
+        // Skip if a session with this device_id is already 'connecting'
+        // (i.e. startCast already created it and is still awaiting apiStartCast)
+        const existing = sessions.value[deviceId]
+        if (existing && existing.status === 'connecting') continue
+
+        // 后端 position/duration 是 "HH:MM:SS" 字符串；
+        // position 字段存秒数（number），positionTime 存字符串用于显示
+        const positionStr = s.position ?? '00:00:00'
+        sessions.value = {
+          ...sessions.value,
+          [deviceId]: {
+            device_id: deviceId,
+            device_name: s.device_name ?? deviceId,
+            status: s.status,
+            media: s.media ?? null,
+            position: parseTimeToSeconds(positionStr),
+            volume: s.volume ?? 80,
+            is_muted: s.is_muted ?? false,
+            positionTime: positionStr,
+            durationTime: s.duration ?? '00:00:00',
+          },
         }
-        if (!focusedDeviceId.value) focusedDeviceId.value = state.device_id
+        if (!focusedDeviceId.value) focusedDeviceId.value = deviceId
+        restored = true
       }
+      return restored
     } catch (err) {
       console.error('Failed to get cast state:', err)
+      return false
     }
   }
 

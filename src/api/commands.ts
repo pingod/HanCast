@@ -8,6 +8,11 @@ import type { CastState, CastUrlInfo } from '@/types/cast'
 import type { AppSettings } from '@/types/settings'
 import type { GuardDevicesResponse, GuardSettings } from '@/types/guard'
 import type { UpdateInfo } from '@/types/update'
+import type {
+  ScreenSources,
+  ScreenCastState,
+  ScreenCastStartParams,
+} from '@/types/screencast'
 
 // ── Helpers ──
 
@@ -86,7 +91,7 @@ const MOCK_DEVICES: Device[] = [
 const MOCK_SETTINGS: AppSettings = {
   usn: 'hancast-uuid-001',
   friendly_name: 'HanCast',
-  version: '2.1.0',
+  version: '2.2.0',
   media_port: 8080,
   default_device: null,
   settings: {},
@@ -178,8 +183,8 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
     case 'check_update':
       return {
         has_update: false,
-        current: '2.1.0',
-        latest: '2.1.0',
+        current: '2.2.0',
+        latest: '2.2.0',
         url: '',
         body: '',
         source: 'github',
@@ -190,6 +195,24 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
       return false as T
     case 'export_logs':
       return true as T
+    case 'list_screen_sources':
+      return {
+        screens: [{ id: 'desktop', title: '整个屏幕' }],
+        windows: [],
+        audio_inputs: [
+          { name: '麦克风 (Realtek)', kind: 'mic' },
+          { name: '立体声混音', kind: 'system' },
+        ],
+        ffmpeg: { ok: true, path: 'ffmpeg', version: 'mock' },
+      } as T
+    case 'start_screen_cast':
+      return { ok: true, target: 'webrtc', room_id: 'abc123', watch_url: 'http://127.0.0.1:8765/r/abc123' } as T
+    case 'stop_screen_cast':
+      return { ok: true } as T
+    case 'screen_cast_status':
+      return { running: false, ffmpeg: { ok: true } } as T
+    case 'set_ffmpeg_path':
+      return { ok: true } as T
     default:
       return {} as T
   }
@@ -401,4 +424,31 @@ export async function isStoreVersion(): Promise<boolean> {
   } catch {
     return false
   }
+}
+
+// ── Screen Cast (电脑投屏) ──
+
+export async function listScreenSources(): Promise<ScreenSources> {
+  const invoke = await initInvoke()
+  return invoke<ScreenSources>('list_screen_sources')
+}
+
+export async function startScreenCast(params: ScreenCastStartParams): Promise<{ ok: boolean; error?: string; watch_url?: string; room_id?: string; url?: string }> {
+  const invoke = await initInvoke()
+  return invoke('start_screen_cast', { params })
+}
+
+export async function stopScreenCast(): Promise<{ ok: boolean }> {
+  const invoke = await initInvoke()
+  return invoke('stop_screen_cast')
+}
+
+export async function getScreenCastStatus(): Promise<ScreenCastState> {
+  const invoke = await initInvoke()
+  return invoke<ScreenCastState>('screen_cast_status')
+}
+
+export async function setFfmpegPath(path: string): Promise<{ ok: boolean; error?: string }> {
+  const invoke = await initInvoke()
+  return invoke('set_ffmpeg_path', { path })
 }

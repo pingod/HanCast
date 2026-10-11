@@ -9,6 +9,10 @@ import logging
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
+from xml.sax.saxutils import escape
+
+# SOAP 请求体上限（1 MB）：防止恶意/异常的 DLNA 控制器塞超大 body 耗尽内存
+MAX_SOAP_BODY = 1024 * 1024
 
 from ..utils.platform_info import build_server_info
 
@@ -65,7 +69,16 @@ class DLNAHandler(BaseHTTPRequestHandler):
         sid_header = self.headers.get('SID')
         callback_header = self.headers.get('CALLBACK')
         timeout_header = self.headers.get('TIMEOUT', 'Second-1800')
-        timeout = int(timeout_header.split('-')[-1]) if timeout_header else 1800
+        # UPnP 规范允许 "Second-N" 与 "infinite" 两种形式；
+        # 解析失败（如 "infinite"）时回退默认 1800，而不是让请求 500
+        timeout = 1800
+        if timeout_header:
+            try:
+                parsed_timeout = int(timeout_header.split('-')[-1])
+                if parsed_timeout > 0:
+                    timeout = parsed_timeout
+            except (ValueError, IndexError):
+                logger.warning(f"Invalid TIMEOUT header: {timeout_header}, using 1800")
 
         if sid_header:
             # 续订
@@ -124,8 +137,12 @@ class DLNAHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         """处理 POST 请求 (SOAP) — 委托给 DLNAProtocol.call() 处理"""
         try:
-            # 读取请求体
+            # 读取请求体（限制大小，防止恶意超大 body）
             content_length = int(self.headers.get('Content-Length', 0))
+            if content_length > MAX_SOAP_BODY:
+                logger.warning(f"SOAP body too large: {content_length} bytes, rejecting")
+                self.send_error(413, "Request entity too large")
+                return
             body = self.rfile.read(content_length)
 
             # 解析 SOAP action
@@ -162,15 +179,17 @@ class DLNAHandler(BaseHTTPRequestHandler):
                 xml = f.read()
 
             # 替换模板变量 (使用 replace 而不是 format，避免命名空间冲突)
+            # friendly_name 来自用户设置，必须 XML 转义，否则含 & < > 等字符时
+            # 生成的 description.xml 非法，DLNA 控制器会解析失败
             replacements = {
                 '{uuid}': self.usn,
-                '{friendly_name}': self.friendly_name,
+                '{friendly_name}': escape(self.friendly_name),
                 '{manufacturer}': 'HanCast',
                 '{manufacturer_url}': 'https://github.com/pingod/HanCast',
                 '{model_description}': 'AVTransport Media Renderer',
                 '{model_name}': 'HanCast',
                 '{model_url}': 'https://github.com/pingod/HanCast',
-                '{model_number}': self.app_version,
+                '{model_number}': escape(self.app_version),
                 '{serial_num}': '1024',
                 '{header_extra}': '',
                 '{service_extra}': '',
@@ -230,25 +249,26 @@ class DLNAHandler(BaseHTTPRequestHandler):
 
     def _handle_index(self):
         """返回首页"""
-        html = """
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>HanCast {version}</title>
-            <style>
-                body { font-family: sans-serif; text-align: center; padding: 50px; }
-                h1 { color: #333; }
-                p { color: #666; }
-            </style>
-        </head>
-        <body>
-            <h1>HanCast {version}</h1>
-            <p>DLNA Media Renderer</p>
-            <p>Device: {name}</p>
-            <p><a href="/description.xml">Device Description (XML)</a></p>
-        </body>
-        </html>
-        """.format(name=self.friendly_name, version=self.app_version)
+        # 注意：不能用 str.format —— friendly_name 含花括号时会崩溃
+        html = (
+            "<!DOCTYPE html>\n"
+            "<html>\n"
+            "<head>\n"
+            "    <title>HanCast {version}</title>\n"
+            "    <style>\n"
+            "        body { font-family: sans-serif; text-align: center; padding: 50px; }\n"
+            "        h1 { color: #333; }\n"
+            "        p { color: #666; }\n"
+            "    </style>\n"
+            "</head>\n"
+            "<body>\n"
+            "    <h1>HanCast {version}</h1>\n"
+            "    <p>DLNA Media Renderer</p>\n"
+            "    <p>Device: {name}</p>\n"
+            "    <p><a href=\"/description.xml\">Device Description (XML)</a></p>\n"
+            "</body>\n"
+            "</html>\n"
+        ).replace("{version}", escape(self.app_version)).replace("{name}", escape(self.friendly_name))
 
         self.send_response(200)
         self.send_header('Content-Type', 'text/html; charset="utf-8"')
@@ -314,8 +334,11 @@ class DLNAServer:
             self._thread.start()
             logger.info(f"DLNA server started on port {self.port}")
         except OSError as e:
-            if e.errno == 10013:  # Windows: 端口被占用
-                logger.warning(f"Port {self.port} is in use, trying random port")
+            # 10048: 端口被占用；10013: 无权限绑定该地址（防火墙策略等）。
+            # 统一回退到随机端口，避免整个 sidecar 因端口冲突而崩溃。
+            logger.warning(
+                f"Bind port {self.port} failed (errno={e.errno}), trying random port")
+            try:
                 self._server = ThreadingHTTPServer(('0.0.0.0', 0), DLNAHandler)
                 self.port = self._server.server_address[1]
                 self._thread = threading.Thread(
@@ -324,7 +347,8 @@ class DLNAServer:
                 )
                 self._thread.start()
                 logger.info(f"DLNA server started on port {self.port}")
-            else:
+            except OSError as e2:
+                logger.error(f"Failed to bind any port for DLNA server: {e2}")
                 raise
 
     def stop(self):

@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>HanCast 屏幕投屏 · 观看</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    background: #0d0f14;
+    color: #e8eaf0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    display: flex; flex-direction: column; align-items: center;
+    justify-content: center; min-height: 100vh; padding: 16px;
+  }
+  .stage {
+    width: 100%; max-width: 960px;
+    background: #14171f; border-radius: 16px; overflow: hidden;
+    box-shadow: 0 12px 40px rgba(0,0,0,.45);
+    position: relative; aspect-ratio: 16 / 9;
+    display: flex; align-items: center; justify-content: center;
+  }
+  video {
+    width: 100%; height: 100%; object-fit: contain; background: #0d0f14;
+    display: none;
+  }
+  .placeholder { text-align: center; color: #8a91a5; padding: 24px; }
+  .placeholder .pulse {
+    width: 48px; height: 48px; margin: 0 auto 16px; border-radius: 50%;
+    border: 3px solid #2a3040; border-top-color: #5b8cff;
+    animation: spin 1s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .status {
+    margin-top: 14px; font-size: 13px; color: #8a91a5;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #5b8cff; }
+  .dot.err { background: #ff5c6c; }
+  .dot.ok { background: #3ecf8e; }
+  .err-text { color: #ff5c6c; font-size: 13px; margin-top: 10px; text-align: center; }
+  .footer { margin-top: 18px; font-size: 12px; color: #565d6e; }
+</style>
+</head>
+<body>
+  <div class="stage">
+    <video id="video" autoplay playsinline muted></video>
+    <div class="placeholder" id="placeholder">
+      <div class="pulse"></div>
+      <div>正在连接投屏…</div>
+    </div>
+  </div>
+  <div class="status"><span class="dot" id="dot"></span><span id="statusText">连接中</span></div>
+  <div class="err-text" id="errText" style="display:none"></div>
+  <div class="footer">HanCast 屏幕投屏 · 免安装观看</div>
+
+<script>
+(function () {
+  var roomId = "__ROOM_ID__";
+  var video = document.getElementById("video");
+  var placeholder = document.getElementById("placeholder");
+  var statusText = document.getElementById("statusText");
+  var dot = document.getElementById("dot");
+  var errText = document.getElementById("errText");
+  var pc = null;
+  var ws = null;
+  var closed = false;
+
+  function setStatus(text, cls) {
+    statusText.textContent = text;
+    dot.className = "dot" + (cls ? " " + cls : "");
+  }
+  function setError(text) {
+    errText.textContent = text;
+    errText.style.display = "block";
+    setStatus("连接失败", "err");
+  }
+  function showVideo() {
+    placeholder.style.display = "none";
+    video.style.display = "block";
+    setStatus("正在观看", "ok");
+  }
+
+  function makePeer() {
+    var pc_ = new RTCPeerConnection({ iceServers: [] });
+    pc_.addTransceiver("video", { direction: "recvonly" });
+    pc_.addTransceiver("audio", { direction: "recvonly" });
+    pc_.ontrack = function (ev) {
+      if (ev.track.kind === "video") {
+        video.srcObject = ev.streams[0] || new MediaStream([ev.track]);
+        video.play().catch(function(){});
+        showVideo();
+      }
+    };
+    pc_.onicecandidate = function (ev) {
+      if (ev.candidate && ws && ws.readyState === 1) {
+        ws.send(JSON.stringify({
+          type: "ice",
+          candidate: {
+            candidate: ev.candidate.candidate,
+            sdpMid: ev.candidate.sdpMid,
+            sdpMLineIndex: ev.candidate.sdpMLineIndex,
+          }
+        }));
+      }
+    };
+    pc_.onconnectionstatechange = function () {
+      if (pc_.connectionState === "connected") showVideo();
+      if (pc_.connectionState === "failed" || pc_.connectionState === "closed") {
+        setError("连接已断开");
+      }
+    };
+    return pc_;
+  }
+
+  function connect() {
+    var wsUrl = (location.protocol === "https:" ? "wss://" : "ws://") + location.host +
+                "/ws?room=" + encodeURIComponent(roomId);
+    ws = new WebSocket(wsUrl);
+    ws.onopen = function () { setStatus("已连接，正在建立视频通道…"); };
+    ws.onmessage = async function (ev) {
+      var msg;
+      try { msg = JSON.parse(ev.data); } catch (e) { return; }
+      if (msg.type === "error") { setError(msg.message || "房间不可用"); return; }
+      if (msg.type === "offer") {
+        if (!pc) pc = makePeer();
+        try {
+          await pc.setRemoteDescription(msg);
+          var answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          ws.send(JSON.stringify({ type: "answer", sdp: pc.localDescription.sdp }));
+        } catch (e) { setError("协商失败: " + e.message); }
+      } else if (msg.type === "answer") {
+        if (pc) {
+          try { await pc.setRemoteDescription(msg); } catch (e) { setError("协商失败: " + e.message); }
+        }
+      } else if (msg.type === "ice") {
+        if (pc) {
+          try { await pc.addIceCandidate(msg.candidate); } catch (e) {}
+        }
+      }
+    };
+    ws.onerror = function () { if (!closed) setError("无法连接投屏服务"); };
+    ws.onclose = function () {
+      if (!closed) { setError("连接已关闭"); }
+    };
+  }
+
+  function start() {
+    if (!pc) pc = makePeer();
+    pc.createOffer().then(function (offer) {
+      return pc.setLocalDescription(offer);
+    }).then(function () {
+      ws.send(JSON.stringify({ type: "offer", sdp: pc.localDescription.sdp }));
+    }).catch(function (e) {
+      setError("启动失败: " + e.message);
+    });
+  }
+
+  connect();
+  // 等 WS 打开后发 offer
+  var t = setInterval(function () {
+    if (ws && ws.readyState === 1) {
+      clearInterval(t);
+      start();
+    } else if (ws && ws.readyState === 3) {
+      clearInterval(t);
+    }
+  }, 300);
+
+  window.addEventListener("beforeunload", function () {
+    closed = true;
+    if (ws) ws.close();
+    if (pc) pc.close();
+  });
+})();
+</script>
+</body>
+</html>

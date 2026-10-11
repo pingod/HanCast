@@ -37,7 +37,7 @@ class MediaHandler(BaseHTTPRequestHandler):
 
     def do_HEAD(self):
         """处理 HEAD 请求 (DLNA 设备用来探测文件)"""
-        file_path = self.served_files.get(self.path)
+        file_path = self.served_files.get(self.path.split("?")[0])
         if not file_path or not os.path.exists(file_path):
             self.send_error(404)
             return
@@ -57,7 +57,8 @@ class MediaHandler(BaseHTTPRequestHandler):
             self._handle_proxy()
             return
 
-        file_path = self.served_files.get(self.path)
+        # 忽略 query string（某些 DLNA 设备会在 URL 后附加参数）
+        file_path = self.served_files.get(self.path.split("?")[0])
         if not file_path or not os.path.exists(file_path):
             self.send_error(404)
             return
@@ -65,10 +66,11 @@ class MediaHandler(BaseHTTPRequestHandler):
         file_size = os.path.getsize(file_path)
         mime_type = self._guess_mime(file_path)
 
-        # 处理 Range 请求
+        # 处理 Range 请求；解析失败/无效时回退全量 200（兼容性优先）
         range_header = self.headers.get("Range")
-        if range_header:
-            start, end = self._parse_range(range_header, file_size)
+        range_result = self._parse_range(range_header, file_size) if range_header else None
+        if range_result:
+            start, end = range_result
             self.send_response(206)
             self.send_header("Content-Type", mime_type)
             self.send_header(
@@ -106,17 +108,40 @@ class MediaHandler(BaseHTTPRequestHandler):
                         return  # 客户端断开，静默退出
 
     def _parse_range(self, header: str, file_size: int):
-        range_spec = header.replace("bytes=", "").strip()
-        if range_spec.startswith("-"):
-            start = file_size - int(range_spec[1:])
-            end = file_size - 1
-        elif range_spec.endswith("-"):
-            start = int(range_spec[:-1])
-            end = file_size - 1
-        else:
-            start, end = range_spec.split("-")
-            start, end = int(start), int(end)
-        return start, end
+        """解析 Range 头，返回 (start, end) 或 None（无效时回退全量）
+
+        只支持单个 bytes 范围；多范围、非法格式、越界值统一返回 None。
+        """
+        try:
+            if not header or not header.lower().startswith("bytes="):
+                return None
+            range_spec = header[6:].strip()
+            # 多范围请求（逗号分隔）不支持，回退全量
+            if "," in range_spec:
+                return None
+            if range_spec.startswith("-"):
+                # 后缀范围: bytes=-N → 最后 N 个字节
+                n = int(range_spec[1:])
+                if n <= 0:
+                    return None
+                start = max(file_size - n, 0)
+                end = file_size - 1
+            elif range_spec.endswith("-"):
+                # 前缀范围: bytes=N- → 从 N 到结尾
+                start = int(range_spec[:-1])
+                end = file_size - 1
+            else:
+                start, end = range_spec.split("-", 1)
+                start, end = int(start), int(end)
+
+            # 钳制到合法范围；start >= file_size 或 start > end 视为无效
+            if start < 0 or end < start or start >= file_size:
+                return None
+            if end >= file_size:
+                end = file_size - 1
+            return start, end
+        except (ValueError, TypeError):
+            return None
 
     def _guess_mime(self, path: str) -> str:
         import mimetypes
@@ -197,6 +222,17 @@ class MediaHandler(BaseHTTPRequestHandler):
         logger.debug(format % args)
 
 
+# 代理/文件注册表上限：防止反复投屏导致字典无限增长（内存泄漏）
+MAX_REGISTRY_ENTRIES = 100
+
+
+def _prune_registry(registry: dict):
+    """超出上限时删除最旧的条目（dict 保持插入顺序）"""
+    while len(registry) > MAX_REGISTRY_ENTRIES:
+        oldest = next(iter(registry))
+        del registry[oldest]
+
+
 class MediaServer:
     """媒体文件 HTTP 服务器"""
 
@@ -249,6 +285,8 @@ class MediaServer:
 
         MediaHandler.served_files[url_path] = file_path
         self._served[url_path] = file_path
+        _prune_registry(MediaHandler.served_files)
+        _prune_registry(self._served)
 
         return f"http://{self._lan_ip}:{self.port}{url_path}"
 
@@ -258,6 +296,7 @@ class MediaServer:
         url_path = f"/proxy/{url_hash}"
 
         MediaHandler.proxy_targets[url_path] = remote_url
+        _prune_registry(MediaHandler.proxy_targets)
 
         return f"http://{self._lan_ip}:{self.port}{url_path}"
 

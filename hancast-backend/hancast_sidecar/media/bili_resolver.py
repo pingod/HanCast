@@ -71,6 +71,11 @@ class BiliResolver:
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": UA, "Referer": REFERER})
         self._mixin_key = None
+        # 反爬 Cookie 缓存（buvid3/buvid4 长期有效，无需每次解析都重新采集）
+        self._cached_cookie: str | None = None
+        self._cookie_fetched_at: float = 0.0
+        # Cookie 缓存有效期（秒）
+        COOKIE_CACHE_TTL = 3600
 
     def belongs_to(self, url: str) -> bool:
         """判断 URL 是否属于 B 站"""
@@ -142,7 +147,11 @@ class BiliResolver:
         return m.group(1) if m else None
 
     def _get_anti_crawl_cookie(self) -> str:
-        """采集反爬 Cookie (buvid3 + buvid4)"""
+        """采集反爬 Cookie (buvid3 + buvid4)，1 小时内缓存复用"""
+        now = time.time()
+        if self._cached_cookie and now - self._cookie_fetched_at < self.COOKIE_CACHE_TTL:
+            return self._cached_cookie
+
         buvid3 = FALLBACK_BUVID3
         buvid4 = None
 
@@ -162,7 +171,10 @@ class BiliResolver:
         parts = [f"buvid3={buvid3}"]
         if buvid4:
             parts.append(f"buvid4={buvid4}")
-        return "; ".join(parts)
+        cookie = "; ".join(parts)
+        self._cached_cookie = cookie
+        self._cookie_fetched_at = now
+        return cookie
 
     def _fetch_video_info(self, bvid: str, cookie: str) -> dict:
         """获取视频元信息"""

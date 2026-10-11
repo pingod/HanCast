@@ -980,7 +980,7 @@ class DLNAProtocol:
                 self._control_url,
                 data=xml_data,
                 headers=headers,
-                timeout=10,
+                timeout=5,
             )
             response.raise_for_status()
         except requests.RequestException as e:

@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use tauri::{
     menu::{CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Emitter, Manager, State,
+    Emitter, Listener, Manager, State,
 };
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_clipboard_manager::ClipboardExt;
@@ -517,6 +517,55 @@ async fn set_mpv_path(
         .await
 }
 
+// ── Screen Cast (电脑投屏：DLNA 电视 / WebRTC 浏览器) ──
+
+#[tauri::command]
+async fn list_screen_sources(
+    sidecar: State<'_, SidecarManager>,
+) -> Result<serde_json::Value, String> {
+    sidecar
+        .send_command("list_screen_sources", serde_json::json!({}))
+        .await
+}
+
+#[tauri::command]
+async fn start_screen_cast(
+    sidecar: State<'_, SidecarManager>,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    sidecar
+        .send_command("start_screen_cast", params)
+        .await
+}
+
+#[tauri::command]
+async fn stop_screen_cast(
+    sidecar: State<'_, SidecarManager>,
+) -> Result<serde_json::Value, String> {
+    sidecar
+        .send_command("stop_screen_cast", serde_json::json!({}))
+        .await
+}
+
+#[tauri::command]
+async fn screen_cast_status(
+    sidecar: State<'_, SidecarManager>,
+) -> Result<serde_json::Value, String> {
+    sidecar
+        .send_command("screen_cast_status", serde_json::json!({}))
+        .await
+}
+
+#[tauri::command]
+async fn set_ffmpeg_path(
+    sidecar: State<'_, SidecarManager>,
+    path: String,
+) -> Result<serde_json::Value, String> {
+    sidecar
+        .send_command("set_ffmpeg_path", serde_json::json!({"path": path}))
+        .await
+}
+
 // ── Export Logs ──
 
 #[tauri::command]
@@ -675,6 +724,40 @@ async fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<(), Strin
     // 通知托盘菜单同步 CheckMenuItem 状态
     let _ = app.emit("autostart-changed", enabled);
     Ok(())
+}
+
+/// 重建托盘菜单（copy URL / show / autostart / quit）
+/// 只在 URL 或 autostart 状态真正变化时调用，避免无谓的菜单重建
+fn update_tray_menu(
+    app: &tauri::AppHandle,
+    tray_id: &str,
+    url: &str,
+    autostart_enabled: bool,
+) {
+    if let Some(tray) = app.tray_by_id(tray_id) {
+        let new_item = MenuItemBuilder::with_id("copy_cast_url", CAST_URL_LABEL)
+            .enabled(!url.is_empty())
+            .build(app)
+            .unwrap();
+        let show_item = MenuItemBuilder::with_id("show", "显示窗口")
+            .build(app)
+            .unwrap();
+        let autostart_item = CheckMenuItemBuilder::with_id("autostart", "开机自启")
+            .checked(autostart_enabled)
+            .build(app)
+            .unwrap();
+        let quit_item = MenuItemBuilder::with_id("quit", "退出")
+            .build(app)
+            .unwrap();
+        let new_menu = MenuBuilder::new(app)
+            .item(&new_item)
+            .item(&show_item)
+            .item(&autostart_item)
+            .item(&quit_item)
+            .build()
+            .unwrap();
+        tray.set_menu(Some(new_menu)).ok();
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -928,70 +1011,62 @@ pub fn run() {
             });
 
             // Background task: poll get_cast_url every second and update tray menu
+            //
+            // autostart 状态是事件驱动的：set_autostart 命令 / 托盘菜单点击
+            // 都会 emit "autostart-changed"。这里订阅该事件更新菜单勾选，
+            // 而不是每秒调用 get_autostart_state（WinRT StartupTask::GetAsync
+            // / 注册表读取是系统调用，每秒执行纯属浪费）。
             let app_handle = app.handle().clone();
             let tray_id = tray.id().clone();
             tauri::async_runtime::spawn(async move {
                 let mut last_url = String::new();
                 let mut last_autostart = get_autostart_state(&app_handle).await;
+
+                let (autostart_tx, mut autostart_rx) =
+                    tokio::sync::mpsc::channel::<bool>(8);
+                let listen_handle = app_handle.clone();
+                let _ = listen_handle.listen("autostart-changed", move |event| {
+                    if let Some(enabled) = event.payload().parse::<bool>().ok() {
+                        let _ = autostart_tx.try_send(enabled);
+                    }
+                });
+
+                let mut ticker =
+                    tokio::time::interval(std::time::Duration::from_secs(1));
+                // 首次 tick 立即执行
+                ticker.tick().await;
+
                 loop {
-                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    tokio::select! {
+                        _ = ticker.tick() => {
+                            // Call sidecar to get current cast URL
+                            let sidecar = app_handle.state::<SidecarManager>();
+                            let new_url = match sidecar
+                                .send_command("get_cast_url", serde_json::json!({}))
+                                .await
+                            {
+                                Ok(val) => val
+                                    .get("url")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                Err(_) => String::new(),
+                            };
 
-                    // Call sidecar to get current cast URL
-                    let sidecar = app_handle.state::<SidecarManager>();
-                    let new_url = match sidecar
-                        .send_command("get_cast_url", serde_json::json!({}))
-                        .await
-                    {
-                        Ok(val) => val
-                            .get("url")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string(),
-                        Err(_) => String::new(),
-                    };
-
-                    let cur_autostart = get_autostart_state(&app_handle).await;
-                    let url_changed = new_url != last_url;
-                    let autostart_changed = cur_autostart != last_autostart;
-
-                    // Only update menu when something changed
-                    if url_changed || autostart_changed {
-                        last_url = new_url.clone();
-                        last_autostart = cur_autostart;
-                        // Update state for clipboard copy
-                        if let Some(state) = app_handle.try_state::<CastUrlState>() {
-                            *state.url.lock().unwrap() = new_url.clone();
+                            if new_url != last_url {
+                                last_url = new_url.clone();
+                                // Update state for clipboard copy
+                                if let Some(state) = app_handle.try_state::<CastUrlState>() {
+                                    *state.url.lock().unwrap() = new_url.clone();
+                                }
+                                update_tray_menu(&app_handle, &tray_id, &new_url, last_autostart);
+                            }
                         }
-                        // Update tray menu item label
-                        if let Some(tray) = app_handle.tray_by_id(&tray_id) {
-                            let new_item = MenuItemBuilder::with_id(
-                                "copy_cast_url",
-                                CAST_URL_LABEL,
-                            )
-                            .enabled(!new_url.is_empty())
-                            .build(&app_handle)
-                            .unwrap();
-                            let show_item = MenuItemBuilder::with_id("show", "显示窗口")
-                                .build(&app_handle)
-                                .unwrap();
-                            let autostart_item = CheckMenuItemBuilder::with_id(
-                                "autostart",
-                                "开机自启",
-                            )
-                            .checked(cur_autostart)
-                            .build(&app_handle)
-                            .unwrap();
-                            let quit_item = MenuItemBuilder::with_id("quit", "退出")
-                                .build(&app_handle)
-                                .unwrap();
-                            let new_menu = MenuBuilder::new(&app_handle)
-                                .item(&new_item)
-                                .item(&show_item)
-                                .item(&autostart_item)
-                                .item(&quit_item)
-                                .build()
-                                .unwrap();
-                            tray.set_menu(Some(new_menu)).ok();
+                        Some(enabled) = autostart_rx.recv() => {
+                            if enabled != last_autostart {
+                                last_autostart = enabled;
+                                update_tray_menu(&app_handle, &tray_id, &last_url, enabled);
+                            }
                         }
                     }
                 }
@@ -1032,6 +1107,11 @@ pub fn run() {
             save_guard_settings,
             check_mpv,
             set_mpv_path,
+            list_screen_sources,
+            start_screen_cast,
+            stop_screen_cast,
+            screen_cast_status,
+            set_ffmpeg_path,
             export_logs,
             is_store_version,
             get_autostart,

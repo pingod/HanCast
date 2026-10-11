@@ -24,6 +24,7 @@ from .utils.config import Config
 from .security.guard import DeviceGuard
 from .utils.mpv_manager import MpvManager
 from .utils import protocol_io
+from .screencast import ScreenCastManager
 
 import requests
 
@@ -169,6 +170,13 @@ class CommandHandler:
             # MPV 管理
             "check_mpv": self._check_mpv,
             "set_mpv_path": self._set_mpv_path,
+
+            # 屏幕投屏
+            "list_screen_sources": self._list_screen_sources,
+            "start_screen_cast": self._start_screen_cast,
+            "stop_screen_cast": self._stop_screen_cast,
+            "screen_cast_status": self._screen_cast_status,
+            "set_ffmpeg_path": self._set_ffmpeg_path,
         }
 
         # 设置回调
@@ -213,6 +221,9 @@ class CommandHandler:
         self.renderer.start()
         logger.info("MPV renderer started")
 
+        # 屏幕投屏管理器（复用 config / ssdp / session）
+        self.screencast = ScreenCastManager(self)
+
     def execute(self, cmd: str, params: Dict[str, Any]) -> Any:
         """执行命令"""
         if cmd not in self._commands:
@@ -221,6 +232,8 @@ class CommandHandler:
 
     def cleanup(self):
         """清理资源（退出路径，幂等）"""
+        # 停止屏幕投屏
+        self.screencast.cleanup()
         # 停止所有投屏会话
         for session in self.device_sessions.values():
             session.stop()
@@ -532,12 +545,15 @@ class CommandHandler:
     def _save_settings(self, params: dict) -> None:
         settings = params["settings"]
 
-        # 热更新设备名称：拒绝空字符串（防止用户误删或脏数据写入）
+        # 热更新设备名称：拒绝空字符串写入名称（防止用户误删或脏数据），
+        # 但空名称不应阻断其他设置项保存——此前会直接 return，
+        # 导致音量等其余设置一并丢失
         new_name = settings.get("friendly_name")
         if new_name == "":
-            return
+            settings = {**settings, "friendly_name": self.config.get_friendly_name()}
+            new_name = None
 
-        if new_name != self.config.get_friendly_name():
+        if new_name is not None and new_name != self.config.get_friendly_name():
             self.dlna_server.friendly_name = new_name
             DLNAHandler.friendly_name = new_name
             self.config.friendly_name = new_name
@@ -757,8 +773,44 @@ class CommandHandler:
         info = self.mpv_manager.set_path(path)
 
         # 设置成功后重新加载渲染器
+        # 注意：新 renderer 必须完整接入 Protocol（回调 + 反向引用）并启动，
+        # 否则旧 renderer 停掉后投屏就完全失效。
         if info.status.value == "ready" and info.path:
             logger.info(f"Reloading MPV renderer with path: {info.path}")
-            self.renderer = MPVRenderer(path=info.path)
+            old_renderer = self.renderer
+            new_renderer = MPVRenderer(path=info.path)
+            # 1. 让 Protocol 指向新 renderer（内部会把 protocol 注入新 renderer）
+            self.protocol.set_renderer(new_renderer)
+            # 2. 启动新 renderer（启动 MPV 进程 + IPC 线程）
+            new_renderer.start()
+            self.renderer = new_renderer
+            # 3. 停掉旧 renderer（幂等：未启动时静默返回）
+            try:
+                old_renderer.shutdown()
+            except Exception as e:
+                logger.warning(f"Failed to shutdown old renderer: {e}")
+            logger.info("MPV renderer reloaded successfully")
 
         return info.to_dict()
+
+    # ── 屏幕投屏（电脑投屏到电视 / 浏览器）──
+
+    def _list_screen_sources(self, params: dict) -> dict:
+        """枚举屏幕/窗口/音频设备 + ffmpeg 状态"""
+        return self.screencast.list_sources()
+
+    def _start_screen_cast(self, params: dict) -> dict:
+        """开始屏幕投屏（target: dlna / webrtc）"""
+        return self.screencast.start(params)
+
+    def _stop_screen_cast(self, params: dict) -> dict:
+        """停止屏幕投屏"""
+        return self.screencast.stop()
+
+    def _screen_cast_status(self, params: dict) -> dict:
+        """屏幕投屏状态"""
+        return self.screencast.status()
+
+    def _set_ffmpeg_path(self, params: dict) -> dict:
+        """手动指定 FFmpeg 路径"""
+        return self.screencast.set_ffmpeg_path(params)

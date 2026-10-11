@@ -125,9 +125,12 @@ class MPVRenderer(Renderer):
             self.send_command(['script-message', 'set-hancast-title', self.title])
 
         if start and start != "0":
-            self.send_command(['loadfile', url, 'replace', f'start={start}'])
+            ok = self.send_command(['loadfile', url, 'replace', f'start={start}'])
         else:
-            self.send_command(['loadfile', url, 'replace'])
+            ok = self.send_command(['loadfile', url, 'replace'])
+        # send_command 失败（MPV 不可用）时清除标记，避免后续 end-file 事件被误抑制
+        if not ok:
+            self._replacing_file = False
 
     def set_media_title(self, data):
         """ data : string """
@@ -337,6 +340,16 @@ class MPVRenderer(Renderer):
                     logger.error("decode error: {}".format(e))
                 finally:
                     res = b''
+            # IPC 连接断开（MPV 退出/崩溃）：
+            # 若应用仍在运行且不是主动停止，必须同步 DLNA 状态为 STOPPED，
+            # 否则控制端会一直认为媒体还在播放。
+            if self.running and not self._stopping:
+                logger.warning("MPV IPC disconnected unexpectedly, syncing STOPPED state")
+                self.playing = False
+                try:
+                    self.set_state_stop()
+                except Exception as e:
+                    logger.error(f"Failed to sync stop state: {e}")
             self.ipc_sock.close()
             logger.info("mpv ipc stopped")
 

@@ -294,8 +294,24 @@ if ($RebuildSidecar) {
 # ============================================================
 
 Write-Step "4.5" "同步 MPV..."
-Copy-Item "mpv" -Destination "src-tauri\mpv" -Recurse -Force
-Write-OK "MPV 已同步到 src-tauri/mpv/"
+if (Test-Path "mpv") {
+    Copy-Item "mpv" -Destination "src-tauri\mpv" -Recurse -Force
+    Write-OK "MPV 已同步到 src-tauri/mpv/"
+} else {
+    Write-Warn "未找到根目录 mpv/，跳过 MPV 同步"
+}
+
+# ============================================================
+#  Step 4.6: 同步 FFmpeg → src-tauri/ffmpeg（屏幕投屏依赖）
+# ============================================================
+
+Write-Step "4.6" "同步 FFmpeg..."
+if (Test-Path "ffmpeg") {
+    Copy-Item "ffmpeg" -Destination "src-tauri\ffmpeg" -Recurse -Force
+    Write-OK "FFmpeg 已同步到 src-tauri/ffmpeg/"
+} else {
+    Write-Warn "未找到根目录 ffmpeg/，屏幕投屏功能将依赖系统 PATH 中的 ffmpeg（建议放入 ffmpeg/ffmpeg.exe）"
+}
 
 # ============================================================
 #  Step 5: 前端构建 + Tauri 打包
@@ -392,6 +408,11 @@ if ($Portable) {
 
     # 复制 MPV
     Copy-Item "$releaseDir\mpv" -Destination "$portableDir\mpv" -Recurse -Force
+
+    # 复制 FFmpeg（屏幕投屏；绿色版直接复制 release 下打包好的）
+    if (Test-Path "$releaseDir\ffmpeg") {
+        Copy-Item "$releaseDir\ffmpeg" -Destination "$portableDir\ffmpeg" -Recurse -Force
+    }
 
     $portableSize = (Get-ChildItem $portableDir -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB
     $portableCount = (Get-ChildItem $portableDir -Recurse -File).Count

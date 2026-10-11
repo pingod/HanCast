@@ -41,20 +41,23 @@ class TestCommands(unittest.TestCase):
         self.assertIsNone(result)
 
     def test_get_cast_state(self):
-        """测试获取投屏状态"""
+        """测试获取投屏状态（多设备 API：sessions + current）"""
         result = self.handler.execute("get_cast_state", {})
-        self.assertIn("status", result)
-        self.assertIn("volume", result)
-        self.assertIn("is_muted", result)
+        self.assertIn("sessions", result)
+        self.assertIn("current", result)
+        current = result["current"]
+        self.assertIn("status", current)
+        self.assertIn("volume", current)
+        self.assertIn("is_muted", current)
 
     def test_set_volume(self):
-        """测试设置音量"""
+        """测试设置音量（返回新音量，Rust 端依赖返回值同步 UI）"""
         result = self.handler.execute("set_volume", {"volume": 50})
-        self.assertIsNone(result)
+        self.assertEqual(result, 50)
 
         # 验证音量已更改
         state = self.handler.execute("get_cast_state", {})
-        self.assertEqual(state["volume"], 50)
+        self.assertEqual(state["current"]["volume"], 50)
 
     def test_set_mute(self):
         """测试设置静音"""
@@ -63,7 +66,7 @@ class TestCommands(unittest.TestCase):
 
         # 验证静音已更改
         state = self.handler.execute("get_cast_state", {})
-        self.assertTrue(state["is_muted"])
+        self.assertTrue(state["current"]["is_muted"])
 
     def test_get_settings(self):
         """测试获取设置"""

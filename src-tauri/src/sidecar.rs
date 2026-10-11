@@ -250,6 +250,17 @@ impl SidecarManager {
     ///   管道读取错误不影响 `wait()` 线程，Terminated 仍会到达；
     ///   break 会导致无法接收 Terminated，使 shutdown 无法确认退出。
     ///
+    /// ## stdout 行缓冲（重要）
+    ///
+    /// `CommandEvent::Stdout(bytes)` 的 bytes 是**管道读取的原始分块**，
+    /// 不保证以行结尾：一个 JSON 响应可能被拆到两个事件里，也可能一个
+    /// 事件包含多行。若直接对每个 chunk 做 `serde_json::from_str`，
+    /// 半行会解析失败，且连同下一次到达的剩余部分一起被丢弃——响应
+    /// 丢失后对应命令只能等 60s 超时。
+    ///
+    /// 因此这里按字节累积，以 `\n` 为界切出完整行再解析；跨 chunk 的
+    /// UTF-8 字符（如中文）在累积完整后统一解码，不会损坏。
+    ///
     /// When the stream ends, drains all pending senders with an error response
     /// so no caller hangs forever.
     async fn reader_loop(
@@ -259,33 +270,40 @@ impl SidecarManager {
         reader_failed: Arc<AtomicBool>,
         app: AppHandle,
     ) {
+        // 未消费的 stdout 字节缓冲（可能包含一个不完整行）
+        let mut stdout_buf: Vec<u8> = Vec::new();
+
         while let Some(event) = rx.recv().await {
             match event {
                 CommandEvent::Stdout(bytes) => {
-                    let line = String::from_utf8_lossy(&bytes);
-                    let trimmed = line.trim();
-                    if trimmed.is_empty() {
-                        continue;
+                    stdout_buf.extend_from_slice(&bytes);
+
+                    // 按 \n 切出所有完整行处理，不完整片段留在缓冲里等下一 chunk
+                    let mut consumed = 0;
+                    while let Some(rel) = stdout_buf[consumed..]
+                        .iter()
+                        .position(|&b| b == b'\n')
+                    {
+                        let line_end = consumed + rel;
+                        let line = String::from_utf8_lossy(&stdout_buf[consumed..line_end]);
+                        consumed = line_end + 1;
+
+                        let trimmed = line.trim();
+                        if trimmed.is_empty() {
+                            continue;
+                        }
+                        Self::handle_stdout_line(trimmed, &pending, &app).await;
                     }
-                    match serde_json::from_str::<Value>(trimmed) {
-                        Ok(val) => {
-                            if let Some(id) = val.get("id").and_then(|v| v.as_u64()) {
-                                // Response to a request
-                                let mut map = pending.lock().await;
-                                if let Some(tx) = map.remove(&id) {
-                                    let _ = tx.send(val);
-                                }
-                            } else if let Some(event_name) =
-                                val.get("event").and_then(|v| v.as_str())
-                            {
-                                // Event pushed by Python
-                                let data = val.get("data").cloned().unwrap_or(Value::Null);
-                                let _ = app.emit(event_name, data);
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("[SidecarManager] Invalid JSON from stdout: {e}");
-                        }
+                    stdout_buf.drain(..consumed);
+
+                    // 缓冲上限保护：极端情况下 sidecar 输出无法按行切分
+                    // （例如一直没发 \n），防止内存无限增长。
+                    if stdout_buf.len() > 8 * 1024 * 1024 {
+                        eprintln!(
+                            "[SidecarManager] stdout buffer exceeded 8MB, dropping {} bytes",
+                            stdout_buf.len()
+                        );
+                        stdout_buf.clear();
                     }
                 }
                 CommandEvent::Stderr(bytes) => {
@@ -320,6 +338,32 @@ impl SidecarManager {
                 "success": false,
                 "error": "Sidecar process exited unexpectedly"
             }));
+        }
+    }
+
+    /// 解析一行 stdout JSON：响应按 id 派发，事件按名称 emit 到前端
+    async fn handle_stdout_line(
+        line: &str,
+        pending: &Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>>,
+        app: &AppHandle,
+    ) {
+        match serde_json::from_str::<Value>(line) {
+            Ok(val) => {
+                if let Some(id) = val.get("id").and_then(|v| v.as_u64()) {
+                    // Response to a request
+                    let mut map = pending.lock().await;
+                    if let Some(tx) = map.remove(&id) {
+                        let _ = tx.send(val);
+                    }
+                } else if let Some(event_name) = val.get("event").and_then(|v| v.as_str()) {
+                    // Event pushed by Python
+                    let data = val.get("data").cloned().unwrap_or(Value::Null);
+                    let _ = app.emit(event_name, data);
+                }
+            }
+            Err(e) => {
+                eprintln!("[SidecarManager] Invalid JSON from stdout: {e}");
+            }
         }
     }
 
