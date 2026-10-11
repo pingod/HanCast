@@ -236,13 +236,14 @@ async fn parse_media_url(
         .await
 }
 
+/// 从任意粘贴文本（分享口令/短链/网页/直链）解析可播放媒体信息
 #[tauri::command]
-async fn resolve_bilibili(
+async fn resolve_share(
     sidecar: State<'_, SidecarManager>,
-    url: String,
+    text: String,
 ) -> Result<serde_json::Value, String> {
     sidecar
-        .send_command("resolve_bilibili", serde_json::json!({"url": url}))
+        .send_command("resolve_share", serde_json::json!({"text": text}))
         .await
 }
 
@@ -1099,7 +1100,7 @@ pub fn run() {
             hide_device,
             parse_media_file,
             parse_media_url,
-            resolve_bilibili,
+            resolve_share,
             start_cast,
             stop_cast,
             pause_cast,

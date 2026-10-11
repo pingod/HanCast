@@ -163,6 +163,30 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
         duration: null,
         thumbnail: null,
       } as T
+    case 'resolve_share': {
+      // 浏览器 dev 模式：只做本地提取（口令文本取第一个链接，按扩展名猜 MIME）
+      const raw = String(args?.text ?? '')
+      const urlMatch = raw.match(/https?:\/\/[^\s"'<>，。；！？、【】]+/i)
+      const url = urlMatch ? urlMatch[0].replace(/[),.;!?'"]+$/, '') : raw.trim()
+      const ext = url.split('/').pop()?.split('?')[0]?.split('.').pop()?.toLowerCase() ?? ''
+      const mimeMap: Record<string, string> = {
+        mp4: 'video/mp4', mkv: 'video/x-matroska', webm: 'video/webm',
+        mov: 'video/quicktime', flv: 'video/x-flv', m3u8: 'application/vnd.apple.mpegurl',
+        mp3: 'audio/mpeg', aac: 'audio/aac', ogg: 'audio/ogg', m4a: 'audio/mp4',
+        jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif',
+      }
+      return {
+        media_type: 'url',
+        uri: url,
+        title: decodeURIComponent(url.split('/').pop()?.split('?')[0] || url) || url,
+        mime_type: mimeMap[ext] ?? '',
+        file_size: null,
+        duration: null,
+        thumbnail: null,
+        source_url: url,
+        via: 'direct',
+      } as T
+    }
     case 'get_cast_url':
       return {
         url: 'http://example.com/video.mp4',
@@ -271,9 +295,18 @@ export async function parseMediaUrl(url: string): Promise<MediaInfo> {
   return invoke<MediaInfo>('parse_media_url', { url })
 }
 
-export async function resolveBilibili(url: string): Promise<MediaInfo> {
+/** 分享文本解析结果：MediaInfo + 提取出的原始地址与解析通道 */
+export type ShareResolveResult = MediaInfo & {
+  source_url?: string
+  via?: 'bilibili' | 'douyin' | 'page' | 'direct'
+  author?: string
+  bvid?: string
+}
+
+/** 从任意粘贴文本（分享口令/短链/网页/直链）解析可播放媒体 */
+export async function resolveShare(text: string): Promise<ShareResolveResult> {
   const invoke = await initInvoke()
-  return invoke<MediaInfo>('resolve_bilibili', { url })
+  return invoke<ShareResolveResult>('resolve_share', { text })
 }
 
 // Cast control — all commands accept optional deviceId for multi-device support

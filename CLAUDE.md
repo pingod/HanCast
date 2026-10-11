@@ -102,6 +102,7 @@ G:\Code\Macast-Han\
 │   │   │   └── mpv.py           # MPV 渲染器（IPC: named pipe/unix socket）
 │   │   ├── media/
 │   │   │   ├── parser.py        # 媒体文件/URL 解析器
+│   │   │   ├── share_resolver.py # 分享口令/短链/网页 → 可播直链解析
 │   │   │   └── server.py        # 本地文件 HTTP 服务（支持 Range）
 │   │   ├── types/
 │   │   │   ├── cast.py          # CastState dataclass
@@ -192,6 +193,7 @@ G:\Code\Macast-Han\
 | 设备 | `remove_device` | 移除设备 |
 | 媒体 | `parse_media_file` | 解析媒体文件 |
 | 媒体 | `parse_media_url` | 解析媒体 URL |
+| 媒体 | `resolve_share` | 解析分享口令/短链/网页 → 可播直链（含 B站取流） |
 | 投屏 | `start_cast` | 开始投屏 |
 | 投屏 | `stop_cast` | 停止投屏 |
 | 投屏 | `pause_cast` | 暂停投屏 |

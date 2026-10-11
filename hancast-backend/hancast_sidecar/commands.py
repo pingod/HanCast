@@ -15,9 +15,8 @@ from .protocol.server import DLNAServer, DLNAHandler
 from .renderer.mpv import MPVRenderer
 from .media.parser import MediaParser
 from .media.server import MediaServer
-from .media.bili_resolver import BiliResolver
+from .media.share_resolver import ShareResolver
 from .models.device import Device
-from .models.media import MediaInfo
 from .models.cast import CastState
 from .models.session import DeviceCastSession
 from .utils.config import Config
@@ -101,6 +100,8 @@ class CommandHandler:
         # 否则多网卡/VPN 机器上电视拿到的是默认路由 IP，拉不到流
         self.media_server = MediaServer(
             lan_ip=self.config.network_interface or None)
+        # 分享文本/任意页面 → 可播直链解析器（共享 BiliResolver 的 Cookie 缓存）
+        self.share_resolver = ShareResolver(self.media_server)
         self.cast_state = CastState()
 
         # 多设备投屏会话 {device_id: DeviceCastSession}
@@ -156,7 +157,7 @@ class CommandHandler:
 
             # 媒体解析
             "parse_media": self._parse_media,
-            "resolve_bilibili": self._resolve_bilibili,
+            "resolve_share": self._resolve_share,
 
             # 设置
             "get_settings": self._get_settings,
@@ -511,39 +512,10 @@ class CommandHandler:
             info = self.media_parser.parse_url(params["url"])
         return info.to_dict()
 
-    def _resolve_bilibili(self, params: dict) -> dict:
-        """解析 B 站视频 URL，返回带本地代理的可播放信息"""
-        url = params["url"]
-        resolver = BiliResolver()
-
-        if not resolver.belongs_to(url):
-            raise ValueError(f"不是B站链接: {url}")
-
-        result = resolver.resolve(url)
-
-        # 将视频直链注册为本地代理 (附加 Referer 头)
-        proxy_url = self.media_server.register_proxy(result["video_url"])
-
-        # 将封面图也注册为本地代理 (B站 CDN 有防盗链)
-        cover_url = result.get("cover_url", "")
-        cover_proxy = self.media_server.register_proxy(cover_url) if cover_url else None
-
-        # 构建 MediaInfo
-        media_info = MediaInfo(
-            media_type="url",
-            uri=proxy_url,
-            title=result["title"],
-            mime_type="video/mp4",
-            file_size=None,
-            thumbnail=cover_proxy or cover_url,
-        )
-
-        return {
-            **media_info.to_dict(),
-            "author": result.get("author", ""),
-            "bvid": result.get("bvid", ""),
-            "cover_url": result.get("cover_url", ""),
-        }
+    def _resolve_share(self, params: dict) -> dict:
+        """从任意粘贴文本（分享口令/短链/网页/直链）解析出可播放的媒体信息"""
+        text = params.get("text") or params.get("url") or ""
+        return self.share_resolver.resolve(text)
 
     # ── 设置 ──
 
