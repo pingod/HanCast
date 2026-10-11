@@ -5,6 +5,7 @@ import Modal from '@/components/Modal.vue'
 import CustomSelect from '@/components/CustomSelect.vue'
 import { useScreenCastStore } from '@/stores/screencast'
 import { useDeviceStore } from '@/stores/device'
+import { writeClipboardText } from '@/api/commands'
 
 const { t } = useI18n()
 const sc = useScreenCastStore()
@@ -93,11 +94,17 @@ async function onSetFfmpeg() {
   ffmpegPathInput.value = ''
 }
 
-function copyText(text: string) {
+async function copyText(text: string) {
+  // writeText() 的 reject 不受同步 try/catch 保护，必须 await 后再逐级降级
   try {
-    navigator.clipboard.writeText(text)
+    await writeClipboardText(text)
+    return
   } catch {
-    // 浏览器环境降级：选中文本
+    /* Rust 侧不可用（浏览器 dev），走 Web API */
+  }
+  try {
+    await navigator.clipboard.writeText(text)
+  } catch {
     const el = document.createElement('textarea')
     el.value = text
     document.body.appendChild(el)

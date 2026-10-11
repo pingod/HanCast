@@ -166,6 +166,9 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
     case 'read_clipboard':
       // 浏览器 dev 模式：交回 navigator.clipboard 处理
       return '' as T
+    case 'write_clipboard':
+      navigator.clipboard?.writeText(String(args?.text ?? '')).catch(() => {})
+      return undefined as T
     case 'resolve_share': {
       // 浏览器 dev 模式：只做本地提取（口令文本取第一个链接，按扩展名猜 MIME）
       const raw = String(args?.text ?? '')
@@ -363,6 +366,12 @@ export async function readClipboardText(): Promise<string> {
   } catch {
     return ''
   }
+}
+
+/** 写入系统剪贴板，失败抛错交由调用方降级处理。 */
+export async function writeClipboardText(text: string): Promise<void> {
+  const invoke = await initInvoke()
+  await invoke('write_clipboard', { text })
 }
 
 // Cast control — all commands accept optional deviceId for multi-device support

@@ -196,6 +196,7 @@ G:\Code\Macast-Han\
 | 媒体 | `resolve_share` | 解析分享口令/短链/网页 → 可播直链（含 B站取流） |
 | 媒体 | `get_resolve_result` | 轮询异步解析任务结果 |
 | 媒体 | `read_clipboard` | Rust 侧读系统剪贴板（WKWebView 无 clipboard-read 权限） |
+| 媒体 | `write_clipboard` | Rust 侧写系统剪贴板（Web API reject 不受同步 try/catch 保护） |
 | 投屏 | `start_cast` | 开始投屏 |
 | 投屏 | `stop_cast` | 停止投屏 |
 | 投屏 | `pause_cast` | 暂停投屏 |
