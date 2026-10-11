@@ -88,6 +88,11 @@ class SSDPService:
         self.sock_list: List[Sock] = []
         self.sock: Optional[socket.socket] = None
 
+        # M-SEARCH 组播不可用时只告警一次，避免 30s 一轮刷屏（并提示用户排查）
+        self._msearch_warned = False
+        # 最近一次设备发现走的通道（multicast / broadcast），用于日志定位
+        self._discovery_via = "multicast"
+
         # 回调函数
         self._on_device_found: Optional[Callable[[Device], None]] = None
         self._on_device_lost: Optional[Callable[[str], None]] = None
@@ -403,6 +408,21 @@ class SSDPService:
         b = [int(n) for n in ip.split('.')]
         return [a[i] & b[i] for i in range(4)]
 
+    def _get_broadcast_ip(self, ip, mask):
+        """由接口地址与掩码算出子网广播地址（组播不可用时的回退目标）。"""
+        try:
+            a = [int(n) for n in mask.split('.')]
+            b = [int(n) for n in ip.split('.')]
+            if len(a) != 4 or len(b) != 4:
+                return None
+            # 掩码 255.255.255.255（点对点隧道）无子网广播概念
+            if a == [255, 255, 255, 255]:
+                return None
+            parts = [str(b[i] | (255 - a[i])) for i in range(4)]
+            return '.'.join(parts)
+        except (ValueError, AttributeError):
+            return None
+
     def _handle_notify(self, headers, host_port):
         """处理 NOTIFY 消息 — 设备上线/离线通知"""
         (host, port) = host_port
@@ -533,22 +553,64 @@ class SSDPService:
             "ssdp:all",
         ]
 
+        sock = None
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
+            # 允许发子网广播（组播被阻断时的回退通道）
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
             sock.settimeout(SSDP_MX + 1)
 
-            for st in search_types:
-                message = (
+            def _build(st: str) -> bytes:
+                return (
                     "M-SEARCH * HTTP/1.1\r\n"
                     f"HOST: {SSDP_ADDR}:{SSDP_PORT}\r\n"
                     "MAN: \"ssdp:discover\"\r\n"
                     f"MX: {SSDP_MX}\r\n"
                     f"ST: {st}\r\n"
                     "\r\n"
-                )
-                logger.debug(f"Sending M-SEARCH for {st}")
-                sock.sendto(message.encode(), (SSDP_ADDR, SSDP_PORT))
+                ).encode()
+
+            # 先试标准组播。部分系统（VPN 接管路由、NECP 策略等）会禁止
+            # UDP 组播，此时内核返回 EHOSTUNREACH/ENETUNREACH。
+            multicast_ok = True
+            try:
+                for st in search_types:
+                    logger.debug(f"Sending M-SEARCH for {st}")
+                    sock.sendto(_build(st), (SSDP_ADDR, SSDP_PORT))
+            except OSError as e:
+                multicast_ok = False
+                if not self._msearch_warned:
+                    self._msearch_warned = True
+                    logger.warning(
+                        "SSDP 组播不可用（%s），回退到子网广播发现设备。"
+                        "部分设备可能不响应广播的 M-SEARCH。", e)
+
+            # 组播不通时，用各接口的子网广播地址重发（SSDP 兼容做法）
+            if not multicast_ok:
+                self._discovery_via = "broadcast"
+                sent_to = []
+                for ip, mask in self.ip_list:
+                    bcast = self._get_broadcast_ip(ip, mask)
+                    if not bcast:
+                        continue
+                    for st in search_types:
+                        try:
+                            sock.sendto(_build(st), (bcast, SSDP_PORT))
+                        except OSError as e:
+                            logger.debug(
+                                "broadcast M-SEARCH to %s failed: %s", bcast, e)
+                    sent_to.append(bcast)
+                if sent_to:
+                    logger.info(
+                        "已通过子网广播发送 M-SEARCH: %s（组播被系统阻断，"
+                        "广播发现的设备能力与客户端软件一致）", ", ".join(sent_to))
+            else:
+                self._discovery_via = "multicast"
+
+            # 组播可用则复位，便于下次真断时还能再报
+            if multicast_ok:
+                self._msearch_warned = False
 
             while self._running:
                 try:
@@ -559,7 +621,8 @@ class SSDPService:
         except Exception as e:
             logger.error(f"M-SEARCH error: {e}")
         finally:
-            sock.close()
+            if sock is not None:
+                sock.close()
 
     def _parse_response(self, data: str, addr: tuple):
         headers = {}
@@ -657,7 +720,8 @@ class SSDPService:
             elif "MediaServer" in type_str:
                 device_type = "server"
 
-            logger.debug(f"Parsed device: {friendly_name} ({device_type}) at {ip}:{port}")
+            logger.debug(f"Parsed device: {friendly_name} ({device_type}) at {ip}:{port}"
+                         f" [via {self._discovery_via}]")
 
             return Device(
                 id=udn, name=friendly_name, device_type=device_type,
