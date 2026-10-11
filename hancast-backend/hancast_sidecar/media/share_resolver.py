@@ -39,6 +39,8 @@ _SHORT_HOSTS = (
     "b23.tv", "v.douyin.com", "www.iesdouyin.com", "v.ixigua.com", "m.ixigua.com",
     "xhslink.com", "t.cn", "url.cn", "s.url.cn", "dwz.cn", "bit.ly", "tinyurl.com",
     "t.me",
+    # 快手分享域（link.kuaishou.com / v.m.chenzhongtech.com 常以裸链出现在口令里）
+    "c.kuaishou.com", "link.kuaishou.com", "v.m.chenzhongtech.com",
 )
 
 # URL 允许字符：排除空白、引号尖括号反斜杠、CJK 字符与全角标点（口令文案分界）
@@ -52,6 +54,13 @@ BV_RE = re.compile(r"\bBV[0-9A-Za-z]{10}\b")
 AV_RE = re.compile(r"\bav\d{1,9}\b", re.I)
 
 BILI_SUFFIXES = {"bilibili.com", "b23.tv", "bilibili.tv"}
+
+# 已知有专路/通用提取把握较高的平台（候选排序时优先）
+_KNOWN_MEDIA_HOSTS = (
+    "bilibili.com", "b23.tv", "bilibili.tv", "douyin.com", "iesdouyin.com",
+    "ixigua.com", "kuaishou", "chenzhongtech.com", "xiaohongshu.com",
+    "xhslink.com", "weibo.com", "weibo.cn",
+)
 
 _EXT_MIME = {
     "mp4": "video/mp4", "m4v": "video/mp4", "mkv": "video/x-matroska",
@@ -149,6 +158,8 @@ class ShareResolver:
         if not candidates:
             raise ValueError(
                 "未从粘贴内容中找到链接（支持视频网址、抖音/B站/小红书分享口令、BV/av 号）")
+        # 媒体似然度优先：已知平台/带媒体扩展名的链接先试（口令文案常混入推广链接）
+        candidates = sorted(candidates, key=self._candidate_priority)
 
         deadline = time.monotonic() + _TOTAL_BUDGET
         errors: list[str] = []
@@ -222,6 +233,15 @@ class ShareResolver:
     def _is_bili(url: str) -> bool:
         host = urlparse(url).hostname or ""
         return any(host == s or host.endswith("." + s) for s in BILI_SUFFIXES)
+
+    @staticmethod
+    def _candidate_priority(url: str) -> int:
+        host = (urlparse(url).hostname or "").lower()
+        if any(h in host for h in _KNOWN_MEDIA_HOSTS):
+            return 0
+        if _ext_of(url) in _EXT_MIME:
+            return 0
+        return 1
 
     # ── HTTP ──
 

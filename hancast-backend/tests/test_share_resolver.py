@@ -63,6 +63,28 @@ class TestExtractCandidates(unittest.TestCase):
     def test_no_url(self):
         self.assertEqual(extract_candidates('一段没有链接的中文文本'), [])
 
+    def test_kuaishou_bare_short_hosts(self):
+        self.assertEqual(
+            extract_candidates('看快手这个视频 link.kuaishou.com/Ab1Cd 超精彩'),
+            ["https://link.kuaishou.com/Ab1Cd"])
+        self.assertEqual(
+            extract_candidates('https://v.m.chenzhongtech.com/fw/photo/3xYz123 快手直链'),
+            ["https://v.m.chenzhongtech.com/fw/photo/3xYz123"])
+
+    def test_known_platform_candidate_preferred(self):
+        """推广链接在前时，已知平台链接优先解析"""
+        resolver = ShareResolver(FakeMediaServer())
+        tried: list[str] = []
+
+        def fake(url, deadline):
+            tried.append(url)
+            raise ValueError("stub fail to continue")
+
+        with patch.object(ShareResolver, "_resolve_url", side_effect=fake):
+            with self.assertRaises(ValueError):
+                resolver.resolve('推广 https://ads.example.com/lp 快看 https://b23.tv/AbCdEf')
+        self.assertEqual(tried[0], "https://b23.tv/AbCdEf")
+
 
 PAGE_HTML = """<html><head>
 <meta property="og:title" content="测试视频标题">

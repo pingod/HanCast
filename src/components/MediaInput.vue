@@ -369,6 +369,19 @@ function onPasteFromClipboard() {
   })
 }
 
+/**
+ * 直接 Ctrl+V 到输入框：分享口令文案（非纯链接）自动提取并立即解析；
+ * 纯链接保持默认粘贴行为，便于用户手动编辑。
+ */
+function onUrlPaste(e: ClipboardEvent) {
+  const text = (e.clipboardData?.getData('text') ?? '').trim()
+  if (!text || /^https?:\/\/\S+$/i.test(text)) return
+  e.preventDefault()
+  const cleaned = text.replace(/\s+/g, ' ')
+  mediaStore.setInputChange(cleaned)
+  mediaStore.parseUrl(text)
+}
+
 async function onParse() {
   await mediaStore.parseUrl()
 }
@@ -569,6 +582,7 @@ function onFileSelected(e: Event) {
         :placeholder="t('media.linkPlaceholder')"
         :value="mediaStore.urlInput"
         @input="mediaStore.setInputChange(($event.target as HTMLInputElement).value)"
+        @paste="onUrlPaste"
         @keydown.enter="onParse"
       />
       <button class="media-input__paste" @click="onPasteFromClipboard">

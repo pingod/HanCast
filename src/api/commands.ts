@@ -303,10 +303,42 @@ export type ShareResolveResult = MediaInfo & {
   bvid?: string
 }
 
-/** 从任意粘贴文本（分享口令/短链/网页/直链）解析可播放媒体 */
+interface ResolveTaskStart {
+  task_id: string
+  status: 'pending'
+}
+interface ResolveTaskEntry {
+  status: 'pending' | 'done' | 'error'
+  result?: ShareResolveResult
+  error?: string
+}
+
+/**
+ * 从任意粘贴文本（分享口令/短链/网页/直链）解析可播放媒体。
+ * 后端为异步任务：resolve_share 立即返回 task_id，轮询 get_resolve_result
+ * 直到 done/error（sidecar 单条解析预算 25s，这里给 45s 兜底）。
+ */
 export async function resolveShare(text: string): Promise<ShareResolveResult> {
   const invoke = await initInvoke()
-  return invoke<ShareResolveResult>('resolve_share', { text })
+  const start = await invoke<ResolveTaskStart & Partial<ShareResolveResult>>(
+    'resolve_share', { text })
+
+  // 兼容直接返回结果的实现（浏览器 mock / 旧版）
+  if (!start.task_id) {
+    if (!start.uri) throw new Error('解析结果为空')
+    return start as ShareResolveResult
+  }
+
+  const deadline = Date.now() + 45_000
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 400))
+    const entry = await invoke<ResolveTaskEntry>('get_resolve_result', {
+      taskId: start.task_id,
+    })
+    if (entry.status === 'done' && entry.result) return entry.result
+    if (entry.status === 'error') throw new Error(entry.error || '解析失败')
+  }
+  throw new Error('解析超时，请稍后重试')
 }
 
 // Cast control — all commands accept optional deviceId for multi-device support

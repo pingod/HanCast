@@ -7,6 +7,8 @@ import sys
 import json
 import logging
 import threading
+import time
+import uuid
 from typing import Any, Dict, Optional
 from .ssdp import SSDPService, list_network_interfaces
 from .protocol import dlna
@@ -102,6 +104,9 @@ class CommandHandler:
             lan_ip=self.config.network_interface or None)
         # 分享文本/任意页面 → 可播直链解析器（共享 BiliResolver 的 Cookie 缓存）
         self.share_resolver = ShareResolver(self.media_server)
+        # 异步解析任务表 {task_id: {status: pending|done|error, result?, error?, ts}}
+        self._resolve_tasks: Dict[str, dict] = {}
+        self._resolve_lock = threading.Lock()
         self.cast_state = CastState()
 
         # 多设备投屏会话 {device_id: DeviceCastSession}
@@ -158,6 +163,7 @@ class CommandHandler:
             # 媒体解析
             "parse_media": self._parse_media,
             "resolve_share": self._resolve_share,
+            "get_resolve_result": self._get_resolve_result,
 
             # 设置
             "get_settings": self._get_settings,
@@ -513,9 +519,51 @@ class CommandHandler:
         return info.to_dict()
 
     def _resolve_share(self, params: dict) -> dict:
-        """从任意粘贴文本（分享口令/短链/网页/直链）解析出可播放的媒体信息"""
+        """从任意粘贴文本（分享口令/短链/网页/直链）解析可播放媒体。
+
+        解析含多次外网请求（最长 25s），放后台线程执行：命令循环立即返回
+        task_id，前端轮询 get_resolve_result。否则会卡住投屏状态轮询等命令。
+        """
         text = params.get("text") or params.get("url") or ""
-        return self.share_resolver.resolve(text)
+        if not text.strip():
+            raise ValueError("粘贴内容为空")
+
+        with self._resolve_lock:
+            # 清理过期完成任务（10 分钟）
+            now = time.time()
+            for tid in [t for t, e in self._resolve_tasks.items()
+                        if e["status"] != "pending" and now - e.get("ts", now) > 600]:
+                del self._resolve_tasks[tid]
+            pending = sum(1 for e in self._resolve_tasks.values()
+                          if e["status"] == "pending")
+            if pending >= 3:
+                raise ValueError("已有 3 个解析任务进行中，请稍后再试")
+
+            task_id = uuid.uuid4().hex[:12]
+            self._resolve_tasks[task_id] = {"status": "pending", "ts": time.time()}
+
+        def _run():
+            try:
+                result = self.share_resolver.resolve(text)
+                done = {"status": "done", "result": result, "ts": time.time()}
+            except Exception as e:
+                logger.info(f"分享解析失败: {e}")
+                done = {"status": "error", "error": str(e), "ts": time.time()}
+            with self._resolve_lock:
+                # 任务可能已被清理（超期/重启），写入前先确认还在
+                if task_id in self._resolve_tasks:
+                    self._resolve_tasks[task_id] = done
+
+        threading.Thread(target=_run, name=f"RESOLVE_{task_id}", daemon=True).start()
+        return {"task_id": task_id, "status": "pending"}
+
+    def _get_resolve_result(self, params: dict) -> dict:
+        task_id = params.get("task_id") or ""
+        with self._resolve_lock:
+            entry = self._resolve_tasks.get(task_id)
+            if entry is None:
+                raise ValueError("解析任务不存在或已过期")
+            return dict(entry)
 
     # ── 设置 ──
 

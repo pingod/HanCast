@@ -237,6 +237,7 @@ async fn parse_media_url(
 }
 
 /// 从任意粘贴文本（分享口令/短链/网页/直链）解析可播放媒体信息
+/// sidecar 后台线程执行，返回 {task_id}；结果经 get_resolve_result 轮询
 #[tauri::command]
 async fn resolve_share(
     sidecar: State<'_, SidecarManager>,
@@ -244,6 +245,16 @@ async fn resolve_share(
 ) -> Result<serde_json::Value, String> {
     sidecar
         .send_command("resolve_share", serde_json::json!({"text": text}))
+        .await
+}
+
+#[tauri::command]
+async fn get_resolve_result(
+    sidecar: State<'_, SidecarManager>,
+    task_id: String,
+) -> Result<serde_json::Value, String> {
+    sidecar
+        .send_command("get_resolve_result", serde_json::json!({"task_id": task_id}))
         .await
 }
 
@@ -1101,6 +1112,7 @@ pub fn run() {
             parse_media_file,
             parse_media_url,
             resolve_share,
+            get_resolve_result,
             start_cast,
             stop_cast,
             pause_cast,
