@@ -74,6 +74,8 @@ class Sock:
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.ssdp_addr = socket.inet_aton(SSDP_ADDR)
         self.interface = socket.inet_aton(self.ip)
+        # 组播被系统阻断时 send 会持续失败，每实例只告警一次避免 30s 一轮刷屏
+        self.send_failed = False
         try:
             self.sock.setsockopt(
                 socket.IPPROTO_IP, socket.IP_MULTICAST_IF, self.interface)
@@ -85,13 +87,22 @@ class Sock:
         self.sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0)
 
     def send_it(self, response, destination):
+        """发送一个 SSDP 报文，返回是否成功。
+
+        失败原因（多为组播被系统策略阻断，Errno 65/101）只在首次打印，
+        否则每 30s × 6 条 NOTIFY 会把日志刷满。
+        """
         try:
             self.sock.sendto(
                 response.format(self.ip).encode(), destination)
+            return True
         except (AttributeError, socket.error) as msg:
-            logger.warning(
-                "failure sending out data: from {} to {}".format(
-                    self.ip, destination))
+            if not self.send_failed:
+                self.send_failed = True
+                logger.warning(
+                    "failure sending out data: from %s to %s: %s"
+                    "（同类失败不再重复告警）", self.ip, destination, msg)
+            return False
 
     def close(self):
         try:
@@ -137,6 +148,9 @@ class SSDPService:
 
         # M-SEARCH 组播不可用时只告警一次，避免 30s 一轮刷屏（并提示用户排查）
         self._msearch_warned = False
+        # NOTIFY 广播兜底：日志只记一次；广播通道彻底不可用则不再尝试
+        self._notify_bcast_logged = False
+        self._notify_bcast_dead = False
         # 最近一次设备发现走的通道（multicast / broadcast），用于日志定位
         self._discovery_via = "multicast"
 
@@ -620,13 +634,60 @@ class SSDPService:
             resp.extend(('', ''))
 
             try:
+                sent = False
                 for s in self.sock_list:
-                    s.send_it('\r\n'.join(resp), (SSDP_ADDR, SSDP_PORT))
-                logger.debug('NOTIFY sent for %s via %d interfaces' %
-                             (usn, len(self.sock_list)))
+                    if s.send_it('\r\n'.join(resp), (SSDP_ADDR, SSDP_PORT)):
+                        sent = True
+                if not sent:
+                    # 组播通道全挂（系统策略阻断多播）：本机 renderer 对
+                    # 手机侧不可见，退到子网广播把 alive 发出去
+                    self._notify_broadcast('\r\n'.join(resp))
+                else:
+                    logger.debug('NOTIFY sent for %s via %d interfaces' %
+                                 (usn, len(self.sock_list)))
             except (AttributeError, socket.error) as msg:
                 logger.warning(
                     "failure sending out alive notification: %r" % msg)
+
+    def _notify_broadcast(self, template: str) -> None:
+        """NOTIFY 的组播兜底：向各接口子网广播地址发送同一份 alive 报文。
+
+        与 M-SEARCH 的广播回退对称。HOST 头仍按 SSDP 规范写组播地址，
+        多数控制点按 NT/NTS/USN 解析，不校验链路层地址。
+        """
+        if self._notify_bcast_dead:
+            return
+        sock = None
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
+            sent_to = []
+            for ip, mask in self.ip_list:
+                bcast = self._get_broadcast_ip(ip, mask)
+                if not bcast:
+                    continue
+                try:
+                    sock.sendto(template.format(ip).encode(),
+                                (bcast, SSDP_PORT))
+                    sent_to.append(bcast)
+                except OSError as e:
+                    logger.debug("broadcast NOTIFY to %s failed: %s", bcast, e)
+            if sent_to and not self._notify_bcast_logged:
+                # 只记一次日志：报文本身每轮仍要发，否则对端按
+                # CACHE-CONTROL max-age 超时后会把我们剔除
+                self._notify_bcast_logged = True
+                logger.info(
+                    "已通过子网广播发送 NOTIFY: %s（组播被系统阻断，"
+                    "后续同类广播不再记录日志）", ", ".join(sent_to))
+            elif not sent_to:
+                self._notify_bcast_dead = True
+        except OSError as e:
+            self._notify_bcast_dead = True
+            logger.warning("子网广播 NOTIFY 不可用: %s", e)
+        finally:
+            if sock:
+                sock.close()
 
     def _do_byebye(self):
         """发送 byebye"""

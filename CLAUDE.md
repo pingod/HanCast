@@ -93,7 +93,7 @@ G:\Code\Macast-Han\
 │   ├── hancast_sidecar/
 │   │   ├── main.py              # Sidecar 入口（stdin/stdout JSON 循环）
 │   │   ├── commands.py          # CommandHandler — 命令路由
-│   │   ├── ssdp.py              # SSDP 设备发现（~540 行）
+│   │   ├── ssdp.py              # SSDP 设备发现（~970 行）
 │   │   ├── protocol/
 │   │   │   ├── dlna.py          # DLNA 协议实现（~840 行）
 │   │   │   └── server.py        # DLNA HTTP 服务（描述、SOAP、SUBSCRIBE）
@@ -211,7 +211,7 @@ G:\Code\Macast-Han\
 | 服务 | 端口 | 说明 |
 |------|------|------|
 | DLNA Server | 8080 | 描述 XML、SCPDXML、SOAP 请求处理 |
-| SSDP Service | 1900 | UDP 多播，设备发现（NOTIFY + M-SEARCH） |
+| SSDP Service | 1900 | UDP 多播，设备发现（NOTIFY + M-SEARCH）；多播被系统阻断时两者均回退到子网广播 |
 | Media Server | 动态 | 本地文件 HTTP 服务（支持 Range 请求） |
 | MPV Renderer | IPC | 通过 named pipe (Windows) / unix socket (Linux/macOS) 控制 MPV |
 
