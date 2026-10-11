@@ -116,6 +116,9 @@ class FfmpegCapture:
         # ── 视频进程 ──
         video_input = self._video_input_args(source, fps, f"{width}:{height}")
         video_cmd = [self.ffmpeg, "-hide_banner", "-loglevel", "error"] + video_input + [
+            # macOS avfoundation 屏幕设备曾观测到无视 -framerate、以数千 fps
+            # 疯狂产出（5 秒 11GB raw 数据）；输出端强制 CFR 封顶帧率
+            "-fps_mode", "cfr", "-r", str(fps),
             "-f", "rawvideo", "-pix_fmt", "bgr24", "pipe:1",
         ]
         try:
@@ -209,6 +212,8 @@ class FfmpegCapture:
         cmd += [
             "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
             "-b:v", bitrate, "-pix_fmt", "yuv420p", "-g", str(fps * 2),
+            # 输入设备帧率失控时（macOS avfoundation 实测）按目标帧率 CFR 封顶
+            "-r", str(fps),
         ]
         if audio_input:
             cmd += ["-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2"]
@@ -271,7 +276,7 @@ class FfmpegCapture:
 
     def _video_input_args(self, source: Dict, fps: int, scale: str) -> List[str]:
         from .ffmpeg_manager import FfmpegManager
-        return FfmpegManager.build_video_input(source, fps, scale)
+        return FfmpegManager.build_video_input(source, fps, scale, self.ffmpeg)
 
     def _audio_input_args(self, audio_cfg: Dict) -> List[str]:
         from .ffmpeg_manager import FfmpegManager

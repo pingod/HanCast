@@ -6,13 +6,65 @@ FFmpeg 管理器 — 检测 / 路径管理 / 捕获源枚举
 """
 
 import os
+import re
 import sys
 import json
 import logging
+import threading
 import subprocess
 from typing import Dict, List, Optional
 
 logger = logging.getLogger("hancast.screencast.ffmpeg")
+
+# avfoundation 屏幕设备索引缓存（ffmpeg_path -> index，None 表示未找到）
+_avf_screen_cache: Dict[str, Optional[int]] = {}
+_avf_screen_lock = threading.Lock()
+
+
+def avfoundation_screen_index(ffmpeg_path: str) -> Optional[int]:
+    """枚举 avfoundation 视频设备，返回 "Capture screen" 屏幕设备的索引。
+
+    macOS 上摄像头排在屏幕前面，索引随外接摄像头/虚拟相机数量变化，
+    不能硬编码（曾固定用 1，在装有 OBS Virtual Camera 的机器上抓到的是
+    摄像头而不是屏幕）。找不到屏幕设备返回 None。
+    """
+    with _avf_screen_lock:
+        if ffmpeg_path in _avf_screen_cache:
+            return _avf_screen_cache[ffmpeg_path]
+
+    idx: Optional[int] = None
+    try:
+        result = subprocess.run(
+            [ffmpeg_path, "-hide_banner", "-f", "avfoundation",
+             "-list_devices", "true", "-i", ""],
+            capture_output=True, text=True, timeout=10,
+        )
+        section = None
+        for line in (result.stderr or "").splitlines():
+            if "AVFoundation video devices" in line:
+                section = "video"
+                continue
+            if "AVFoundation audio devices" in line:
+                break
+            if section != "video":
+                continue
+            match = re.search(r"\[(\d+)\]\s*(.*)", line)
+            if not match:
+                continue
+            name = match.group(2).lower()
+            if "capture screen" in name or "屏幕捕捉" in name or "捕捉屏幕" in name:
+                idx = int(match.group(1))
+                break
+    except Exception as e:
+        logger.warning(f"Failed to detect avfoundation screen device: {e}")
+
+    with _avf_screen_lock:
+        _avf_screen_cache[ffmpeg_path] = idx
+    if idx is None:
+        logger.warning("avfoundation 未枚举到屏幕捕获设备（Capture screen）")
+    else:
+        logger.info(f"avfoundation screen capture device index: {idx}")
+    return idx
 
 
 class FfmpegManager:
@@ -294,12 +346,14 @@ class FfmpegManager:
     # ────────────────────────────────────────
 
     @staticmethod
-    def build_video_input(source: Dict, fps: int, scale: str = "") -> List[str]:
+    def build_video_input(source: Dict, fps: int, scale: str = "",
+                          ffmpeg_path: str = "") -> List[str]:
         """构造视频捕获输入参数（gdigrab / avfoundation / x11grab）
 
         source: {"type": "screen"|"window", "id": "desktop"|"window:<title>", "title": str}
         fps: 目标帧率
         scale: 可选 "width:height" 缩放
+        ffmpeg_path: 用于 macOS 动态枚举屏幕设备索引
         返回参数列表，不包含输出/编码段。
         """
         fps = int(fps or 15)
@@ -312,8 +366,18 @@ class FfmpegManager:
             else:
                 args += ["-framerate", str(fps), "-i", "desktop"]
         elif sys.platform == "darwin":
-            # avfoundation: 屏幕设备索引 1 通常为默认显示器，视频:音频 = 1:none
-            args += ["-f", "avfoundation", "-framerate", str(fps), "-i", "1:none"]
+            # avfoundation 屏幕设备索引不固定（摄像头排在屏幕前面），动态枚举
+            idx = avfoundation_screen_index(
+                ffmpeg_path) if ffmpeg_path else None
+            if idx is None:
+                idx = 1
+                logger.warning(
+                    "[ScreenCast] 未探测到 avfoundation 屏幕设备，回退索引 1（可能是摄像头）")
+            # 屏幕设备的缓冲区时间戳不可靠（实测可让 raw 管道冲到
+            # 5000fps），改用到达墙钟时间作为时间戳
+            args += ["-use_wallclock_as_timestamps", "1",
+                     "-f", "avfoundation", "-framerate", str(
+                     fps), "-i", f"{idx}:none"]
         else:
             args += ["-f", "x11grab", "-framerate", str(fps),
                      "-i", os.environ.get("DISPLAY", ":0")]

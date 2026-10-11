@@ -94,8 +94,14 @@ class Config:
             'version': self.version,
             'media_port': self.media_port,
             'default_device': self.default_device,
+            'network_interface': self.network_interface,
             'settings': self.settings,
         }
+
+    @property
+    def network_interface(self) -> str:
+        """选定网络接口的 IPv4（空字符串 = 自动，使用全部接口）"""
+        return self.settings.get('network_interface', '')
 
     @property
     def media_port(self) -> int:

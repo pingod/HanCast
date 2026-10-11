@@ -16,6 +16,7 @@ export const useSettingsStore = defineStore('settings', () => {
     version: '2.2.4',
     media_port: 8080,
     default_device: null,
+    network_interface: '',
     settings: {},
   })
   const loading = ref(false)

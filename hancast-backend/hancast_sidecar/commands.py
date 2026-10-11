@@ -8,7 +8,7 @@ import json
 import logging
 import threading
 from typing import Any, Dict, Optional
-from .ssdp import SSDPService
+from .ssdp import SSDPService, list_network_interfaces
 from .protocol import dlna
 from .protocol.dlna import DLNAProtocol
 from .protocol.server import DLNAServer, DLNAHandler
@@ -69,8 +69,11 @@ def find_mpv_path() -> str:
 
 class CommandHandler:
     def _get_local_ip(self) -> str:
-        """获取本机 IP"""
+        """获取本机 IP（优先使用用户选定的网络接口）"""
         import socket
+        iface = self.config.network_interface
+        if iface:
+            return iface
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             s.connect(("8.8.8.8", 80))
@@ -117,7 +120,8 @@ class CommandHandler:
             friendly_name=friendly_name,
             port=8080,
             usn=device_usn,
-            version=self.config.version
+            version=self.config.version,
+            preferred_ip=self.config.network_interface or None,
         )
 
         # 设备投屏确认 (Device Guard)
@@ -154,6 +158,7 @@ class CommandHandler:
             # 设置
             "get_settings": self._get_settings,
             "save_settings": self._save_settings,
+            "list_network_interfaces": self._list_network_interfaces,
 
             # 更新检查
             "check_update": self._check_update,
@@ -542,6 +547,13 @@ class CommandHandler:
     def _get_settings(self, params: dict) -> dict:
         return self.config.to_dict()
 
+    def _list_network_interfaces(self, params: dict) -> dict:
+        """枚举可选网络接口（供设置页选择投屏/设备发现使用的网卡）"""
+        return {
+            "interfaces": list_network_interfaces(),
+            "selected": self.config.network_interface,
+        }
+
     def _save_settings(self, params: dict) -> None:
         settings = params["settings"]
 
@@ -559,8 +571,26 @@ class CommandHandler:
             self.config.friendly_name = new_name
             logger.info(f"设备名称已更新: {new_name}")
 
+        old_iface = self.config.network_interface
         self.config.update(settings)
         self.config.save()
+
+        # 网络接口变更：SSDP 需要重新绑定网卡（后台线程执行，避免阻塞
+        # 命令响应——restart 含线程 join 与监听重建，约 1-2 秒）
+        new_iface = self.config.network_interface
+        if new_iface != old_iface:
+            self.ssdp.preferred_ip = new_iface or None
+            threading.Thread(
+                target=self._restart_ssdp, name="SSDP_RESTART",
+                daemon=True).start()
+
+    def _restart_ssdp(self):
+        try:
+            self.ssdp.restart()
+            logger.info(
+                f"SSDP 已按选定接口重启: {self.config.network_interface or '自动'}")
+        except Exception as e:
+            logger.error(f"SSDP 重启失败: {e}")
 
     # ── 更新检查 ──
 

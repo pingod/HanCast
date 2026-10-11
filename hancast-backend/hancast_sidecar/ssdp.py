@@ -27,6 +27,45 @@ SSDP_ADDR = '239.255.255.250'
 SERVER_ID = 'SSDP Server'
 
 
+def list_network_interfaces() -> List[Dict]:
+    """枚举已配置 IPv4 的网络接口，供前端"网络接口"选择。
+
+    返回 [{"name", "ip", "netmask", "is_default"}]，
+    is_default 表示该接口持有默认路由。netifaces 不可用时返回 []。
+    """
+    result: List[Dict] = []
+    try:
+        import netifaces
+    except ImportError:
+        return result
+    try:
+        default_iface = None
+        gw = netifaces.gateways().get('default', {}).get(netifaces.AF_INET)
+        if gw:
+            default_iface = gw[1]
+        for name in netifaces.interfaces():
+            # 环回接口不可用于 SSDP，选了也不会生效，直接从列表过滤
+            if name.startswith('lo') or name.startswith('Loopback'):
+                continue
+            try:
+                addrs = netifaces.ifaddresses(name)
+            except ValueError:
+                continue
+            for a in addrs.get(netifaces.AF_INET, []):
+                ip = a.get('addr')
+                if not ip or ip.startswith('127.'):
+                    continue
+                result.append({
+                    "name": name,
+                    "ip": ip,
+                    "netmask": a.get('netmask', ''),
+                    "is_default": name == default_iface,
+                })
+    except Exception as e:
+        logger.warning(f"枚举网络接口失败: {e}")
+    return result
+
+
 class Sock:
     """Per-interface multicast socket"""
 
@@ -68,10 +107,14 @@ class SSDPService:
     """SSDP 服务"""
 
     def __init__(self, friendly_name: str = "HanCast", port: int = 8080,
-                 usn: str = None, version: str = "0.0.0"):
+                 usn: str = None, version: str = "0.0.0",
+                 preferred_ip: str = None):
         self._devices: Dict[str, Device] = {}
         self._lock = threading.Lock()
         self._running = False
+
+        # 用户选定的网络接口 IPv4（None/空 = 自动，使用全部接口）
+        self.preferred_ip = preferred_ip or None
 
         # 自身设备信息
         self._friendly_name = friendly_name
@@ -120,6 +163,8 @@ class SSDPService:
         return str(uuid.uuid4())
 
     def _get_local_ip(self) -> str:
+        if self.preferred_ip:
+            return self.preferred_ip
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             s.connect(("8.8.8.8", 80))
@@ -193,6 +238,17 @@ class SSDPService:
             # 所有接口都无效，使用默认 IP
             valid_interfaces.append((self._ip, '255.255.255.0'))
 
+        # 用户选定了网络接口：只保留该接口（组播/广播/应答都走它）
+        if self.preferred_ip:
+            selected = [(ip, mask)
+                        for ip, mask in valid_interfaces
+                        if ip == self.preferred_ip]
+            if selected:
+                logger.info(f"SSDP 使用选定接口 {self.preferred_ip}")
+                return selected
+            logger.warning(
+                f"选定接口 {self.preferred_ip} 不可用，回退到全部接口")
+
         logger.info(f"SSDP interfaces: {valid_interfaces}")
         return valid_interfaces
 
@@ -234,6 +290,17 @@ class SSDPService:
     def stop(self):
         self._running = False
         self._do_byebye()
+
+    def restart(self):
+        """重新绑定网络接口后重启服务（停止旧线程→重新注册→重新监听）"""
+        self.stop()
+        for t in (self._ssdp_thread, self._notify_thread):
+            if t and t.is_alive():
+                t.join(timeout=6)
+        self._ssdp_thread = None
+        self._notify_thread = None
+        self._ip = self._get_local_ip()
+        self.start()
 
     def _register(self):
         """注册 6 个 SSDP 条目"""
@@ -332,6 +399,10 @@ class SSDPService:
                 continue
         self.sock.close()
         self.sock = None
+        # 关闭每接口发送 socket（restart 时避免泄漏）
+        for s in self.sock_list:
+            s.close()
+        self.sock_list = []
 
     def _datagram_received(self, data, host_port):
         """处理收到的 SSDP 数据报"""
@@ -592,6 +663,14 @@ class SSDPService:
             sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
             # 允许发子网广播（组播被阻断时的回退通道）
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            # 选定接口时绑定该网卡：多接口机器（VPN/热点）不绑定会按路由表
+            # 选出口，M-SEARCH 可能从错误网段发出
+            if self.preferred_ip:
+                try:
+                    sock.bind((self.preferred_ip, 0))
+                except OSError as e:
+                    logger.debug(
+                        f"Cannot bind M-SEARCH socket to {self.preferred_ip}: {e}")
             sock.settimeout(SSDP_MX + 1)
 
             def _build(st: str) -> bytes:

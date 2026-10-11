@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useSettingsStore } from '@/stores/settings'
@@ -8,7 +8,8 @@ import { useGuardStore } from '@/stores/guard'
 import { useUpdateStore } from '@/stores/update'
 import GuardDeviceList from '@/components/GuardDeviceList.vue'
 import CustomSelect from '@/components/CustomSelect.vue'
-import { exportLogs } from '@/api/commands'
+import { exportLogs, listNetworkInterfaces } from '@/api/commands'
+import type { NetworkInterface } from '@/types/settings'
 
 const router = useRouter()
 const { t, locale } = useI18n()
@@ -20,9 +21,28 @@ const updateStore = useUpdateStore()
 const friendlyName = ref('')
 const showGuardDevices = ref(false)
 
+const networkInterface = ref('')
+const interfaces = ref<NetworkInterface[]>([])
+
+const interfaceOptions = computed(() => [
+  { label: t('settings.interfaceAuto'), value: '' },
+  ...interfaces.value.map((i) => ({
+    label: `${i.name} · ${i.ip}${i.is_default ? ` · ${t('settings.interfaceDefault')}` : ''}`,
+    value: i.ip,
+  })),
+])
+
 onMounted(async () => {
   await settingsStore.fetchSettings()
   friendlyName.value = settingsStore.settings.friendly_name
+  networkInterface.value = settingsStore.settings.network_interface || ''
+  try {
+    const info = await listNetworkInterfaces()
+    interfaces.value = info.interfaces
+    if (info.selected) networkInterface.value = info.selected
+  } catch {
+    // 接口枚举失败时仅保留"自动"选项
+  }
 })
 
 function goBack() {
@@ -39,6 +59,13 @@ function onThemeChange(mode: ThemeMode) {
 
 async function saveFriendlyName() {
   await settingsStore.saveSettings({ friendly_name: friendlyName.value })
+}
+
+async function onNetworkInterfaceChange(value: string | number) {
+  const ip = String(value)
+  if (ip === networkInterface.value) return
+  networkInterface.value = ip
+  await settingsStore.saveSettings({ network_interface: ip })
 }
 
 function onGuardEnabledChange(e: Event) {
@@ -155,6 +182,16 @@ async function onCheckUpdate() {
             @blur="saveFriendlyName"
           />
         </div>
+
+        <div class="settings__item">
+          <span class="settings__label">{{ t('settings.interfaces') }}</span>
+          <CustomSelect
+            :model-value="networkInterface"
+            @update:model-value="onNetworkInterfaceChange($event as string)"
+            :options="interfaceOptions"
+          />
+        </div>
+        <p class="settings__hint">{{ t('settings.interfaceHint') }}</p>
 
       </section>
 
@@ -387,6 +424,14 @@ async function onCheckUpdate() {
 
 .settings__input:focus {
   border-color: var(--border-focus);
+}
+
+.settings__hint {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  line-height: 1.5;
+  padding: 0 var(--sp-md);
+  margin: calc(var(--sp-xs) * -1) 0 0;
 }
 
 .settings__link {

@@ -5,7 +5,7 @@
 import type { Device } from '@/types/device'
 import type { MediaInfo } from '@/types/media'
 import type { CastState, CastUrlInfo } from '@/types/cast'
-import type { AppSettings } from '@/types/settings'
+import type { AppSettings, NetworkInterfacesInfo } from '@/types/settings'
 import type { GuardDevicesResponse, GuardSettings } from '@/types/guard'
 import type { UpdateInfo } from '@/types/update'
 import type {
@@ -94,6 +94,7 @@ const MOCK_SETTINGS: AppSettings = {
   version: '2.2.4',
   media_port: 8080,
   default_device: null,
+  network_interface: '',
   settings: {},
 }
 
@@ -119,6 +120,14 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
       return MOCK_CAST_STATE as T
     case 'get_settings':
       return MOCK_SETTINGS as T
+    case 'list_network_interfaces':
+      return {
+        interfaces: [
+          { name: 'en0', ip: '192.168.1.10', netmask: '255.255.255.0', is_default: true },
+          { name: 'en1', ip: '192.168.2.10', netmask: '255.255.255.0', is_default: false },
+        ],
+        selected: '',
+      } as T
     case 'get_autostart':
       return false as T
     case 'set_autostart':
@@ -322,6 +331,11 @@ export async function getSettings(): Promise<AppSettings> {
 export async function saveSettings(settings: Partial<AppSettings>): Promise<void> {
   const invoke = await initInvoke()
   await invoke('save_settings', { settings })
+}
+
+export async function listNetworkInterfaces(): Promise<NetworkInterfacesInfo> {
+  const invoke = await initInvoke()
+  return invoke<NetworkInterfacesInfo>('list_network_interfaces')
 }
 
 // Autostart

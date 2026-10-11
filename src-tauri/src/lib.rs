@@ -379,6 +379,15 @@ async fn save_settings(
     Ok(())
 }
 
+#[tauri::command]
+async fn list_network_interfaces(
+    sidecar: State<'_, SidecarManager>,
+) -> Result<serde_json::Value, String> {
+    sidecar
+        .send_command("list_network_interfaces", serde_json::json!({}))
+        .await
+}
+
 // ── Update Check ──
 
 #[tauri::command]
@@ -1097,6 +1106,7 @@ pub fn run() {
             set_mute,
             get_settings,
             save_settings,
+            list_network_interfaces,
             check_update,
             ignore_update_version,
             respond_cast_confirm,
