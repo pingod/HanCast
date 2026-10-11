@@ -206,6 +206,53 @@ jobs:
           ls -la src-tauri/mpv
           ls -la src-tauri/mpv/portable_config
 
+      # ---------- 准备 FFmpeg（屏幕投屏依赖；resources 里 glob 为 ffmpeg/*）----------
+      # 从 BtbN/FFmpeg-Builds 官方 Release 下载对应平台的静态构建（带 gdigrab/avfoundation/
+      # x11grab 输入与 libx264/opus 编码器）。滚动标签 latest，资产名稳定。
+      - name: Download & unpack FFmpeg
+        shell: bash
+        env:
+          RUNNER_OS: ${{ matrix.runner-os }}
+        run: |
+          set -e
+          WS="$(pwd)"
+          case "$RUNNER_OS" in
+            Windows)
+              url="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+              curl -fsSL -o ffmpeg.zip "$url"
+              rm -rf /tmp/ffmpeg_extract && mkdir -p /tmp/ffmpeg_extract "$WS/src-tauri/ffmpeg"
+              unzip -q ffmpeg.zip -d /tmp/ffmpeg_extract
+              # 解压目录带一层前缀（.../bin/ffmpeg.exe），只取可执行文件
+              find /tmp/ffmpeg_extract -name 'ffmpeg.exe' -type f -exec cp -f {} "$WS/src-tauri/ffmpeg/ffmpeg.exe" \;
+              ;;
+            macOS)
+              url="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-osxarm64-gpl.zip"
+              curl -fsSL -o ffmpeg.zip "$url"
+              rm -rf /tmp/ffmpeg_extract && mkdir -p /tmp/ffmpeg_extract "$WS/src-tauri/ffmpeg"
+              unzip -q ffmpeg.zip -d /tmp/ffmpeg_extract
+              find /tmp/ffmpeg_extract -name 'ffmpeg' -type f -exec cp -f {} "$WS/src-tauri/ffmpeg/ffmpeg" \;
+              chmod +x "$WS/src-tauri/ffmpeg/ffmpeg"
+              ;;
+            Linux)
+              url="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz"
+              curl -fsSL -o ffmpeg.tar.xz "$url"
+              rm -rf /tmp/ffmpeg_extract && mkdir -p /tmp/ffmpeg_extract "$WS/src-tauri/ffmpeg"
+              tar -xf ffmpeg.tar.xz -C /tmp/ffmpeg_extract
+              find /tmp/ffmpeg_extract -name 'ffmpeg' -type f -exec cp -f {} "$WS/src-tauri/ffmpeg/ffmpeg" \;
+              chmod +x "$WS/src-tauri/ffmpeg/ffmpeg"
+              ;;
+          esac
+          echo "FFmpeg files in src-tauri/ffmpeg:"
+          ls -la "$WS/src-tauri/ffmpeg"
+          # 校验可执行文件确实就位
+          if [ -f "$WS/src-tauri/ffmpeg/ffmpeg.exe" ] || [ -f "$WS/src-tauri/ffmpeg/ffmpeg" ]; then
+            echo "FFmpeg executable present"
+          else
+            echo "::error::no ffmpeg binary found under src-tauri/ffmpeg"
+            find /tmp/ffmpeg_extract | head -30 || true
+            exit 1
+          fi
+
       # ---------- 构建 ----------
       - name: Resolve version
         id: ver

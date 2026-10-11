@@ -1059,13 +1059,13 @@ pub fn run() {
                                 if let Some(state) = app_handle.try_state::<CastUrlState>() {
                                     *state.url.lock().unwrap() = new_url.clone();
                                 }
-                                update_tray_menu(&app_handle, &tray_id, &new_url, last_autostart);
+                                update_tray_menu(&app_handle, &tray_id.0, &new_url, last_autostart);
                             }
                         }
                         Some(enabled) = autostart_rx.recv() => {
                             if enabled != last_autostart {
                                 last_autostart = enabled;
-                                update_tray_menu(&app_handle, &tray_id, &last_url, enabled);
+                                update_tray_menu(&app_handle, &tray_id.0, &last_url, enabled);
                             }
                         }
                     }
