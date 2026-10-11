@@ -163,6 +163,9 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
         duration: null,
         thumbnail: null,
       } as T
+    case 'read_clipboard':
+      // 浏览器 dev 模式：交回 navigator.clipboard 处理
+      return '' as T
     case 'resolve_share': {
       // 浏览器 dev 模式：只做本地提取（口令文本取第一个链接，按扩展名猜 MIME）
       const raw = String(args?.text ?? '')
@@ -339,6 +342,27 @@ export async function resolveShare(text: string): Promise<ShareResolveResult> {
     if (entry.status === 'error') throw new Error(entry.error || '解析失败')
   }
   throw new Error('解析超时，请稍后重试')
+}
+
+/**
+ * 读取系统剪贴板文本。
+ *
+ * macOS 的 WKWebView 不给页面 clipboard-read 权限，navigator.clipboard.readText()
+ * 会静默 reject，所以优先走 Rust 侧；浏览器开发模式再回退到 Web API。
+ */
+export async function readClipboardText(): Promise<string> {
+  const invoke = await initInvoke()
+  try {
+    const text = await invoke<string>('read_clipboard')
+    if (typeof text === 'string' && text) return text
+  } catch {
+    /* 旧版 Rust 无此命令，落到 Web API */
+  }
+  try {
+    return await navigator.clipboard.readText()
+  } catch {
+    return ''
+  }
 }
 
 // Cast control — all commands accept optional deviceId for multi-device support

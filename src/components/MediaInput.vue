@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { useMediaStore } from '@/stores/media'
 import { useDeviceStore } from '@/stores/device'
 import { useCastStore } from '@/stores/cast'
+import { readClipboardText } from '@/api/commands'
 import type { Device } from '@/types/device'
 import Modal from './Modal.vue'
 
@@ -358,15 +359,15 @@ onUnmounted(() => {
   unlistenDrag?.()
 })
 
-function onPasteFromClipboard() {
-  navigator.clipboard.readText().then((text) => {
-    if (text.trim()) {
-      mediaStore.setInputChange(text.trim())
-      mediaStore.parseUrl(text.trim())
-    }
-  }).catch(() => {
-    // Clipboard API not available
-  })
+async function onPasteFromClipboard() {
+  const text = (await readClipboardText()).trim()
+  if (!text) {
+    pickerError.value = t('media.clipboardEmpty')
+    return
+  }
+  pickerError.value = null
+  mediaStore.setInputChange(text.replace(/\s+/g, ' '))
+  mediaStore.parseUrl(text)
 }
 
 /**

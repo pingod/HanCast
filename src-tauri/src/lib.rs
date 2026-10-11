@@ -258,6 +258,16 @@ async fn get_resolve_result(
         .await
 }
 
+/// 读取系统剪贴板文本。
+///
+/// WKWebView 默认不授予页面 clipboard-read 权限，前端
+/// `navigator.clipboard.readText()` 在 macOS 上静默 reject，
+/// 「粘贴」按钮因此失效——改由 Rust 侧（已装的 clipboard 插件）读取。
+#[tauri::command]
+fn read_clipboard(app: tauri::AppHandle) -> Result<String, String> {
+    app.clipboard().read_text().map_err(|e| e.to_string())
+}
+
 // ── Cast control ──
 
 #[tauri::command]
@@ -1113,6 +1123,7 @@ pub fn run() {
             parse_media_url,
             resolve_share,
             get_resolve_result,
+            read_clipboard,
             start_cast,
             stop_cast,
             pause_cast,
