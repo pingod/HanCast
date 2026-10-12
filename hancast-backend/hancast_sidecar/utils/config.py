@@ -36,7 +36,7 @@ class Config:
         # platform.node() 在某些系统上可能返回空字符串，使用 fallback
         node_name = platform.node() or f"Macast-{uuid.uuid4().hex[:8]}"
         self.friendly_name = f"HanCast({node_name})"
-        self.version = "2.2.9"
+        self.version = "2.2.10"
         self.usn = str(uuid.uuid4())
         self._save_lock = threading.Lock()
 
@@ -163,6 +163,31 @@ class Config:
     def is_device_hidden(self, device_udn: str) -> bool:
         """检查设备是否被隐藏"""
         return device_udn in self.hidden_devices
+
+    # ── 手动添加设备（多播被拦截时的兜底） ──
+
+    @property
+    def manual_devices(self) -> List[str]:
+        """手动添加的设备地址列表（IP / IP:端口 / 描述 XML URL）"""
+        return list(self.settings.get('manual_devices', []) or [])
+
+    def add_manual_device(self, target: str):
+        """记录手动添加的设备地址（幂等）"""
+        items = self.manual_devices
+        if target not in items:
+            items.append(target)
+            self.settings['manual_devices'] = items
+
+    def remove_manual_device(self, target: str):
+        items = [t for t in self.manual_devices if t != target]
+        self.settings['manual_devices'] = items
+
+    def remove_manual_devices_for_host(self, host: str):
+        """按主机移除手动地址"""
+        from urllib.parse import urlparse
+        items = [t for t in self.manual_devices
+                 if (urlparse(t).hostname or t).split(":")[0] != host]
+        self.settings['manual_devices'] = items
 
     # ── 设备投屏确认 (Device Guard) ──
 

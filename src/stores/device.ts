@@ -8,12 +8,18 @@ import {
   setDefaultDevice as apiSetDefault,
   renameDevice as apiRename,
   hideDevice as apiHide,
+  addDevice as apiAddDevice,
+  getManualDevices,
 } from '@/api/commands'
 
 export const useDeviceStore = defineStore('device', () => {
   const devices = ref<Device[]>([])
   const selectedDevice = ref<Device | null>(null)
   const loading = ref(false)
+  const showAddModal = ref(false)
+  const manualDevices = ref<string[]>([])
+  const adding = ref(false)
+  const addError = ref<string | null>(null)
 
   let refreshTimer: number | undefined
   const unlistenFns: UnlistenFn[] = []
@@ -61,6 +67,48 @@ export const useDeviceStore = defineStore('device', () => {
 
   function selectDevice(device: Device | null) {
     selectedDevice.value = device
+  }
+
+  // ── 手动添加设备（组播被防火墙/安全软件拦截时的兜底通道）──
+
+  async function fetchManualDevices() {
+    try {
+      manualDevices.value = await getManualDevices()
+    } catch (err) {
+      console.error('Failed to fetch manual devices:', err)
+    }
+  }
+
+  function openAddModal() {
+    showAddModal.value = true
+    addError.value = null
+    fetchManualDevices()
+  }
+
+  function closeAddModal() {
+    showAddModal.value = false
+    addError.value = null
+  }
+
+  /** 成功返回设备名，失败写入 addError 并返回 null */
+  async function addDevice(address: string): Promise<string | null> {
+    adding.value = true
+    addError.value = null
+    try {
+      const device = await apiAddDevice(address)
+      // device_found 事件对已存在设备可能不再触发，直接并入列表
+      const exists = devices.value.some((d) => d.id === device.id)
+      devices.value = exists
+        ? devices.value.map((d) => (d.id === device.id ? { ...d, ...device } : d))
+        : [...devices.value, device]
+      await fetchManualDevices()
+      return device.name
+    } catch (err) {
+      addError.value = err instanceof Error ? err.message : String(err)
+      return null
+    } finally {
+      adding.value = false
+    }
   }
 
   // Set up event listeners
@@ -113,11 +161,19 @@ export const useDeviceStore = defineStore('device', () => {
     devices,
     selectedDevice,
     loading,
+    showAddModal,
+    manualDevices,
+    adding,
+    addError,
     fetchDevices,
     refresh,
     setDefault,
     rename,
     hide,
     selectDevice,
+    fetchManualDevices,
+    openAddModal,
+    closeAddModal,
+    addDevice,
   }
 })

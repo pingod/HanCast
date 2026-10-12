@@ -6,6 +6,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { useThemeStore, type ThemeMode } from '@/stores/theme'
 import { useGuardStore } from '@/stores/guard'
 import { useUpdateStore } from '@/stores/update'
+import { useLogsStore } from '@/stores/logs'
 import GuardDeviceList from '@/components/GuardDeviceList.vue'
 import CustomSelect from '@/components/CustomSelect.vue'
 import { exportLogs, listNetworkInterfaces } from '@/api/commands'
@@ -17,6 +18,7 @@ const settingsStore = useSettingsStore()
 const themeStore = useThemeStore()
 const guardStore = useGuardStore()
 const updateStore = useUpdateStore()
+const logsStore = useLogsStore()
 
 const friendlyName = ref('')
 const showGuardDevices = ref(false)
@@ -255,6 +257,11 @@ async function onCheckUpdate() {
         <div class="settings__item">
           <span class="settings__label">{{ t('settings.version') }}</span>
           <span class="settings__value">{{ settingsStore.settings.version }}</span>
+        </div>
+
+        <div class="settings__item">
+          <span class="settings__label">{{ t('settings.viewLogs') }}</span>
+          <button class="settings__link" @click="logsStore.open()">{{ t('settings.openPanel') }}</button>
         </div>
 
         <div class="settings__item">

@@ -8,6 +8,7 @@ import type { CastState, CastUrlInfo } from '@/types/cast'
 import type { AppSettings, NetworkInterfacesInfo } from '@/types/settings'
 import type { GuardDevicesResponse, GuardSettings } from '@/types/guard'
 import type { UpdateInfo } from '@/types/update'
+import type { LogPage, LogQuery } from '@/types/logs'
 import type {
   ScreenSources,
   ScreenCastState,
@@ -109,13 +110,34 @@ const MOCK_CAST_STATE: CastState = {
   durationTime: '00:00:00',
 }
 
+// 日志级别 / 手动设备：dev 模式下要能自洽回读，否则面板开关看起来没生效
+let mockLogLevel = 'INFO'
+const mockManualDevices: string[] = []
+
+function mockManualDevice(addr: string): Device {
+  const bare = addr.replace(/^https?:\/\//, '')
+  const host = bare.split('/')[0].split(':')[0]
+  const portMatch = bare.match(/:(\d{1,5})(?:\/|$)/)
+  return {
+    id: `manual-${host}`,
+    name: `手动设备 ${host}`,
+    type: 'tv',
+    ip: host,
+    port: portMatch ? Number(portMatch[1]) : 8080,
+    status: 'online',
+    is_default: false,
+    udn: `uuid:manual-${host}`,
+  }
+}
+
 async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   await new Promise((r) => setTimeout(r, 300))
 
   switch (cmd) {
     case 'get_devices':
     case 'refresh_devices':
-      return MOCK_DEVICES as T
+      // 真机里手动设备存在于 SSDP 注册表，get_devices 会一并返回
+      return [...MOCK_DEVICES, ...mockManualDevices.map(mockManualDevice)] as T
     case 'get_cast_state':
       return MOCK_CAST_STATE as T
     case 'get_settings':
@@ -245,13 +267,57 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
         ffmpeg: { ok: true, path: 'ffmpeg', version: 'mock' },
       } as T
     case 'start_screen_cast':
-      return { ok: true, target: 'webrtc', room_id: 'abc123', watch_url: 'http://127.0.0.1:8765/r/abc123' } as T
+      return { ok: true, target: 'browser', session_id: 'abc123', watch_url: 'http://127.0.0.1:8765/r/abc123' } as T
     case 'stop_screen_cast':
       return { ok: true } as T
     case 'screen_cast_status':
       return { running: false, ffmpeg: { ok: true } } as T
     case 'set_ffmpeg_path':
       return { ok: true } as T
+    case 'add_device': {
+      const addr = String(args?.address ?? '').trim()
+      if (!addr) throw new Error('请输入设备 IP 或描述地址')
+      if (!mockManualDevices.includes(addr)) mockManualDevices.push(addr)
+      return mockManualDevice(addr) as T
+    }
+    case 'get_manual_devices':
+      return [...mockManualDevices] as T
+    case 'get_logs': {
+      // dev 模式：样本行覆盖多模块/多级别，过滤器才看得出效果
+      // get_logs 走 Rust 的 params 形参，所以查询条件在 args.params 里
+      const q = (args?.params ?? args ?? {}) as Record<string, unknown>
+      const sample = [
+        { ts: '2026-10-12 10:00:00,000', module: 'hancast.ssdp', level: 'INFO', msg: 'SSDP search sent on 192.168.1.5:54641' },
+        { ts: '2026-10-12 10:00:01,120', module: 'hancast.screencast', level: 'WARNING', msg: 'DLNA target did not fetch the playlist within 12s' },
+        { ts: '2026-10-12 10:00:02,480', module: 'hancast.media', level: 'ERROR', msg: 'resolve_share failed: 403 for https://v.douyin.com/xxxx' },
+        { ts: '2026-10-12 10:00:03,900', module: 'hancast.commands', level: 'DEBUG', msg: 'recv start_screen_cast {"target":"browser"}' },
+      ].map((l) => ({ ...l, raw: `[${l.ts}] ${l.module} ${l.level}: ${l.msg}` }))
+      const wantModule = q.module ? String(q.module) : ''
+      const wantLevel = q.level ? String(q.level).toUpperCase() : ''
+      const kw = q.keyword ? String(q.keyword).toLowerCase() : ''
+      const lines = sample.filter((l) =>
+        (!wantModule || l.module.startsWith(wantModule)) &&
+        (!wantLevel || l.level === wantLevel) &&
+        (!kw || l.raw.toLowerCase().includes(kw))
+      )
+      const limit = Math.max(1, Number(args?.limit ?? 400))
+      return {
+        lines: lines.slice(-limit),
+        total: lines.length,
+        truncated: false,
+        path: 'hancast.log',
+        level: mockLogLevel,
+        modules: [
+          { id: 'hancast.ssdp', label: '设备发现 (SSDP/UPnP)' },
+          { id: 'hancast.screencast', label: '屏幕投屏' },
+          { id: 'hancast.media', label: '媒体与链接解析' },
+          { id: 'hancast.commands', label: '命令处理' },
+        ],
+      } as T
+    }
+    case 'set_log_level':
+      mockLogLevel = String(args?.level ?? 'INFO').toUpperCase()
+      return { ok: true, level: mockLogLevel } as T
     default:
       return {} as T
   }
@@ -288,6 +354,18 @@ export async function removeDevice(id: string): Promise<void> {
 export async function hideDevice(id: string): Promise<void> {
   const invoke = await initInvoke()
   await invoke('hide_device', { id })
+}
+
+/** 手动添加设备：IP / IP:端口 / 完整 description.xml 地址 */
+export async function addDevice(address: string): Promise<Device> {
+  const invoke = await initInvoke()
+  return invoke<Device>('add_device', { address })
+}
+
+/** 已持久化的手动设备地址（重启后仍会自动重连） */
+export async function getManualDevices(): Promise<string[]> {
+  const invoke = await initInvoke()
+  return invoke<string[]>('get_manual_devices')
 }
 
 // Media parsing
@@ -515,6 +593,16 @@ export async function exportLogs(): Promise<boolean> {
   return invoke<boolean>('export_logs')
 }
 
+export async function getLogs(query: LogQuery = {}): Promise<LogPage> {
+  const invoke = await initInvoke()
+  return invoke<LogPage>('get_logs', { params: { ...query } })
+}
+
+export async function setLogLevel(level: string): Promise<{ ok: boolean; level: string }> {
+  const invoke = await initInvoke()
+  return invoke('set_log_level', { level })
+}
+
 // ── Update Check ──
 
 export async function checkUpdate(currentVersion: string, force?: boolean): Promise<UpdateInfo> {
@@ -545,7 +633,7 @@ export async function listScreenSources(): Promise<ScreenSources> {
   return invoke<ScreenSources>('list_screen_sources')
 }
 
-export async function startScreenCast(params: ScreenCastStartParams): Promise<{ ok: boolean; error?: string; watch_url?: string; room_id?: string; url?: string }> {
+export async function startScreenCast(params: ScreenCastStartParams): Promise<{ ok: boolean; error?: string; watch_url?: string; session_id?: string; url?: string }> {
   const invoke = await initInvoke()
   return invoke('start_screen_cast', { params })
 }

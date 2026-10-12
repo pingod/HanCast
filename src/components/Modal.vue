@@ -5,7 +5,7 @@ const props = withDefaults(defineProps<{
   /** Show circular icon area above title */
   showIcon?: boolean
   /** Modal size variant */
-  size?: 'default' | 'small' | 'mini'
+  size?: 'default' | 'small' | 'mini' | 'wide'
 }>(), {
   size: 'default'
 })
@@ -25,7 +25,7 @@ function onOverlay(e: MouseEvent) {
   <Teleport to="body">
     <Transition name="modal">
       <div v-if="visible" class="modal-overlay" @click="onOverlay">
-        <div class="modal-box" :class="{ 'modal-box--small': size === 'small', 'modal-box--mini': size === 'mini' }">
+        <div class="modal-box" :class="{ 'modal-box--small': size === 'small', 'modal-box--mini': size === 'mini', 'modal-box--wide': size === 'wide' }">
 
           <!-- Optional circular icon area -->
           <div v-if="showIcon" class="modal-icon-area">
@@ -79,9 +79,22 @@ function onOverlay(e: MouseEvent) {
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
 }
 
+/* Wide variant: 日志查看这类需要横向空间的内容 */
+.modal-box--wide {
+  min-width: 520px;
+  max-width: 760px;
+}
+
+.modal-box--wide .modal-title {
+  text-align: left;
+}
+
+.modal-box--wide .modal-body {
+  text-align: left;
+}
+
 /* Small variant */
-.modal-box--small {
-  min-width: 200px;
+.modal-box--small {  min-width: 200px;
   max-width: 260px;
   padding: var(--sp-md);
   border-radius: 14px;

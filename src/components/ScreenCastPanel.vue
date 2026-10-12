@@ -12,7 +12,7 @@ const sc = useScreenCastStore()
 const deviceStore = useDeviceStore()
 
 // ── 表单状态 ──
-const target = ref<'dlna' | 'webrtc'>('webrtc')
+const target = ref<'dlna' | 'browser'>('browser')
 const sourceType = ref<'screen' | 'window'>('screen')
 const windowTitle = ref('')
 const deviceId = ref('')
@@ -137,11 +137,11 @@ async function copyText(text: string) {
       <div class="sc-targets">
         <button
           class="sc-target"
-          :class="{ 'sc-target--active': target === 'webrtc' }"
-          @click="target = 'webrtc'"
+          :class="{ 'sc-target--active': target === 'browser' }"
+          @click="target = 'browser'"
         >
           <span class="sc-target-icon">🌐</span>
-          <span>{{ t('screencast.targetWebrtc') }}</span>
+          <span>{{ t('screencast.targetBrowser') }}</span>
         </button>
         <button
           class="sc-target"
@@ -162,7 +162,13 @@ async function copyText(text: string) {
           :model-value="deviceId"
           @update:model-value="deviceId = $event as string"
         />
-        <div v-else class="sc-empty">{{ t('screencast.noDevice') }}</div>
+        <div v-else class="sc-empty sc-empty--device">
+          <p>{{ t('screencast.noDevice') }}</p>
+          <p class="sc-empty-hint">{{ t('screencast.noDeviceHint') }}</p>
+          <button class="sc-empty-btn" @click="deviceStore.openAddModal()">
+            {{ t('devices.addDevice') }}
+          </button>
+        </div>
       </div>
 
       <!-- 捕获源 -->
@@ -264,10 +270,10 @@ async function copyText(text: string) {
       <div class="sc-running-badge">
         <span class="sc-live-dot"></span>
         {{ t('screencast.running') }}
-        <span v-if="sc.state.target === 'webrtc'"> · {{ sc.state.viewers ?? 0 }} {{ t('screencast.viewers') }}</span>
+        <span v-if="sc.state.target === 'browser'"> · {{ sc.state.viewers ?? 0 }} {{ t('screencast.viewers') }}</span>
       </div>
 
-      <template v-if="sc.state.target === 'webrtc' && sc.state.watch_url">
+      <template v-if="sc.state.target === 'browser' && sc.state.watch_url">
         <div class="sc-label">{{ t('screencast.inviteLink') }}</div>
         <div class="sc-link-row">
           <input class="sc-input" readonly :value="sc.state.watch_url" />
@@ -279,10 +285,11 @@ async function copyText(text: string) {
       <template v-if="sc.state.target === 'dlna' && sc.state.device_id">
         <div class="sc-tip">{{ t('screencast.dlnaTip') }}</div>
       </template>
+    </div>
 
-      <div v-if="sc.lastError" class="sc-error">
-        <div class="sc-error-title">{{ sc.lastError }}</div>
-      </div>
+    <!-- 失败原因：停止态也要看得到，否则用户不知道为什么没画面 -->
+    <div v-if="sc.lastError" class="sc-error">
+      <div class="sc-error-title">{{ sc.lastError }}</div>
     </div>
 
     <template #actions>
@@ -411,6 +418,37 @@ async function copyText(text: string) {
   font-size: 12px;
   color: var(--text-secondary);
   padding: 6px 0;
+}
+
+.sc-empty--device {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 0;
+}
+
+.sc-empty-hint {
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-tertiary);
+}
+
+.sc-empty-btn {
+  align-self: flex-start;
+  padding: 5px 12px;
+  font-size: 12px;
+  color: var(--text-primary);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  font-family: var(--font);
+}
+
+.sc-empty-btn:hover {
+  border-color: var(--border-focus);
+  color: var(--primary);
 }
 
 .sc-error {

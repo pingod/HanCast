@@ -2,10 +2,12 @@
 import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useDeviceStore } from '@/stores/device'
+import { useLogsStore } from '@/stores/logs'
 import DeviceCard from './DeviceCard.vue'
 
 const { t } = useI18n()
 const deviceStore = useDeviceStore()
+const logsStore = useLogsStore()
 
 // 控制刷新按钮旋转动画
 const isSpinning = ref(false)
@@ -31,20 +33,43 @@ const handleRefresh = () => {
         </svg>
         <span>{{ t('devices.title') }}</span>
       </div>
-      <button class="device-list__refresh" @click="handleRefresh">
-        <svg
-          viewBox="0 0 24 24"
-          width="16"
-          height="16"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          :class="{ 'spinning': isSpinning }"
+      <div class="device-list__actions">
+        <button
+          class="device-list__icon-btn"
+          :title="t('devices.addDevice')"
+          :aria-label="t('devices.addDevice')"
+          @click="deviceStore.openAddModal()"
         >
-          <path d="M23 4v6h-6M1 20v-6h6" />
-          <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15" />
-        </svg>
-      </button>
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 8v8M8 12h8" />
+          </svg>
+        </button>
+        <button
+          class="device-list__icon-btn"
+          :title="t('settings.viewLogs')"
+          :aria-label="t('settings.viewLogs')"
+          @click="logsStore.open()"
+        >
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M4 6h16M4 12h16M4 18h10" />
+          </svg>
+        </button>
+        <button class="device-list__refresh" :title="t('devices.refresh')" @click="handleRefresh">
+          <svg
+            viewBox="0 0 24 24"
+            width="16"
+            height="16"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            :class="{ 'spinning': isSpinning }"
+          >
+            <path d="M23 4v6h-6M1 20v-6h6" />
+            <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15" />
+          </svg>
+        </button>
+      </div>
     </div>
 
     <div class="device-list__items" v-if="deviceStore.devices.length > 0">
@@ -57,6 +82,10 @@ const handleRefresh = () => {
 
     <div v-else class="device-list__empty">
       <p>{{ t('devices.offline') }}</p>
+      <p class="device-list__empty-hint">{{ t('devices.emptyHint') }}</p>
+      <button class="device-list__empty-btn" @click="deviceStore.openAddModal()">
+        {{ t('devices.addDevice') }}
+      </button>
     </div>
   </div>
 </template>
@@ -86,7 +115,14 @@ const handleRefresh = () => {
   color: var(--text-primary);
 }
 
-.device-list__refresh {
+.device-list__actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.device-list__refresh,
+.device-list__icon-btn {
   width: 28px;
   height: 28px;
   display: flex;
@@ -97,7 +133,8 @@ const handleRefresh = () => {
   transition: all var(--transition-fast);
 }
 
-.device-list__refresh:hover {
+.device-list__refresh:hover,
+.device-list__icon-btn:hover {
   background: var(--bg-secondary);
   color: var(--text-primary);
 }
@@ -122,10 +159,35 @@ const handleRefresh = () => {
 
 .device-list__empty {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
+  gap: var(--sp-sm);
   padding: var(--sp-2xl);
   color: var(--text-tertiary);
   font-size: 13px;
+}
+
+.device-list__empty-hint {
+  max-width: 300px;
+  font-size: 12px;
+  line-height: 1.6;
+  text-align: center;
+}
+
+.device-list__empty-btn {
+  padding: 5px 14px;
+  font-size: 12px;
+  color: var(--text-primary);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  font-family: var(--font);
+}
+
+.device-list__empty-btn:hover {
+  border-color: var(--border-focus);
+  color: var(--primary);
 }
 </style>

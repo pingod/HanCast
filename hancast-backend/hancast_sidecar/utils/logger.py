@@ -7,6 +7,7 @@
 """
 
 import os
+import re
 import sys
 import logging
 from logging.handlers import RotatingFileHandler
@@ -94,3 +95,141 @@ def get_logger(name: str) -> logging.Logger:
         logger = get_logger("hancast.mpv")
     """
     return logging.getLogger(name)
+
+
+# ── 应用内日志查看（排错用） ──
+
+# 一次最多读取的日志字节数：只看文件尾部，避免大文件把命令循环拖死
+TAIL_BYTES = 2 * 1024 * 1024
+
+_LINE_RE = re.compile(
+    r"^\[(?P<ts>[^\]]+)\]\s+(?P<module>[\w.]+)\s+(?P<level>[A-Z]+):\s?(?P<msg>.*)$"
+)
+
+# 已知模块前缀 → 界面展示名（顺序即下拉框；过滤按前缀匹配）
+MODULE_LABELS = [
+    ("hancast.ssdp", "设备发现 (SSDP/UPnP)"),
+    ("hancast.dlna", "DLNA 服务"),
+    ("hancast.commands", "命令处理"),
+    ("hancast.session", "投屏会话"),
+    ("hancast.renderer", "本机渲染"),
+    ("hancast.mpv", "播放器 (MPV)"),
+    ("hancast.media", "媒体与链接解析"),
+    ("hancast.guard", "投屏确认"),
+    ("hancast.screencast", "屏幕投屏"),
+    ("hancast.config", "配置"),
+]
+
+
+def set_level(level: str):
+    """运行时调整日志级别（排错时打开 DEBUG）"""
+    lvl = getattr(logging, str(level).upper(), None)
+    if not isinstance(lvl, int):
+        raise ValueError(f"未知日志级别: {level}")
+    root = logging.getLogger("hancast")
+    root.setLevel(lvl)
+    for h in root.handlers:
+        h.setLevel(lvl)
+    root.info("Log level set to %s", logging.getLevelName(lvl))
+    return logging.getLevelName(lvl)
+
+
+def get_level() -> str:
+    return logging.getLevelName(logging.getLogger("hancast").level)
+
+
+def _candidate_files():
+    """当前日志 + 轮转备份（按新到旧）"""
+    files = [LOG_FILE]
+    for i in range(1, 4):
+        bak = f"{LOG_FILE}.{i}"
+        if os.path.isfile(bak):
+            files.append(bak)
+    return files
+
+
+def read_logs(limit: int = 400, module: Optional[str] = None,
+              level: Optional[str] = None, keyword: Optional[str] = None,
+              include_older: bool = False) -> dict:
+    """读取日志尾部并按模块/级别/关键字过滤
+
+    module 用前缀匹配：选 "hancast.screencast" 时 manager/httpd/capture 一并命中。
+    """
+    limit = max(1, min(int(limit or 400), 5000))
+    files = _candidate_files() if include_older else [LOG_FILE]
+    rows = []
+    matched_levels = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+    want_level = level.upper() if level and level.upper() in matched_levels else None
+
+    for path in reversed(files):          # 旧 → 新，保证最终按时间升序
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            continue
+        if size == 0:
+            continue
+        with open(path, "rb") as f:
+            f.seek(max(0, size - TAIL_BYTES))
+            chunk = f.read()
+        text = chunk.decode("utf-8", "replace")
+        # 尾部seek可能落在半行上，丢掉第一行
+        lines = text.splitlines()
+        if size > TAIL_BYTES and len(lines) > 1:
+            lines = lines[1:]
+        for line in lines:
+            m = _LINE_RE.match(line)
+            if not m:
+                # 多行消息（堆栈）挂到上一条
+                if rows and m is None and line.strip():
+                    rows[-1]["msg"] += "\n" + line
+                    rows[-1]["raw"] += "\n" + line
+                continue
+            mod, lvl = m.group("module"), m.group("level")
+            if module and not mod.startswith(module):
+                continue
+            if want_level and lvl != want_level:
+                continue
+            if keyword and keyword.lower() not in line.lower():
+                continue
+            rows.append({
+                "ts": m.group("ts"),
+                "module": mod,
+                "level": lvl,
+                "msg": m.group("msg"),
+                "raw": line,
+            })
+
+    truncated = len(rows) > limit
+    return {
+        "lines": rows[-limit:],
+        "total": len(rows),
+        "truncated": truncated,
+        "path": LOG_FILE,
+        "level": get_level(),
+        "modules": available_modules(),
+    }
+
+
+def available_modules() -> list:
+    """已知模块 + 日志里实际出现过的模块（去重，带展示名）"""
+    out = [{"id": m, "label": label} for m, label in MODULE_LABELS]
+    known = {m for m, _ in MODULE_LABELS}
+    try:
+        size = os.path.getsize(LOG_FILE)
+    except OSError:
+        return out
+    if size:
+        with open(LOG_FILE, "rb") as f:
+            f.seek(max(0, size - TAIL_BYTES))
+            text = f.read().decode("utf-8", "replace")
+        for line in text.splitlines():
+            m = _LINE_RE.match(line)
+            if not m:
+                continue
+            mod = m.group("module")
+            if mod in known:
+                continue
+            known.add(mod)
+            out.append({"id": mod, "label": mod})
+    return out
+

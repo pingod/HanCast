@@ -6,6 +6,8 @@ import { useGuardStore } from '@/stores/guard'
 import { useUpdateStore } from '@/stores/update'
 import GuardConfirmModal from '@/components/GuardConfirmModal.vue'
 import UpdateModal from '@/components/UpdateModal.vue'
+import LogsPanel from '@/components/LogsPanel.vue'
+import AddDeviceModal from '@/components/AddDeviceModal.vue'
 
 const settingsStore = useSettingsStore()
 const themeStore = useThemeStore()
@@ -35,6 +37,9 @@ onUnmounted(() => {
   <GuardConfirmModal />
   <!-- Update modal: always mounted, listens for update-available event -->
   <UpdateModal />
+  <!-- 日志面板 / 手动添加设备：设置页和设备列表都要能打开，挂全局 -->
+  <LogsPanel />
+  <AddDeviceModal />
 </template>
 
 <style>

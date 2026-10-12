@@ -1,33 +1,39 @@
 """
-屏幕投屏统一管理（DLNA 电视 / WebRTC 浏览器 双通道）
+屏幕投屏统一管理（DLNA 电视 / 浏览器观看 双通道）
 
 生命周期：
-  start({target: "dlna"|"webrtc", device_id?, source, audio, video})
+  start({target: "dlna"|"browser", device_id?, source, audio, video})
   stop()
   status()
 
 架构：
   - FfmpegCapture 独立 FFmpeg 子进程（不阻塞 sidecar 主循环）
-  - ScreenCastHttpd 独立 asyncio 线程（信令 WS / HLS 静态 / 观看页）
-  - WebRtcRoom 复用 httpd 的事件循环（aiortc 必须在 asyncio 内）
+  - ScreenCastHttpd 独立 asyncio 线程（观看页 / HLS 静态）
+  - 两个通道共用同一份 HLS：每次会话一个独立分片目录（hls/<session_id>/），
+    URL 随会话变化，电视/浏览器都不会拉到上一轮的死播放列表
   - DLNA 推流复用 CommandHandler 的 DeviceCastSession（play HLS URL）
 """
 
 import os
-import sys
-import json
+import shutil
 import time
-import tempfile
 import logging
+import tempfile
+import secrets
 import threading
-from typing import Any, Dict, Optional
+from typing import Dict, Optional
 
 from ..utils import protocol_io
 from .ffmpeg_manager import FfmpegManager
 from .capture import FfmpegCapture
-from .httpd import ScreenCastHttpd, DEFAULT_PORT
+from .httpd import ScreenCastHttpd
 
 logger = logging.getLogger("hancast.screencast.manager")
+
+# DLNA 起流后等待电视拉取播放列表的窗口（秒）。多数电视 2-6 秒开始拉流，
+# 超过这个窗口还没拉，基本可以判定是网络/防火墙或地址问题而不是"还在加载"
+DLNA_VERIFY_SECONDS = 12.0
+DLNA_VERIFY_POLL = 1.0
 
 
 def _hls_root() -> str:
@@ -44,14 +50,15 @@ class ScreenCastManager:
         self.ffmpeg = FfmpegManager(self.config)
         self.httpd = ScreenCastHttpd(hls_root=_hls_root())
         self._capture: Optional[FfmpegCapture] = None
-        self._room: Optional[Any] = None
+        self._session_id: Optional[str] = None
         self._state: Dict = {
             "running": False,
             "target": None,
             "source": None,
             "device_id": None,
-            "room_id": None,
+            "session_id": None,
             "watch_url": None,
+            "url": None,
             "viewers": 0,
             "error": None,
             "started_at": None,
@@ -69,7 +76,7 @@ class ScreenCastManager:
         """开始屏幕投屏
 
         params:
-          target: "dlna" | "webrtc"
+          target: "dlna" | "browser"
           device_id: dlna 目标设备（必填，target=dlna）
           source: {"type": "screen"|"window", "id": "...", "title": "..."}
           audio: {"mic": bool, "mic_device": str, "system": bool, "system_device": str}
@@ -78,8 +85,8 @@ class ScreenCastManager:
         if self._state["running"]:
             return {"ok": False, "error": "已有投屏正在进行，请先停止"}
 
-        target = params.get("target", "webrtc")
-        if target not in ("dlna", "webrtc"):
+        target = params.get("target", "browser")
+        if target not in ("dlna", "browser"):
             return {"ok": False, "error": f"未知目标类型: {target}"}
 
         # FFmpeg 检查
@@ -98,55 +105,45 @@ class ScreenCastManager:
         if audio.get("system") and not audio.get("system_device"):
             return {"ok": False, "error": "未选择系统声音设备（需立体声混音/虚拟声卡）"}
 
+        # 每次会话一个全新的分片目录 + 全新的 URL
+        self._session_id = secrets.token_hex(3)
         try:
-            if target == "dlna":
-                result = self._start_dlna(params)
-            else:
-                result = self._start_webrtc(params)
+            result = self._start(target, params, source, audio, video)
         except Exception as e:
             logger.exception("[ScreenCast] start failed")
-            self._reset()
+            self._teardown()
             return {"ok": False, "error": f"启动失败: {e}"}
 
         if result.get("ok"):
             self._emit()
+        else:
+            self._teardown()
         return result
 
     def stop(self) -> Dict:
         """停止屏幕投屏（幂等）"""
-        target = self._state.get("target")
         if not self._state.get("running"):
-            self._reset()
+            self._teardown()
             return {"ok": True, "already_stopped": True}
 
-        # 停止捕获
-        if self._capture:
-            try:
-                self._capture.stop()
-            except Exception as e:
-                logger.warning(f"[ScreenCast] capture stop: {e}")
-            self._capture = None
-
-        # 停止通道
+        target = self._state.get("target")
+        device_id = self._state.get("device_id")
         if target == "dlna":
-            device_id = self._state.get("device_id")
             try:
-                if device_id:
-                    self.handler._stop_cast({"device_id": device_id})
-                else:
-                    self.handler._stop_cast({})
+                self.handler._stop_cast(
+                    {"device_id": device_id} if device_id else {})
             except Exception as e:
                 logger.warning(f"[ScreenCast] dlna stop: {e}")
-        elif target == "webrtc":
-            self._close_room()
 
-        self._reset()
+        self._teardown()
         self._emit()
         return {"ok": True}
 
     def status(self) -> Dict:
         """当前投屏状态"""
         state = dict(self._state)
+        if state.get("session_id") and state.get("target") == "browser":
+            state["viewers"] = self.httpd.viewers(state["session_id"])
         state["ffmpeg"] = self.ffmpeg.check()
         return state
 
@@ -168,166 +165,168 @@ class ScreenCastManager:
             logger.warning(f"[ScreenCast] httpd stop: {e}")
 
     # ────────────────────────────────────────
-    # DLNA 通道
+    # 通道
     # ────────────────────────────────────────
 
-    def _start_dlna(self, params: Dict) -> Dict:
-        device_id = params.get("device_id")
-        if not device_id:
-            return {"ok": False, "error": "缺少目标设备 (device_id)"}
-        device = self.handler.ssdp.get_device(device_id)
-        if not device:
-            return {"ok": False, "error": f"设备不存在或已离线: {device_id}"}
+    def _start(self, target: str, params: Dict, source: Dict,
+               audio: Dict, video: Dict) -> Dict:
+        device_id = None
+        if target == "dlna":
+            device_id = params.get("device_id")
+            if not device_id:
+                return {"ok": False, "error": "缺少目标设备 (device_id)"}
+            device = self.handler.ssdp.get_device(device_id)
+            if not device:
+                return {"ok": False, "error": f"设备不存在或已离线: {device_id}"}
 
-        source = params.get("source") or {"type": "screen", "id": "desktop"}
-        audio = params.get("audio") or {}
-        video = params.get("video") or {}
-
-        # 启动 HTTP 服务（HLS 静态）
         if not self.httpd.start():
             return {"ok": False, "error": "HTTP 服务启动失败"}
+        if not self.httpd.register_session(
+                self._session_id, on_viewers=self._on_viewer_change):
+            return {"ok": False, "error": "会话注册失败"}
 
-        # HLS 输出目录（按目标类型固定，每次启动清空）
-        hls_dir = os.path.join(_hls_root(), "dlna")
+        hls_dir = os.path.join(_hls_root(), self._session_id)
         capture = FfmpegCapture(self.ffmpeg.get_path())
-        result = capture.start_hls(source, audio, video, hls_dir)
+        result = capture.start_hls(
+            source, audio, video, hls_dir,
+            on_error=lambda msg: self._on_capture_error(msg))
         if not result.get("ok"):
+            self.httpd.unregister_session(self._session_id)
             return {"ok": False, "error": result.get("error", "屏幕捕获失败")}
 
-        # 构造 HLS URL 并推给电视
-        m3u8_url = f"http://{self._local_ip()}:{self.httpd.port}/hls/dlna/live.m3u8"
-        logger.info(f"[ScreenCast] DLNA push: {device_id} <- {m3u8_url}")
-        session = self.handler._get_or_create_session(device_id)
-        try:
-            session.play(m3u8_url, "application/vnd.apple.mpegurl")
-        except Exception:
-            # play 失败时 self._capture 尚未赋值，必须停掉局部 capture，
-            # 否则 FFmpeg 子进程成为孤儿一直编码
-            capture.stop()
-            raise
-
         self._capture = capture
-        self._state.update({
-            "running": True,
-            "target": "dlna",
-            "source": source,
-            "device_id": device_id,
-            "url": m3u8_url,
-            "error": None,
-            "started_at": time.time(),
-        })
-        return {"ok": True, "target": "dlna", "device_id": device_id, "url": m3u8_url}
+        m3u8_url = (f"http://{self._local_ip()}:{self.httpd.port}"
+                    f"/hls/{self._session_id}/live.m3u8")
 
-    # ────────────────────────────────────────
-    # WebRTC 通道
-    # ────────────────────────────────────────
-
-    def _start_webrtc(self, params: Dict) -> Dict:
-        source = params.get("source") or {"type": "screen", "id": "desktop"}
-        audio = params.get("audio") or {}
-        video = params.get("video") or {}
-
-        # 启动 HTTP 服务（信令 + 观看页）
-        if not self.httpd.start():
-            return {"ok": False, "error": "HTTP 服务启动失败"}
-
-        fps = int(video.get("fps") or 15)
-
-        # 创建房间（绑定 httpd 事件循环）
-        from .webrtc_room import WebRtcRoom
-        room_id = self._gen_room_id()
-        room = WebRtcRoom(
-            loop=self.httpd._loop,
-            room_id=room_id,
-            fps=fps,
-            on_viewer_change=self._on_viewer_change,
-        )
-        if not self.httpd.register_room(room):
-            return {"ok": False, "error": "房间注册失败"}
-
-        # 启动原始帧捕获
-        capture = FfmpegCapture(self.ffmpeg.get_path())
-        result = capture.start_raw(
-            source, audio, video,
-            on_video_frame=room.set_video_frame,
-            on_audio_frame=room.push_audio,
-            on_error=lambda msg: self._on_capture_error(msg),
-        )
-        if not result.get("ok"):
-            self._close_room()
-            return {"ok": False, "error": result.get("error", "屏幕捕获失败")}
-
-        watch_url = f"http://{self._local_ip()}:{self.httpd.port}/r/{room_id}"
-        self._capture = capture
-        self._room = room
-        self._state.update({
-            "running": True,
-            "target": "webrtc",
-            "source": source,
-            "room_id": room_id,
-            "watch_url": watch_url,
-            "viewers": 0,
-            "error": None,
-            "started_at": time.time(),
-        })
-        logger.info(f"[ScreenCast] WebRTC room started: {watch_url}")
-        return {
-            "ok": True, "target": "webrtc",
-            "room_id": room_id, "watch_url": watch_url,
-            "width": result.get("width"), "height": result.get("height"), "fps": fps,
-        }
-
-    def _close_room(self):
-        room = self._room
-        room_id = self._state.get("room_id")
-        if room is not None:
+        if target == "dlna":
+            logger.info(f"[ScreenCast] DLNA push: {device_id} <- {m3u8_url}")
+            session = self.handler._get_or_create_session(device_id)
             try:
-                self.httpd.run_coro(room.close()).result(timeout=5)
+                session.play(m3u8_url, "application/vnd.apple.mpegurl")
             except Exception as e:
-                logger.warning(f"[ScreenCast] room close: {e}")
-        if room_id:
-            self.httpd.unregister_room(room_id)
-        self._room = None
-
-    def _on_viewer_change(self, room_id: str, count: int):
-        """httpd 事件循环线程内回调"""
-        if self._state.get("room_id") == room_id:
-            self._state["viewers"] = count
-            self._emit()
-
-    def _on_capture_error(self, msg: str):
-        """捕获线程错误回调"""
-        logger.error(f"[ScreenCast] capture error: {msg}")
-        if self._state.get("running"):
-            target = self._state.get("target")
-            self._state["error"] = msg
-            # 停止捕获（保留状态供前端展示错误）
-            if self._capture:
-                self._capture.stop()
-            self._state["running"] = False
-            # 释放通道：否则旧房间留在 httpd.rooms、DLNA 会话继续拉死流
-            if target == "webrtc":
-                self._close_room()
-            elif target == "dlna":
+                logger.error(f"[ScreenCast] DLNA play failed: {e}")
                 try:
-                    device_id = self._state.get("device_id")
-                    self.handler._stop_cast(
-                        {"device_id": device_id} if device_id else {})
-                except Exception as e:
-                    logger.warning(f"[ScreenCast] dlna stop after error: {e}")
-            self._emit()
+                    self.handler._stop_cast({"device_id": device_id})
+                except Exception:
+                    pass
+                return {"ok": False,
+                        "error": f"电视拒绝播放（{e.__class__.__name__}），"
+                                 f"可换较低分辨率/码率后重试"}
+            self._state.update({
+                "running": True, "target": "dlna", "source": source,
+                "device_id": device_id, "session_id": self._session_id,
+                "url": m3u8_url, "watch_url": None, "viewers": 0,
+                "error": None, "started_at": time.time(),
+            })
+            threading.Thread(
+                target=self._verify_dlna_pull,
+                args=(self._session_id, device.display_name),
+                name="screencast-dlna-verify", daemon=True).start()
+            return {"ok": True, "target": "dlna", "device_id": device_id,
+                    "session_id": self._session_id, "url": m3u8_url}
+        watch_url = f"http://{self._local_ip()}:{self.httpd.port}/r/{self._session_id}"
+        self._state.update({
+            "running": True, "target": "browser", "source": source,
+            "device_id": None, "session_id": self._session_id,
+            "watch_url": watch_url, "url": m3u8_url, "viewers": 0,
+            "error": None, "started_at": time.time(),
+        })
+        logger.info(f"[ScreenCast] browser share started: {watch_url}")
+        return {"ok": True, "target": "browser",
+                "session_id": self._session_id, "watch_url": watch_url,
+                "width": result.get("width"), "height": result.get("height"),
+                "fps": result.get("fps")}
 
     # ────────────────────────────────────────
     # 内部
     # ────────────────────────────────────────
 
-    @staticmethod
-    def _gen_room_id() -> str:
-        import secrets
-        return secrets.token_hex(3)  # 6 位十六进制
-
     def _local_ip(self) -> str:
         return self.handler._get_local_ip()
+
+    def _verify_dlna_pull(self, session_id: str, device_name: str):
+        """DLNA 电视不会把"播不出来"回报给控制器：黑屏时既可能是根本没拉到
+        播放列表（网段/防火墙/地址错），也可能是拉到了但解码不了（码率过高）。
+        这两种情况的处置方式完全不同，只能靠本机侧的拉流证据来区分。"""
+        deadline = time.monotonic() + DLNA_VERIFY_SECONDS
+        while time.monotonic() < deadline:
+            time.sleep(DLNA_VERIFY_POLL)
+            if self._session_id != session_id or not self._state.get("running"):
+                return
+            stats = self.httpd.pull_stats(session_id)
+            if stats["pulls"] and stats["misses"] >= 6:
+                self._state["error"] = (
+                    f"{device_name} 跟不上当前码率（多个分片已被删除），"
+                    f"请降低分辨率或码率后重试")
+                logger.warning(f"[ScreenCast] dlna falling behind: {stats}")
+                self._emit()
+                return
+            if stats["pulls"]:
+                logger.info(
+                    f"[ScreenCast] {device_name} pulling "
+                    f"({stats['pulls']} requests from {stats['clients']})")
+                return
+        self._state["error"] = (
+            f"{device_name} 在 {DLNA_VERIFY_SECONDS:.0f} 秒内没有拉取播放列表："
+            f"请确认电视与本机在同一网段、允许 HanCast 接收局域网连接，"
+            f"或换较低分辨率重试")
+        logger.warning(f"[ScreenCast] dlna never pulled the playlist: "
+                       f"{device_name} <- {self._state.get('url')}")
+        self._emit()
+
+    def _on_viewer_change(self, session_id: str, count: int):
+        """httpd 事件循环线程回调：浏览器观众数变化"""
+        if self._session_id == session_id and self._state.get("running"):
+            self._state["viewers"] = count
+            self._emit()
+
+    def _on_capture_error(self, msg: str):
+        """捕获线程错误回调（FFmpeg 退出/卡流）"""
+        logger.error(f"[ScreenCast] capture error: {msg}")
+        if not self._state.get("running"):
+            return
+        target = self._state.get("target")
+        device_id = self._state.get("device_id")
+        # _teardown 里的 _reset 会清空 error，必须先拆再写，否则前端拿不到
+        # 失败原因，只剩一个「不知道为什么不投了」的黑屏
+        self._teardown()
+        self._state["error"] = msg
+        # 通道一并释放：否则电视继续拉一条死流，前端也起不了下一次
+        if target == "dlna":
+            try:
+                self.handler._stop_cast(
+                    {"device_id": device_id} if device_id else {})
+            except Exception as e:
+                logger.warning(f"[ScreenCast] dlna stop after error: {e}")
+        self._emit()
+
+    def _teardown(self):
+        """停捕获、注销会话、删除分片目录。
+
+        幂等，且任何一步失败都不能挡住其余步骤——这一步冒异常的话，用户
+        点「停止投屏」就永远没有回应（曾真的发生过：会话注销抛 TypeError
+        直接冒到命令循环）。
+        """
+        if self._capture:
+            try:
+                self._capture.stop()
+            except Exception as e:
+                logger.warning(f"[ScreenCast] capture stop: {e}")
+            self._capture = None
+        sid = self._session_id
+        self._session_id = None
+        if sid:
+            try:
+                self.httpd.unregister_session(sid)
+            except Exception as e:
+                logger.warning(f"[ScreenCast] unregister session {sid}: {e}")
+            shutil.rmtree(os.path.join(_hls_root(), sid), ignore_errors=True)
+        # 没有会话在跑就把服务停下来，下次 start 才能拿回固定端口 8765
+        try:
+            self.httpd.stop()
+        except Exception as e:
+            logger.warning(f"[ScreenCast] httpd stop: {e}")
+        self._reset()
 
     def _reset(self):
         self._state.update({
@@ -335,10 +334,10 @@ class ScreenCastManager:
             "target": None,
             "source": None,
             "device_id": None,
-            "room_id": None,
+            "session_id": None,
             "watch_url": None,
-            "viewers": 0,
             "url": None,
+            "viewers": 0,
             "error": None,
             "started_at": None,
         })

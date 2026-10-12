@@ -957,6 +957,105 @@ class SSDPService:
         with self._lock:
             self._devices.pop(device_id, None)
 
+    # ── 手动添加（多播被防火墙/安全软件拦截时的兜底通道）──
+
+    # 常见 DLNA 服务器端口（MediaRenderer / DMS）
+    _MANUAL_PORTS = (8080, 16514, 58880, 8200, 8888, 32400)
+    # 常见设备描述路径
+    _MANUAL_PATHS = ("/description.xml", "/root.xml")
+    _MANUAL_TIMEOUT = 2.5
+
+    def add_device_by_target(self, target: str) -> Device:
+        """按 IP / IP:端口 / 完整描述地址直接抓取设备并登记
+
+        组播被本机防火墙（如 macOS Little Snitch）按应用拦截时，SSDP 永远
+        收不到 NOTIFY，但出站 TCP 是通的——手动添加走的就是这条路。
+        """
+        target = (target or "").strip()
+        if not target:
+            raise ValueError("请输入设备 IP 或描述地址")
+
+        location, host, port = self._resolve_manual_target(target)
+        xml_text, used_port = self._fetch_description(location, host, port)
+        device = self._parse_device_description(xml_text, host, port=used_port)
+        if not device:
+            raise ValueError("该地址不是有效的 DLNA 设备描述")
+
+        if (not device.ip or device.ip in ("127.0.0.1", "0.0.0.0")) and host:
+            device.ip = host
+        if self._should_ignore_device and self._should_ignore_device(device.id):
+            raise ValueError(f"设备 {device.display_name} 已被隐藏，请先取消隐藏")
+
+        new_device = False
+        with self._lock:
+            old = self._devices.get(device.id)
+            if old is None:
+                self._devices[device.id] = device
+                new_device = True
+            else:
+                if old.custom_name:
+                    device.custom_name = old.custom_name
+                self._devices[device.id] = device
+        if new_device and self._on_device_found:
+            self._on_device_found(device)
+        logger.info(f"Manually added device: {device.display_name} ({device.ip})")
+        return device
+
+    def _resolve_manual_target(self, target: str):
+        """返回 (location 或 None, host, port)"""
+        import re as _re
+        from urllib.parse import urlparse
+        if target.lower().startswith(("http://", "https://")):
+            parsed = urlparse(target)
+            return (target, parsed.hostname or "", parsed.port or 80)
+        m = _re.fullmatch(r"(?P<host>[0-9A-Za-z_.\-]+)(?::(?P<port>\d{1,5}))?",
+                         target)
+        if not m:
+            raise ValueError(f"无法识别的地址：{target}")
+        return (None, m.group("host"),
+                int(m.group("port")) if m.group("port") else None)
+
+    def _fetch_description(self, location: Optional[str], host: str,
+                           port: Optional[int]):
+        """抓取设备描述 XML，返回 (xml, 端口)
+
+        未直接命中时并发穷举常见端口×路径：串行穷举最坏 12 次 × 超时，
+        会顶穿前端 60 秒命令超时，并发后上限就是一个探测超时。
+        """
+        from urllib.parse import urlparse
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        if location:
+            candidates = [location]
+        else:
+            ports = (port,) if port else self._MANUAL_PORTS
+            candidates = [f"http://{host}:{p}{path}"
+                          for p in ports for path in self._MANUAL_PATHS]
+
+        def _probe(url):
+            try:
+                resp = requests.get(url, timeout=self._MANUAL_TIMEOUT)
+                if resp.status_code != 200:
+                    return url, None, f"HTTP {resp.status_code}"
+                resp.encoding = resp.apparent_encoding or "utf-8"
+                if "<device" not in resp.text.lower():
+                    return url, None, "响应中没有 UPNP 设备描述"
+                return url, resp.text, None
+            except Exception as e:
+                return url, None, str(e)
+
+        errors = []
+        with ThreadPoolExecutor(max_workers=min(8, len(candidates))) as ex:
+            futures = [ex.submit(_probe, u) for u in candidates]
+            for fut in as_completed(futures):
+                url, text, err = fut.result()
+                if text is not None:
+                    for other in futures:
+                        other.cancel()
+                    return text, (urlparse(url).port or 80)
+                errors.append(f"{url}: {err}")
+        raise ValueError(
+            "读取设备描述失败：" + (errors[0] if errors else "无响应"))
+
     def get_usn(self) -> str:
         return self._usn
 

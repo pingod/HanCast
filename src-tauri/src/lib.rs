@@ -207,6 +207,21 @@ async fn hide_device(sidecar: State<'_, SidecarManager>, id: String) -> Result<(
     Ok(())
 }
 
+/// 手动添加设备：组播被系统/安全软件拦截时的兜底通道
+#[tauri::command]
+async fn add_device(sidecar: State<'_, SidecarManager>, address: String) -> Result<serde_json::Value, String> {
+    sidecar
+        .send_command("add_device", serde_json::json!({"address": address}))
+        .await
+}
+
+#[tauri::command]
+async fn get_manual_devices(sidecar: State<'_, SidecarManager>) -> Result<serde_json::Value, String> {
+    sidecar
+        .send_command("get_manual_devices", serde_json::json!({}))
+        .await
+}
+
 // ── Media parsing ──
 // Frontend has two separate commands; Python has one `parse_media` with type param.
 
@@ -562,7 +577,7 @@ async fn set_mpv_path(
         .await
 }
 
-// ── Screen Cast (电脑投屏：DLNA 电视 / WebRTC 浏览器) ──
+// ── Screen Cast (电脑投屏：DLNA 电视 / 浏览器观看，两路共用 HLS) ──
 
 #[tauri::command]
 async fn list_screen_sources(
@@ -612,6 +627,25 @@ async fn set_ffmpeg_path(
 }
 
 // ── Export Logs ──
+
+/// 应用内查看日志（分模块/级别/关键字过滤），排错时不用再去翻文件
+#[tauri::command]
+async fn get_logs(
+    sidecar: State<'_, SidecarManager>,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    sidecar.send_command("get_logs", params).await
+}
+
+#[tauri::command]
+async fn set_log_level(
+    sidecar: State<'_, SidecarManager>,
+    level: String,
+) -> Result<serde_json::Value, String> {
+    sidecar
+        .send_command("set_log_level", serde_json::json!({"level": level}))
+        .await
+}
 
 #[tauri::command]
 async fn export_logs(app: tauri::AppHandle) -> Result<bool, String> {
@@ -1128,6 +1162,8 @@ pub fn run() {
             rename_device,
             remove_device,
             hide_device,
+            add_device,
+            get_manual_devices,
             parse_media_file,
             parse_media_url,
             resolve_share,
@@ -1162,6 +1198,8 @@ pub fn run() {
             screen_cast_status,
             set_ffmpeg_path,
             export_logs,
+            get_logs,
+            set_log_level,
             is_store_version,
             get_autostart,
             set_autostart,

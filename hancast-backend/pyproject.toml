@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "hancast-sidecar"
 # version synced from tauri.conf.json
-version = "2.2.9"
+version = "2.2.10"
 description = "HanCast Python Sidecar"
 readme = "README.md"
 license = "GPL-3.0"
@@ -18,10 +18,8 @@ dependencies = [
     "requests>=2.28.0",
     "lxml>=4.9.0",
     "netifaces>=0.11.0",
-    # 屏幕投屏（WebRTC 浏览器观看）
-    "aiortc>=1.9.0",
+    # 屏幕投屏浏览器观看：aiohttp 直接供 HLS，不再依赖 WebRTC（aiortc 已移除）
     "aiohttp>=3.9.0",
-    "numpy>=1.24.0",  # aiortc 帧供给（av.VideoFrame.from_ndarray）
 ]
 
 [project.optional-dependencies]

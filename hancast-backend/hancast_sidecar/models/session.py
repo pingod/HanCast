@@ -21,6 +21,9 @@ class DeviceCastSession:
     - 进度轮询线程
     """
 
+    # 连续轮询失败上限（每秒 1 次 ≈ 10 秒），超过即判定设备失联
+    POLL_FAIL_LIMIT = 10
+
     def __init__(self, device: Device, media_server: Any):
         self.device = device
         self.device_id = device.id
@@ -54,11 +57,23 @@ class DeviceCastSession:
         else:
             self.start_poll()
 
-    def stop(self) -> None:
-        """停止播放"""
+    def stop(self) -> bool:
+        """停止播放。
+
+        返回 False 表示远端 Stop 动作失败（设备失联时必然如此），但本地会话
+        一律已经释放——调用方必须照常丢弃该会话，否则残留会话会让用户
+        「怎么点都停不掉投屏」。
+        """
         self.stop_poll()
-        self.protocol.stop()
+        ok = True
+        try:
+            self.protocol.stop()
+        except Exception as e:
+            ok = False
+            logger.warning(
+                f"Stop action failed for {self.device.display_name}: {e}")
         self.cast_state.status = "idle"
+        return ok
 
     def pause(self) -> None:
         """暂停播放"""
@@ -127,6 +142,7 @@ class DeviceCastSession:
     def _poll_loop(self) -> None:
         """轮询远程设备的播放进度"""
         transport_check_counter = 0
+        consecutive_failures = 0
         last_status = self.cast_state.status  # 记录上次状态，用于检测变化
         # 首次轮询前等待，让 DLNA 设备有时间加载媒体元数据
         # 部分设备在收到 SetAVTransportURI+Play 后需要 2-3 秒才返回正确的
@@ -172,13 +188,32 @@ class DeviceCastSession:
                     self.cast_state.duration = duration
                 if position and position != '00:00:00':
                     self.cast_state.position = position
+                consecutive_failures = 0
 
                 # 触发回调
                 if self._poll_callback:
                     self._poll_callback(self.device_id, "progress_update")
 
             except Exception as e:
-                logger.error(f"Polling failed for device {self.device.display_name}: {e}")
+                consecutive_failures += 1
+                logger.warning(
+                    f"Polling failed for device {self.device.display_name}"
+                    f" ({consecutive_failures}/{self.POLL_FAIL_LIMIT}): {e}")
+                if consecutive_failures >= self.POLL_FAIL_LIMIT:
+                    # 设备已失联（关机/切源/掉线）：再轮询下去只会刷屏，
+                    # 且会话永远停在「正在投屏」假象里，用户无法收尾
+                    logger.error(
+                        f"Device {self.device.display_name} unreachable, "
+                        f"release session")
+                    self.cast_state.status = "idle"
+                    self.stop_poll()
+                    if self._poll_callback:
+                        try:
+                            self._poll_callback(self.device_id,
+                                                "device_unreachable")
+                        except Exception:
+                            logger.exception("Unreachable callback failed")
+                    return
 
             # 轮询间隔
             threading.Event().wait(1.0)

@@ -1,5 +1,5 @@
 /**
- * 屏幕投屏（电脑投屏到 DLNA 电视 / 浏览器观看）
+ * 屏幕投屏（电脑投屏到 DLNA 电视 / 浏览器观看，HLS 分发）
  */
 
 export interface ScreenSourceItem {
@@ -27,10 +27,10 @@ export interface ScreenSources {
 
 export interface ScreenCastState {
   running: boolean
-  target?: 'dlna' | 'webrtc' | null
+  target?: 'dlna' | 'browser' | null
   source?: { type: string; id?: string; title?: string } | null
   device_id?: string | null
-  room_id?: string | null
+  session_id?: string | null
   watch_url?: string | null
   url?: string | null
   viewers?: number
@@ -40,7 +40,7 @@ export interface ScreenCastState {
 }
 
 export interface ScreenCastStartParams {
-  target: 'dlna' | 'webrtc'
+  target: 'dlna' | 'browser'
   device_id?: string
   source: { type: 'screen' | 'window'; id?: string; title?: string }
   audio?: {

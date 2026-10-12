@@ -45,27 +45,29 @@
 </head>
 <body>
   <div class="stage">
-    <video id="video" autoplay playsinline muted></video>
+    <video id="video" autoplay playsinline muted controls></video>
     <div class="placeholder" id="placeholder">
       <div class="pulse"></div>
-      <div>正在连接投屏…</div>
+      <div>正在接入投屏画面…</div>
     </div>
   </div>
   <div class="status"><span class="dot" id="dot"></span><span id="statusText">连接中</span></div>
   <div class="err-text" id="errText" style="display:none"></div>
-  <div class="footer">HanCast 屏幕投屏 · 免安装观看</div>
+  <div class="footer">HanCast 屏幕投屏 · 浏览器直接观看（局域网，约 3 秒延迟）</div>
 
+<script src="/static/hls.min.js"></script>
 <script>
 (function () {
-  var roomId = "__ROOM_ID__";
+  var sessionId = "__SESSION_ID__";
+  // 相对同源路径：换机器、换端口、手机热点都不受影响
+  var m3u8 = "/hls/" + encodeURIComponent(sessionId) + "/live.m3u8";
   var video = document.getElementById("video");
   var placeholder = document.getElementById("placeholder");
   var statusText = document.getElementById("statusText");
   var dot = document.getElementById("dot");
   var errText = document.getElementById("errText");
-  var pc = null;
-  var ws = null;
-  var closed = false;
+  var hls = null;
+  var stopped = false;
 
   function setStatus(text, cls) {
     statusText.textContent = text;
@@ -74,7 +76,7 @@
   function setError(text) {
     errText.textContent = text;
     errText.style.display = "block";
-    setStatus("连接失败", "err");
+    setStatus("已结束", "err");
   }
   function showVideo() {
     placeholder.style.display = "none";
@@ -82,97 +84,61 @@
     setStatus("正在观看", "ok");
   }
 
-  function makePeer() {
-    var pc_ = new RTCPeerConnection({ iceServers: [] });
-    pc_.addTransceiver("video", { direction: "recvonly" });
-    pc_.addTransceiver("audio", { direction: "recvonly" });
-    pc_.ontrack = function (ev) {
-      if (ev.track.kind === "video") {
-        video.srcObject = ev.streams[0] || new MediaStream([ev.track]);
-        video.play().catch(function(){});
-        showVideo();
-      }
-    };
-    pc_.onicecandidate = function (ev) {
-      if (ev.candidate && ws && ws.readyState === 1) {
-        ws.send(JSON.stringify({
-          type: "ice",
-          candidate: {
-            candidate: ev.candidate.candidate,
-            sdpMid: ev.candidate.sdpMid,
-            sdpMLineIndex: ev.candidate.sdpMLineIndex,
-          }
-        }));
-      }
-    };
-    pc_.onconnectionstatechange = function () {
-      if (pc_.connectionState === "connected") showVideo();
-      if (pc_.connectionState === "failed" || pc_.connectionState === "closed") {
-        setError("连接已断开");
-      }
-    };
-    return pc_;
+  function nativeHls() {
+    return video.canPlayType("application/vnd.apple.mpegurl") !== "";
   }
 
-  function connect() {
-    var wsUrl = (location.protocol === "https:" ? "wss://" : "ws://") + location.host +
-                "/ws?room=" + encodeURIComponent(roomId);
-    ws = new WebSocket(wsUrl);
-    ws.onopen = function () { setStatus("已连接，正在建立视频通道…"); };
-    ws.onmessage = async function (ev) {
-      var msg;
-      try { msg = JSON.parse(ev.data); } catch (e) { return; }
-      if (msg.type === "error") { setError(msg.message || "房间不可用"); return; }
-      if (msg.type === "offer") {
-        if (!pc) pc = makePeer();
-        try {
-          await pc.setRemoteDescription(msg);
-          var answer = await pc.createAnswer();
-          await pc.setLocalDescription(answer);
-          ws.send(JSON.stringify({ type: "answer", sdp: pc.localDescription.sdp }));
-        } catch (e) { setError("协商失败: " + e.message); }
-      } else if (msg.type === "answer") {
-        if (pc) {
-          try { await pc.setRemoteDescription(msg); } catch (e) { setError("协商失败: " + e.message); }
-        }
-      } else if (msg.type === "ice") {
-        if (pc) {
-          try { await pc.addIceCandidate(msg.candidate); } catch (e) {}
-        }
-      }
-    };
-    ws.onerror = function () { if (!closed) setError("无法连接投屏服务"); };
-    ws.onclose = function () {
-      if (!closed) { setError("连接已关闭"); }
-    };
-  }
-
-  function start() {
-    if (!pc) pc = makePeer();
-    pc.createOffer().then(function (offer) {
-      return pc.setLocalDescription(offer);
-    }).then(function () {
-      ws.send(JSON.stringify({ type: "offer", sdp: pc.localDescription.sdp }));
-    }).catch(function (e) {
-      setError("启动失败: " + e.message);
+  function startNative() {
+    video.src = m3u8;
+    video.play().catch(function () {});
+    video.addEventListener("playing", showVideo);
+    video.addEventListener("error", function () {
+      setError("投屏已结束或画面源不可用");
     });
   }
 
-  connect();
-  // 等 WS 打开后发 offer
-  var t = setInterval(function () {
-    if (ws && ws.readyState === 1) {
-      clearInterval(t);
-      start();
-    } else if (ws && ws.readyState === 3) {
-      clearInterval(t);
-    }
-  }, 300);
+  function startHlsJs() {
+    hls = new Hls({
+      lowLatencyMode: true,
+      liveSyncDurationCount: 1,
+      liveMaxLatencyDurationCount: 4,
+      enableWorker: true,
+      manifestLoadingMaxRetry: 4,
+      manifestLoadingRetryDelay: 1000,
+      levelLoadingMaxRetry: 4,
+      fragLoadingMaxRetry: 4,
+    });
+    hls.on(Hls.Events.MANIFEST_PARSED, function () {
+      video.play().catch(function () {});
+    });
+    hls.on(Hls.Events.FRAG_BUFFERED, showVideo);
+    hls.on(Hls.Events.ERROR, function (_ev, data) {
+      if (!data.fatal || stopped) return;
+      if (data.response && data.response.code === 404) {
+        // 播放列表 404 = 投屏已停止（分片目录被清理），不再无限重试
+        setError("投屏已结束");
+        return;
+      }
+      setStatus("重连中…");
+      if (data.type === Hls.ErrorTypes.NETWORK_ERROR) hls.startLoad();
+      else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
+      else {
+        hls.destroy();
+        hls = null;
+        setTimeout(startHlsJs, 1500);
+      }
+    });
+    hls.loadSource(m3u8);
+    hls.attachMedia(video);
+  }
+
+  if (typeof Hls !== "undefined" && Hls.isSupported()) startHlsJs();
+  else if (nativeHls()) startNative();
+  else setError("此浏览器不支持 HLS 播放，请用 Safari / Chrome / Edge 打开");
 
   window.addEventListener("beforeunload", function () {
-    closed = true;
-    if (ws) ws.close();
-    if (pc) pc.close();
+    stopped = true;
+    if (hls) hls.destroy();
   });
 })();
 </script>

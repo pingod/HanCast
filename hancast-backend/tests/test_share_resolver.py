@@ -1,9 +1,13 @@
 """
-分享文本解析（share_resolver）单元测试 — 全部离线，不触网
+分享文本解析（share_resolver）+ 媒体代理改写（server）单元测试 — 全部离线，不触网
 
 覆盖:
 - 口令/分享文案中的地址提取（含短链裸域名、BV/av 兜底、尾部中文标点）
+- 页面流地址提取：绝对内嵌流、引号内相对流接口（/api/m3u8?…）、JS 转义
 - 通用页面直链提取（og:video / <video> / 内嵌 m3u8・mp4，相对地址归一）
+- 主列表下钻（BANDWIDTH 最优）、播放列表粘贴路由
+- 电视视角可播性判定（TS/HTML/PNG 魔数）与 Cookie 快照
+- 代理侧播放列表改写、防盗链占位图识别、Content-Range 总量
 - 抖音分享页 JSON 提取
 - B站路由 → 本地代理注册
 """
@@ -11,8 +15,14 @@
 import unittest
 from unittest.mock import patch
 
+import requests
+
+from hancast_sidecar.media.server import (
+    MediaHandler, _content_range_total, _is_leech_placeholder, _rewrite_playlist,
+)
 from hancast_sidecar.media.share_resolver import (
-    ShareResolver, extract_candidates,
+    ShareResolver, extract_candidates, _EXT_MIME, _ext_of,
+    _master_variant_url, _stream_candidates_from_text, UnplayableSource,
 )
 
 
@@ -22,9 +32,19 @@ class FakeMediaServer:
     def __init__(self):
         self.proxies: list[str] = []
 
-    def register_proxy(self, remote_url: str) -> str:
+    def register_proxy(self, remote_url: str, headers: dict = None) -> str:
         self.proxies.append(remote_url)
         return f"http://127.0.0.1:9/proxy/{len(self.proxies)}"
+
+
+def _no_follow(url, session, referer, deadline, _hop=0):
+    """离线替身：不验证取流，按扩展名给 MIME"""
+    return url, _EXT_MIME.get(_ext_of(url)) or "video/mp4"
+
+
+def _no_publish(uri, mime, session, referer, deadline, via):
+    """离线替身：跳过「电视不带 Cookie 能否拉到」的探测"""
+    return uri, mime, via
 
 
 class TestExtractCandidates(unittest.TestCase):
@@ -76,7 +96,7 @@ class TestExtractCandidates(unittest.TestCase):
         resolver = ShareResolver(FakeMediaServer())
         tried: list[str] = []
 
-        def fake(url, deadline):
+        def fake(url, deadline, session):
             tried.append(url)
             raise ValueError("stub fail to continue")
 
@@ -101,6 +121,13 @@ class TestResolveRouting(unittest.TestCase):
     def setUp(self):
         self.server = FakeMediaServer()
         self.resolver = ShareResolver(self.server)
+        self._offline = [
+            patch.object(ShareResolver, "_follow_stream", side_effect=_no_follow),
+            patch.object(ShareResolver, "_publish", side_effect=_no_publish),
+        ]
+        for p in self._offline:
+            p.start()
+            self.addCleanup(p.stop)
 
     def test_bilibili_routes_to_proxy(self):
         fake = {"title": "B站视频", "video_url": "https://xy.bilivideo.com/v.m4s",
@@ -134,6 +161,19 @@ class TestResolveRouting(unittest.TestCase):
                 self.resolver.resolve("https://example.org/x")
         self.assertIn("未找到可播放的视频源", str(ctx.exception))
 
+    def test_all_candidates_unplayable_raises(self):
+        """验证明确失败的站点给出诚实错误，而不是丢一个黑屏地址"""
+        def dead(url, session, referer, deadline, _hop=0):
+            raise UnplayableSource("返回的是网页而非视频流")
+
+        with patch.object(ShareResolver, "_follow_stream", side_effect=dead), \
+             patch.object(ShareResolver, "_open",
+                          return_value=("https://example.org/watch/1", "text/html",
+                                        None, PAGE_HTML.encode())):
+            with self.assertRaises(ValueError) as ctx:
+                self.resolver.resolve("https://example.org/watch/1")
+        self.assertIn("均不可播", str(ctx.exception))
+
     def test_direct_media_content_type(self):
         with patch.object(ShareResolver, "_open",
                           return_value=("https://cdn.example.net/big.mp4",
@@ -144,11 +184,23 @@ class TestResolveRouting(unittest.TestCase):
         self.assertEqual(info["mime_type"], "video/mp4")
         self.assertEqual(info["file_size"], 12345)
 
+    def test_pasted_master_playlist_descends_to_variant(self):
+        """粘贴裸 m3u8：主列表要挑出最高码率的分片列表再交给电视"""
+        body = ("#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=900000\n/low.m3u8\n"
+                "#EXT-X-STREAM-INF:BANDWIDTH=2000000\n/api/m3u8?id=9\n").encode()
+        with patch.object(ShareResolver, "_open",
+                          return_value=("https://cdn.example.net/index.m3u8?k=1",
+                                        "application/vnd.apple.mpegurl", None, body)):
+            info = self.resolver.resolve("https://cdn.example.net/index.m3u8?k=1")
+        self.assertEqual(info["via"], "playlist")
+        self.assertEqual(info["uri"], "https://cdn.example.net/api/m3u8?id=9")
+        self.assertEqual(info["mime_type"], "application/vnd.apple.mpegurl")
+
     def test_douyin_share_json(self):
         dy_html = (
             '{"video":{"play_addr":{"url_list":['
-            '"https://www.douyin.com/aweme/v1/playwm/?video_id=v0200f&ratio=1080p'
-            '\\u0026line=0"}]}},"desc":"抖音标题"'
+            '"https:\\u002F\\u002Fwww.douyin.com\\u002Faweme\\u002Fv1\\u002Fplaywm\\u002F?video_id=v0200f'
+            '\\u0026ratio=1080p\\u0026line=0"}]}},"desc":"抖音标题"'
         ).encode()
         with patch.object(ShareResolver, "_open",
                           return_value=("https://www.douyin.com/video/7412345678901234567",
@@ -157,6 +209,7 @@ class TestResolveRouting(unittest.TestCase):
         self.assertEqual(info["via"], "douyin")
         self.assertIn("https://www.douyin.com/aweme/v1/play/", info["uri"])
         self.assertNotIn("playwm", info["uri"])
+        self.assertNotIn("u002F", info["uri"])
         self.assertEqual(info["title"], "抖音标题")
 
     def test_empty_text_raises(self):
@@ -167,6 +220,114 @@ class TestResolveRouting(unittest.TestCase):
         with self.assertRaises(ValueError) as ctx:
             self.resolver.resolve("纯文本没有任何链接")
         self.assertIn("未从粘贴内容中找到链接", str(ctx.exception))
+
+
+class TestStreamExtraction(unittest.TestCase):
+    def test_quoted_relative_stream_api(self):
+        """引号内的相对流接口才是「播放地址由接口下发」站点的常态"""
+        html = 'var u="/api/m3u8?origin=%E8%B6%85&url=6aa5&sion_id=6ac4";'
+        self.assertEqual(
+            _stream_candidates_from_text(html),
+            ["/api/m3u8?origin=%E8%B6%85&url=6aa5&sion_id=6ac4"])
+
+    def test_js_identifiers_are_not_candidates(self):
+        html = 'var f="bfzym3u8", g="m3u8Tab", h="dytt.m3u8s";'
+        self.assertEqual(_stream_candidates_from_text(html), [])
+
+    def test_template_placeholder_rejected(self):
+        html = 'var t="${player.url}.m3u8";'
+        self.assertEqual(_stream_candidates_from_text(html), [])
+
+    def test_json_escape_normalized(self):
+        html = r'{"a": "https:\/\/cdn.x.com\/v.m3u8\u0026t=1"}'
+        self.assertEqual(_stream_candidates_from_text(html),
+                         ["https://cdn.x.com/v.m3u8&t=1"])
+
+    def test_master_variant_picks_highest_bandwidth(self):
+        text = ("#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=900000\n/api/direct?id=1\n"
+                "#EXT-X-STREAM-INF:BANDWIDTH=1000000\n/api/m3u8?id=1\n")
+        self.assertEqual(
+            _master_variant_url(text, "https://h/api/m3u8?a=1"),
+            "https://h/api/m3u8?id=1")
+
+    def test_media_playlist_is_not_master(self):
+        self.assertIsNone(_master_variant_url(
+            "#EXTM3U\n#EXTINF:10,\n/api/ts?i=0\n", "https://h/a.m3u8"))
+
+    def test_stream_rank_prefers_hls_then_avoids_poster(self):
+        rank = ShareResolver._stream_rank
+        urls = ["https://h/img.jpg", "https://h/a.mp4", "/api/m3u8?id=1", "https://h/a.mkv"]
+        self.assertEqual(sorted(urls, key=rank)[0], "/api/m3u8?id=1")
+        self.assertEqual(sorted(urls, key=rank)[-1], "https://h/img.jpg")
+
+
+class TestPlayableSniff(unittest.TestCase):
+    TS = b"G" + b"\x00" * 187 + b"G" + b"\x10" * 300
+
+    def test_media_ok(self):
+        ok = ShareResolver._media_ok
+        self.assertTrue(ok(200, "video/mp4", b""))
+        self.assertTrue(ok(200, "application/octet-stream", self.TS))
+        self.assertTrue(ok(200, "text/html", self.TS))     # 有站点给 TS 回 text/html
+        self.assertTrue(ok(200, "text/plain", b"#EXTM3U\n"))
+        self.assertFalse(ok(200, "image/png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 40))
+        self.assertFalse(ok(200, "text/html", b"<html><body>x</body></html>" + b"\x00" * 40))
+        self.assertFalse(ok(403, "video/mp4", b""))
+
+    def test_snapshot_headers_keeps_page_cookie_for_media_host(self):
+        """Cookie 由页面域下发、流媒体主机校验，跨主机也必须带上"""
+        jar = requests.cookies.RequestsCookieJar()
+        jar.set("sion_id", "6ac4", domain=".dyrsxm.cc")
+        jar.set("other", "x", domain=".adsystem.com")
+        h = ShareResolver._snapshot_headers(
+            type("S", (), {"cookies": jar})(),
+            "https://global.dyrsxm.cc/movie/1.html",
+            "https://box.dyrs.com.de/api/m3u8?id=1")
+        self.assertEqual(h["Cookie"], "sion_id=6ac4")
+        self.assertEqual(h["Referer"], "https://global.dyrsxm.cc/movie/1.html")
+        self.assertEqual(h["Origin"], "https://global.dyrsxm.cc")
+
+
+class TestMediaProxyRewrite(unittest.TestCase):
+    def setUp(self):
+        self._base = patch.object(MediaHandler, "base_url", "http://192.168.1.9:8080")
+        self._base.start()
+        self.addCleanup(self._base.stop)
+        self.registered: list[tuple[str, dict]] = []
+
+        def fake_register(cls, remote_url, headers=None):
+            self.registered.append((remote_url, headers))
+            return f"/proxy/{len(self.registered):012x}"
+
+        self._reg = patch.object(MediaHandler, "register", classmethod(fake_register))
+        self._reg.start()
+        self.addCleanup(self._reg.stop)
+
+    def test_playlist_children_registered(self):
+        text = ('#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI="https://k.example.com/k.bin"\n'
+                '#EXT-X-STREAM-INF:BANDWIDTH=1000000\n/api/m3u8?id=2&x=1\n'
+                '#EXTINF:10,\n/api/ts?i=0\n')
+        out = _rewrite_playlist(text, "https://box.example.com/api/m3u8?id=1",
+                               {"Cookie": "sion_id=6ac4"})
+        self.assertIn('URI="http://192.168.1.9:8080/proxy/000000000001"', out)
+        self.assertIn("http://192.168.1.9:8080/proxy/000000000003", out)
+        self.assertNotIn("/api/ts", out)
+        self.assertEqual(
+            [u for u, _ in self.registered],
+            ["https://k.example.com/k.bin", "https://box.example.com/api/m3u8?id=2&x=1",
+             "https://box.example.com/api/ts?i=0"])
+        self.assertTrue(all(h == {"Cookie": "sion_id=6ac4"} for _, h in self.registered))
+
+    def test_leech_placeholder_detection(self):
+        self.assertTrue(_is_leech_placeholder(b"\x89PNG\r\n\x1a\n"))
+        self.assertTrue(_is_leech_placeholder(b"\xff\xd8\xff\xe0"))
+        self.assertTrue(_is_leech_placeholder(b"<!DOCTYPE html>"))
+        self.assertFalse(_is_leech_placeholder(b"G\x00\x00\x00\x00"))
+        self.assertFalse(_is_leech_placeholder(b"\x00\x00\x00 ftypisom"))
+
+    def test_content_range_total(self):
+        self.assertEqual(_content_range_total("bytes 0-1023/409600"), 409600)
+        self.assertIsNone(_content_range_total(None))
 
 
 if __name__ == "__main__":

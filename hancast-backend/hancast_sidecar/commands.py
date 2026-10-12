@@ -145,6 +145,8 @@ class CommandHandler:
             "set_default_device": self._set_default_device,
             "rename_device": self._rename_device,
             "remove_device": self._remove_device,
+            "add_device": self._add_device,
+            "get_manual_devices": self._get_manual_devices,
             "hide_device": self._hide_device,
             "unhide_device": self._unhide_device,
             "get_hidden_devices": self._get_hidden_devices,
@@ -192,6 +194,10 @@ class CommandHandler:
             "stop_screen_cast": self._stop_screen_cast,
             "screen_cast_status": self._screen_cast_status,
             "set_ffmpeg_path": self._set_ffmpeg_path,
+
+            # 日志查看（排错）
+            "get_logs": self._get_logs,
+            "set_log_level": self._set_log_level,
         }
 
         # 设置回调
@@ -217,6 +223,10 @@ class CommandHandler:
         # 启动 SSDP 服务 (内部会调用 _register)
         self.ssdp.start()
 
+        # 手动添加的设备不依赖多播：开机后按保存的地址重新抓取
+        threading.Thread(target=self._restore_manual_devices,
+                         daemon=True, name="manual-devices").start()
+
         # 启动媒体服务器
         self.media_server.start(port=self.config.media_port)
 
@@ -238,6 +248,14 @@ class CommandHandler:
 
         # 屏幕投屏管理器（复用 config / ssdp / session）
         self.screencast = ScreenCastManager(self)
+
+    def _restore_manual_devices(self):
+        """启动后重新抓取手动添加的设备（不依赖多播）"""
+        for target in self.config.manual_devices:
+            try:
+                self.ssdp.add_device_by_target(target)
+            except Exception as e:
+                logger.info(f"Manual device offline, skipped: {target} ({e})")
 
     def execute(self, cmd: str, params: Dict[str, Any]) -> Any:
         """执行命令"""
@@ -334,7 +352,31 @@ class CommandHandler:
 
     def _remove_device(self, params: dict) -> None:
         device_id = params["id"]
+        device = self.ssdp.get_device(device_id)
         self.ssdp.remove_device(device_id)
+        # 手动添加的设备要一并从持久化列表摘掉，否则下次启动又冒出来
+        if device:
+            before = len(self.config.manual_devices)
+            self.config.remove_manual_devices_for_host(device.ip)
+            if len(self.config.manual_devices) != before:
+                self.config.save()
+                logger.info(f"Manual device entry dropped: {device.ip}")
+
+    def _add_device(self, params: dict) -> dict:
+        """手动添加设备（组播被防火墙/安全软件拦截时的兜底通道）
+
+        params: {"address": "192.168.1.68" | "192.168.1.68:8080" | 完整 description.xml URL}
+        """
+        address = (params.get("address") or params.get("ip") or "").strip()
+        if not address:
+            raise ValueError("请输入设备 IP 或描述地址")
+        device = self.ssdp.add_device_by_target(address)
+        self.config.add_manual_device(address)
+        self.config.save()
+        return device.to_dict()
+
+    def _get_manual_devices(self, params: dict) -> list:
+        return self.config.manual_devices
 
     def _hide_device(self, params: dict) -> None:
         """隐藏设备 - 加入隐藏列表，SSDP 仍能发现但不推送给前端"""
@@ -375,6 +417,13 @@ class CommandHandler:
         session = self.device_sessions.get(device_id)
         if not session:
             return
+
+        if event_type == "device_unreachable":
+            # 轮询线程已判定设备失联：释放会话，前端才不会停在「正在投屏」
+            self.device_sessions.pop(device_id, None)
+            if self.cast_state.device_id == device_id:
+                self.cast_state.status = "idle"
+                self.cast_state.device_id = None
 
         state = session.cast_state
         event_data = {
@@ -424,19 +473,40 @@ class CommandHandler:
         self.cast_state.status = "playing"
         self.cast_state.device_id = device_id
 
-    def _stop_cast(self, params: dict) -> None:
+    def _stop_cast(self, params: dict) -> dict:
+        """停止投屏（幂等）。
+
+        先摘会话再发 SOAP Stop：设备关机/切源/掉线时 Stop 必然抛错，若让它
+        冒泡到命令循环，会话永远留在 device_sessions 里，用户点多少次都停不掉。
+        """
         device_id = params.get("device_id")
-        if device_id and device_id in self.device_sessions:
-            # 停止指定设备
-            self.device_sessions[device_id].stop()
-            del self.device_sessions[device_id]
-        else:
-            # 停止所有设备
-            for session in self.device_sessions.values():
-                session.stop()
-            self.device_sessions.clear()
+        targets = [device_id] if device_id else list(self.device_sessions.keys())
+        failed = []
+        for did in targets:
+            session = self.device_sessions.pop(did, None)
+            if session is None:
+                continue
+            if not session.stop():
+                failed.append(did)
+            self._emit_session_state(did, session.cast_state)
+
+        if not self.device_sessions or device_id == self.cast_state.device_id:
             self.cast_state.status = "idle"
             self.cast_state.device_id = None
+        return {"ok": True, "stopped": targets, "control_failed": failed}
+
+    def _emit_session_state(self, device_id: str, state) -> None:
+        event_data = {
+            "status": state.status,
+            "device_id": device_id,
+            "position": state.position,
+            "duration": state.duration,
+            "volume": state.volume,
+            "is_muted": state.is_muted,
+        }
+        if state.media:
+            event_data["media"] = state.media.to_dict()
+        protocol_io.emit_event("cast_state_changed", event_data)
 
     def _pause_cast(self, params: dict) -> None:
         device_id = params.get("device_id")
@@ -856,7 +926,7 @@ class CommandHandler:
         return self.screencast.list_sources()
 
     def _start_screen_cast(self, params: dict) -> dict:
-        """开始屏幕投屏（target: dlna / webrtc）"""
+        """开始屏幕投屏（target: dlna / browser）"""
         return self.screencast.start(params)
 
     def _stop_screen_cast(self, params: dict) -> dict:
@@ -870,3 +940,22 @@ class CommandHandler:
     def _set_ffmpeg_path(self, params: dict) -> dict:
         """手动指定 FFmpeg 路径"""
         return self.screencast.set_ffmpeg_path(params)
+
+    # ── 日志查看（排错）──
+
+    def _get_logs(self, params: dict) -> dict:
+        """读取日志尾部并按模块/级别/关键字过滤"""
+        from .utils import logger as log_mod
+        return log_mod.read_logs(
+            limit=int(params.get("limit") or 400),
+            module=params.get("module") or None,
+            level=params.get("level") or None,
+            keyword=params.get("keyword") or None,
+            include_older=bool(params.get("include_older")),
+        )
+
+    def _set_log_level(self, params: dict) -> dict:
+        """运行时调整日志级别（排错时打开 DEBUG）"""
+        from .utils import logger as log_mod
+        level = log_mod.set_level(params.get("level", "INFO"))
+        return {"ok": True, "level": level}

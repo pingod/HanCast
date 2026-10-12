@@ -1,199 +1,51 @@
 """
 FFmpeg 屏幕捕获管线
 
-两种输出模式（由调用方选择）：
-- raw 模式（供 WebRTC 房间）：
-    视频 → rawvideo bgr24 → stdout（逐帧回调 numpy 数组）
-    音频 → pcm_s16le 48kHz 双声道 → stdout（第二个独立进程，逐帧回调 bytes）
-- hls 模式（供 DLNA 推流）：
-    视频 + 音频 → h264/aac → HLS 分片写入指定目录（电视拉流）
+输出 HLS（浏览器与 DLNA 电视共用同一路径）：
+    视频 + 音频 → h264/aac → 分片写入 <out_dir>/live.m3u8 + seg*.ts
 
-两个模式均为独立 FFmpeg 子进程 + 独立读取线程，不阻塞 sidecar 主循环。
+独立 FFmpeg 子进程 + 独立看门狗线程，不阻塞 sidecar 主命令循环。
 """
 
 import os
-import sys
 import time
-import queue
+import shutil
 import logging
 import threading
 import subprocess
+from collections import deque
 from typing import Callable, Dict, List, Optional
 
 logger = logging.getLogger("hancast.screencast.capture")
 
-# raw 音频帧：48kHz 双声道 s16 = 1920 samples * 2ch * 2bytes = 7680 bytes
-RAW_AUDIO_SAMPLE_RATE = 48000
-RAW_AUDIO_CHANNELS = 2
-RAW_AUDIO_SAMPLES = 1920  # 20ms
-
-
-def _read_exact(stream, size: int) -> Optional[bytes]:
-    """从流中精确读取 size 字节；EOF/读取不完整返回 None"""
-    chunks = []
-    remaining = size
-    while remaining > 0:
-        chunk = stream.read(remaining)
-        if not chunk:
-            return None  # EOF：不完整帧无意义，直接失败
-        chunks.append(chunk)
-        remaining -= len(chunk)
-    return b"".join(chunks)
-
-
-class RawCaptureThread(threading.Thread):
-    """读取 FFmpeg stdout 的线程（视频或音频）"""
-
-    def __init__(self, proc: subprocess.Popen, frame_size: int,
-                 on_frame: Callable, on_error: Callable, name: str):
-        super().__init__(name=f"ffmpeg-{name}", daemon=True)
-        self._proc = proc
-        self._frame_size = frame_size
-        self._on_frame = on_frame
-        self._on_error = on_error
-        self._stop = threading.Event()
-
-    def stop(self):
-        self._stop.set()
-
-    def run(self):
-        try:
-            while not self._stop.is_set():
-                data = _read_exact(self._proc.stdout, self._frame_size)
-                if data is None:
-                    break
-                try:
-                    self._on_frame(data)
-                except Exception:
-                    logger.exception("Raw frame callback failed")
-        except Exception as e:
-            self._on_error(str(e))
-        finally:
-            try:
-                if self._proc.stdout:
-                    self._proc.stdout.close()
-            except Exception:
-                pass
-            # 非 stop() 路径的 EOF = FFmpeg 意外退出：上报并回收僵尸进程，
-            # 否则前端一直显示 running 且残留子进程
-            if not self._stop.is_set():
-                try:
-                    rc = self._proc.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    rc = None
-                self._on_error(f"FFmpeg 输出流中断（退出码 {rc}）")
+# stderr 尾部保留行数：FFmpeg 提前退出时用于把真实原因带给用户
+_STDERR_TAIL = 40
 
 
 class FfmpegCapture:
-    """FFmpeg 屏幕/音频捕获管线"""
+    """FFmpeg 屏幕/音频捕获管线（HLS 输出）"""
 
     def __init__(self, ffmpeg_path: str):
         self.ffmpeg = ffmpeg_path
-        self._procs: List[subprocess.Popen] = []
-        self._threads: List[RawCaptureThread] = []
+        self._proc: Optional[subprocess.Popen] = None
+        self._threads: List[threading.Thread] = []
         self._lock = threading.Lock()
         self._running = False
         self._error: Optional[str] = None
+        self._stderr_tail: deque = deque(maxlen=_STDERR_TAIL)
+        self._stop_requested = False
 
     # ────────────────────────────────────────
-    # raw 模式（WebRTC）
-    # ────────────────────────────────────────
-
-    def start_raw(self, source: Dict, audio_cfg: Dict, video_cfg: Dict,
-                  on_video_frame: Callable, on_audio_frame: Optional[Callable],
-                  on_error: Optional[Callable] = None) -> Dict:
-        """启动原始帧捕获（WebRTC 模式）
-
-        返回 {"ok": bool, "width": int, "height": int, "fps": int, "error": str?}
-        """
-        self.stop()
-
-        width = int(video_cfg.get("width") or 0) or 1280
-        height = int(video_cfg.get("height") or 0) or 720
-        fps = int(video_cfg.get("fps") or 15)
-
-        def _err(msg):
-            self._error = msg
-            if on_error:
-                on_error(msg)
-            logger.error(f"[ScreenCast] {msg}")
-
-        # ── 视频进程 ──
-        video_input = self._video_input_args(source, fps, f"{width}:{height}")
-        video_cmd = [self.ffmpeg, "-hide_banner", "-loglevel", "error"] + video_input + [
-            # macOS avfoundation 屏幕设备曾观测到无视 -framerate、以数千 fps
-            # 疯狂产出（5 秒 11GB raw 数据）；输出端强制 CFR 封顶帧率
-            "-fps_mode", "cfr", "-r", str(fps),
-            "-f", "rawvideo", "-pix_fmt", "bgr24", "pipe:1",
-        ]
-        try:
-            vproc = self._spawn(video_cmd)
-        except Exception as e:
-            _err(f"启动视频捕获失败: {e}")
-            return {"ok": False, "error": f"启动视频捕获失败: {e}"}
-
-        frame_size = width * height * 3
-        self._procs.append(vproc)
-
-        # 预读一帧校验管线：必须在 RawCaptureThread 启动前读（否则两个
-        # reader 抢同一管道造成帧撕裂），且限时——macOS 屏幕录制权限被
-        # 弹窗挂起时 FFmpeg 永不吐帧，裸读会卡死整个 sidecar 命令循环
-        first: Dict = {}
-
-        def _peek():
-            first["data"] = _read_exact(vproc.stdout, frame_size)
-
-        peeker = threading.Thread(target=_peek, daemon=True)
-        peeker.start()
-        peeker.join(10)
-        if peeker.is_alive() or not first.get("data"):
-            msg = "屏幕捕获无输出（可能是权限弹窗未确认/窗口不存在）"
-            _err(msg)
-            self.stop()
-            return {"ok": False, "error": msg}
-
-        vt = RawCaptureThread(vproc, frame_size, on_video_frame, _err, "video")
-        self._threads.append(vt)
-
-        # ── 音频进程（可选）──
-        audio_cfg = audio_cfg or {}
-        if (audio_cfg.get("mic") or audio_cfg.get("system")) and on_audio_frame:
-            audio_input = self._audio_input_args(audio_cfg)
-            if audio_input:
-                audio_cmd = [self.ffmpeg, "-hide_banner", "-loglevel", "error"] + audio_input + [
-                    "-f", "s16le", "-ar", str(RAW_AUDIO_SAMPLE_RATE),
-                    "-ac", str(RAW_AUDIO_CHANNELS), "pipe:1",
-                ]
-                try:
-                    aproc = self._spawn(audio_cmd)
-                except Exception as e:
-                    _err(f"启动音频捕获失败: {e}")
-                    self.stop()
-                    return {"ok": False, "error": f"启动音频捕获失败: {e}"}
-                audio_frame_size = RAW_AUDIO_SAMPLES * RAW_AUDIO_CHANNELS * 2
-                at = RawCaptureThread(aproc, audio_frame_size, on_audio_frame, _err, "audio")
-                self._procs.append(aproc)
-                self._threads.append(at)
-            else:
-                logger.warning("[ScreenCast] Audio requested but no capture device available")
-
-        self._running = True
-        on_video_frame(first["data"])
-        for t in self._threads:
-            t.start()
-
-        logger.info(f"[ScreenCast] Raw capture started: {width}x{height}@{fps}fps")
-        return {"ok": True, "width": width, "height": height, "fps": fps}
-
-    # ────────────────────────────────────────
-    # hls 模式（DLNA）
+    # HLS 输出
     # ────────────────────────────────────────
 
     def start_hls(self, source: Dict, audio_cfg: Dict, video_cfg: Dict,
-                  out_dir: str, segment_prefix: str = "seg") -> Dict:
-        """启动 HLS 编码输出（DLNA 模式）
+                  out_dir: str, segment_prefix: str = "seg",
+                  on_error: Optional[Callable] = None) -> Dict:
+        """启动 HLS 编码输出
 
-        输出 out_dir/live.m3u8 + out_dir/seg*.ts
+        out_dir 必须是本次会话独占目录（旧内容整体删除）：复用同一目录会让
+        上一轮的 live.m3u8 残留，电视拉到的是已死的分片。
         """
         self.stop()
 
@@ -204,73 +56,102 @@ class FfmpegCapture:
 
         scale = f"{width}:{height}" if width > 0 and height > 0 else ""
 
+        if os.path.isdir(out_dir):
+            shutil.rmtree(out_dir, ignore_errors=True)
         os.makedirs(out_dir, exist_ok=True)
-        # 清理旧分片
-        for name in os.listdir(out_dir):
-            if name.startswith(segment_prefix) and name.endswith(".ts"):
-                try:
-                    os.remove(os.path.join(out_dir, name))
-                except OSError:
-                    pass
 
-        cmd = [self.ffmpeg, "-hide_banner", "-loglevel", "error",
-               "-nostdin"]
+        started_at = time.time()
+        cmd = [self.ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin"]
         cmd += self._video_input_args(source, fps, scale)
         # 视频占输入 0，音频输入从 1 起（amix 标签需此偏移）
         audio_input = self._audio_input_args(audio_cfg, input_offset=1)
         if audio_input:
             cmd += audio_input
-        # 输出段
         cmd += [
             "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
-            "-b:v", bitrate, "-pix_fmt", "yuv420p", "-g", str(fps * 2),
+            # 电视解码器普遍只认 Main profile（High 的 8x8 变换/CABAC 变长码
+            # 在老款渲染器上直接拒绝播放，表现为"换个分辨率就黑屏"）
+            "-profile:v", "main", "-level", "42",
+            "-b:v", str(bitrate), "-pix_fmt", "yuv420p", "-g", str(fps * 2),
             # 输入设备帧率失控时（macOS avfoundation 实测）按目标帧率 CFR 封顶
             "-r", str(fps),
+            # scenecut=0：屏幕内容几乎每帧都是"场景切换"，默认策略会在每次
+            # 切窗口时插 IDR，HLS 只能按关键帧切片，结果是几百毫秒的碎分片，
+            # 电视解析器直接放弃。固定 GOP + 闭合 GOP + 重复 SPS/PPS，
+            # 让每个分片都能独立起解。
+            "-x264-params", "scenecut=0:open_gop=0:repeat_headers=1",
         ]
         if audio_input:
             cmd += ["-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2"]
         else:
             cmd += ["-an"]
+        m3u8_path = os.path.join(out_dir, "live.m3u8")
         cmd += [
+            # 屏幕捕获帧到达是突发的（切窗口/滚动），默认 10 帧复用队列会溢出，
+            # FFmpeg 报 "Error queuing more packets" 后直接退出——表现为投屏中途断流
+            "-max_muxing_queue_size", "1024",
             "-f", "hls",
-            "-hls_time", "1",
+            "-hls_time", "2",
             "-hls_list_size", "6",
-            "-hls_flags", "delete_segments+independent_segments",
+            # temp_file：先写 .tmp 再改名。否则电视/浏览器可能在半截播放列表
+            # 上拿到没有 #EXTM3U 结尾的内容，判定流损坏
+            "-hls_flags", "delete_segments+independent_segments+temp_file",
             "-hls_segment_filename", os.path.join(out_dir, f"{segment_prefix}%03d.ts"),
-            os.path.join(out_dir, "live.m3u8"),
+            m3u8_path,
         ]
+
+        def _err(msg):
+            self._error = msg
+            logger.error(f"[ScreenCast] {msg}")
+            if on_error:
+                try:
+                    on_error(msg)
+                except Exception:
+                    logger.exception("[ScreenCast] HLS error callback failed")
 
         logger.info(f"[ScreenCast] HLS cmd: {' '.join(cmd)}")
         try:
             proc = self._spawn(cmd)
         except Exception as e:
-            self._error = f"启动 HLS 编码失败: {e}"
-            logger.error(self._error)
-            return {"ok": False, "error": self._error}
+            return {"ok": False, "error": f"启动 HLS 编码失败: {e}"}
 
-        self._procs.append(proc)
+        self._proc = proc
         self._running = True
+        self._stop_requested = False
+        self._threads.append(threading.Thread(
+            target=self._drain_stderr, args=(proc,), daemon=True,
+            name="ffmpeg-hls-stderr"))
+        self._threads[-1].start()
 
-        # 等待 m3u8 生成（最多 5s）
-        m3u8_path = os.path.join(out_dir, "live.m3u8")
-        deadline = time.time() + 5
+        # 等待首个播放列表生成（最多 8s）。必须在 m3u8 由本次进程新建之后
+        # 才算成功，否则会把上一轮残留的播放列表当成就绪信号。
+        deadline = time.time() + 8
+        ready = False
         while time.time() < deadline:
             if proc.poll() is not None:
-                self._error = "FFmpeg 提前退出，屏幕捕获失败"
-                logger.error(self._error)
-                self.stop()
-                return {"ok": False, "error": self._error}
-            if os.path.isfile(m3u8_path) and os.path.getsize(m3u8_path) > 0:
+                break
+            if os.path.isfile(m3u8_path) and os.path.getmtime(m3u8_path) >= started_at:
+                ready = True
                 break
             time.sleep(0.1)
-        if not (os.path.isfile(m3u8_path) and os.path.getsize(m3u8_path) > 0):
-            self._error = "HLS 输出超时未生成（屏幕捕获失败）"
-            logger.error(self._error)
+
+        if not ready:
+            if proc.poll() is not None:
+                _err(f"FFmpeg 提前退出（退出码 {proc.returncode}）"
+                     + self._stderr_hint())
+            else:
+                _err("HLS 输出超时未生成（屏幕捕获失败，可能是窗口不存在/权限未授予）")
             self.stop()
             return {"ok": False, "error": self._error}
 
+        self._threads.append(threading.Thread(
+            target=self._watch, args=(proc, m3u8_path, _err), daemon=True,
+            name="ffmpeg-hls-watch"))
+        self._threads[-1].start()
+
         logger.info(f"[ScreenCast] HLS capture started: {m3u8_path}")
-        return {"ok": True, "m3u8": m3u8_path}
+        return {"ok": True, "m3u8": m3u8_path,
+                "width": width or None, "height": height or None, "fps": fps}
 
     # ────────────────────────────────────────
     # 内部
@@ -282,9 +163,53 @@ class FfmpegCapture:
             creationflags = subprocess.CREATE_NO_WINDOW | getattr(
                 subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         return subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
             creationflags=creationflags, bufsize=0,
         )
+
+    def _drain_stderr(self, proc: subprocess.Popen):
+        """读取 FFmpeg stderr。不读满 64KB 管道会把 FFmpeg 卡死在写日志上"""
+        try:
+            for raw in iter(proc.stderr.readline, b""):
+                line = raw.decode("utf-8", "replace").rstrip()
+                if line:
+                    self._stderr_tail.append(line)
+                    logger.debug(f"[ScreenCast] ffmpeg: {line}")
+        except Exception:
+            pass
+
+    def _stderr_hint(self) -> str:
+        tail = [l for l in self._stderr_tail if l.strip()]
+        if not tail:
+            return ""
+        return "：" + " / ".join(tail[-3:])
+
+    def _watch(self, proc: subprocess.Popen, m3u8_path: str, _err: Callable):
+        """看门狗：FFmpeg 中途退出（窗口被关闭、设备被拔出）必须上报，
+        否则状态永远停在 running，用户既看不到画面也起不了下一次投屏"""
+        last_mtime = 0.0
+        stalled_since: Optional[float] = None
+        while not self._stop_requested:
+            time.sleep(1.0)
+            if self._stop_requested:
+                return
+            rc = proc.poll()
+            if rc is not None:
+                _err(f"屏幕捕获进程已退出（退出码 {rc}）" + self._stderr_hint())
+                return
+            try:
+                mtime = os.path.getmtime(m3u8_path)
+            except OSError:
+                continue
+            if mtime != last_mtime:
+                last_mtime = mtime
+                stalled_since = None
+            elif stalled_since is None:
+                stalled_since = time.time()
+            elif time.time() - stalled_since > 15:
+                _err("屏幕捕获已停止输出（画面卡住）")
+                self.stop()
+                return
 
     def _video_input_args(self, source: Dict, fps: int, scale: str) -> List[str]:
         from .ffmpeg_manager import FfmpegManager
@@ -295,17 +220,17 @@ class FfmpegCapture:
         return FfmpegManager.build_audio_input(audio_cfg, input_offset)
 
     def stop(self):
-        """停止所有捕获进程（幂等）"""
+        """停止捕获进程（幂等）"""
         with self._lock:
-            for t in self._threads:
-                t.stop()
-            for proc in self._procs:
-                if proc.poll() is None:
-                    try:
-                        proc.terminate()
-                    except Exception:
-                        pass
-            for proc in self._procs:
+            self._stop_requested = True
+            proc = self._proc
+            self._proc = None
+            if proc is not None and proc.poll() is None:
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+            if proc is not None:
                 try:
                     proc.wait(timeout=3)
                 except subprocess.TimeoutExpired:
@@ -313,8 +238,6 @@ class FfmpegCapture:
                         proc.kill()
                     except Exception:
                         pass
-            self._procs.clear()
-            self._threads.clear()
             self._running = False
 
     @property
