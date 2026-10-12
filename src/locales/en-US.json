@@ -135,6 +135,7 @@
   "screencast.noDevice": "No online device found, refresh the list first",
   "screencast.source": "Capture Source",
   "screencast.fullScreen": "Full Screen",
+  "screencast.screenTip": "With multiple displays, cast just one: \"Full Screen\" grabs the union of all monitors — squeezed image, higher bitrate, and older TVs may fail to decode it.",
   "screencast.window": "Window",
   "screencast.windowTitlePlaceholder": "Window title (e.g. Notepad)",
   "screencast.audio": "Audio",

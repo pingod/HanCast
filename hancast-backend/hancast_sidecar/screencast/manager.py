@@ -24,6 +24,8 @@ import threading
 from typing import Dict, Optional
 
 from ..utils import protocol_io
+from ..protocol.dlna import (build_didl_item, ControlUrlUnavailable,
+                             RendererUnresponsive)
 from .ffmpeg_manager import FfmpegManager
 from .capture import FfmpegCapture
 from .httpd import ScreenCastHttpd
@@ -34,6 +36,9 @@ logger = logging.getLogger("hancast.screencast.manager")
 # 超过这个窗口还没拉，基本可以判定是网络/防火墙或地址问题而不是"还在加载"
 DLNA_VERIFY_SECONDS = 12.0
 DLNA_VERIFY_POLL = 1.0
+
+# 直播 HLS 的 MIME：既写进 DIDL 的 protocolInfo，也用作 HTTP 响应类型
+HLS_MIME = "application/vnd.apple.mpegurl"
 
 
 def _hls_root() -> str:
@@ -144,6 +149,10 @@ class ScreenCastManager:
         state = dict(self._state)
         if state.get("session_id") and state.get("target") == "browser":
             state["viewers"] = self.httpd.viewers(state["session_id"])
+        if state.get("session_id"):
+            # 拉流证据：电视黑屏时「没人来拉」和「拉了但跟不上码率」是两种
+            # 完全不同的故障，只能靠这个区分（也供日志面板直接看）
+            state["pull"] = self.httpd.pull_stats(state["session_id"])
         state["ffmpeg"] = self.ffmpeg.check()
         return state
 
@@ -201,8 +210,17 @@ class ScreenCastManager:
         if target == "dlna":
             logger.info(f"[ScreenCast] DLNA push: {device_id} <- {m3u8_url}")
             session = self.handler._get_or_create_session(device_id)
+            didl = build_didl_item(
+                m3u8_url, HLS_MIME, f"{device.display_name} 屏幕投屏")
             try:
-                session.play(m3u8_url, "application/vnd.apple.mpegurl")
+                session.play(m3u8_url, HLS_MIME, metadata=didl)
+            except (ControlUrlUnavailable, RendererUnresponsive) as e:
+                logger.error(f"[ScreenCast] DLNA push not delivered: {e}")
+                try:
+                    self.handler._stop_cast({"device_id": device_id})
+                except Exception:
+                    pass
+                return {"ok": False, "error": str(e)}
             except Exception as e:
                 logger.error(f"[ScreenCast] DLNA play failed: {e}")
                 try:
@@ -210,7 +228,7 @@ class ScreenCastManager:
                 except Exception:
                     pass
                 return {"ok": False,
-                        "error": f"电视拒绝播放（{e.__class__.__name__}），"
+                        "error": f"电视拒绝播放（{str(e) or e.__class__.__name__}），"
                                  f"可换较低分辨率/码率后重试"}
             self._state.update({
                 "running": True, "target": "dlna", "source": source,
@@ -270,8 +288,12 @@ class ScreenCastManager:
             f"{device_name} 在 {DLNA_VERIFY_SECONDS:.0f} 秒内没有拉取播放列表："
             f"请确认电视与本机在同一网段、允许 HanCast 接收局域网连接，"
             f"或换较低分辨率重试")
-        logger.warning(f"[ScreenCast] dlna never pulled the playlist: "
-                       f"{device_name} <- {self._state.get('url')}")
+        stats = self.httpd.pull_stats(session_id)
+        logger.warning(
+            f"[ScreenCast] dlna never pulled the playlist: "
+            f"{device_name} <- {self._state.get('url')} "
+            f"(pulls={stats['pulls']} misses={stats['misses']} "
+            f"clients={stats['clients']})")
         self._emit()
 
     def _on_viewer_change(self, session_id: str, count: int):

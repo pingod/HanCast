@@ -23,6 +23,12 @@ from ..utils.platform_info import build_server_info
 
 logger = logging.getLogger("hancast.dlna")
 
+# 设备描述、SCPD、SOAP 控制都是链路内 HTTP：必须绕过系统代理。
+# macOS 的代理例外列表写成 CIDR（192.168.0.0/16）时 urllib 认不出来，
+# requests 会把发往电视/电脑的请求送进 127.0.0.1:7890 这类本地代理，
+# 代理一掉线就是「电视黑屏/设备发现不了」，日志里只剩一句超时。
+_NO_PROXY = {"http": "", "https": ""}
+
 # 应用版本，由 CommandHandler 构造 DLNAProtocol 时注入（见 set_app_version）。
 # 默认值仅用于单元测试直接实例化本模块的场景。
 _APP_VERSION = "0.0.0"
@@ -32,6 +38,36 @@ def set_app_version(version: str) -> None:
     """注入应用版本号，供 UPnP SERVER 头使用"""
     global _APP_VERSION
     _APP_VERSION = version
+
+
+def build_didl_item(uri: str, mime_type: str, title: str = "HanCast") -> str:
+    """构造 SetAVTransportURI 的 DIDL-Lite 元数据。
+
+    渲染器靠 res 的 protocolInfo 决定用哪套解码栈：直播 HLS 必须显式标成
+    application/vnd.apple.mpegurl，否则部分电视（尤其只走 URL 后缀猜类型的
+    型号）把它当普通文件下载，结果是收了命令却一次都不来拉流。
+    """
+    from xml.sax.saxutils import escape, quoteattr
+    return (
+        '<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" '
+        'xmlns:dc="http://purl.org/dc/elements/1.1/" '
+        'xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/">'
+        '<item id="0" parentID="-1" restricted="1">'
+        f'<dc:title>{escape(title or "HanCast")}</dc:title>'
+        '<upnp:class>object.item.videoItem</upnp:class>'
+        f'<res protocolInfo={quoteattr("http-get:*:" + mime_type + ":*")}>'
+        f'{escape(uri)}</res>'
+        '</item></DIDL-Lite>'
+    )
+
+
+class ControlUrlUnavailable(Exception):
+    """解析不出设备的 AVTransport 控制地址：SOAP 无处可发，电视根本没收过命令"""
+
+
+class RendererUnresponsive(Exception):
+    """设备控制服务返回 5xx：电视端的 DLNA 服务已退出或崩溃"""
+
 
 NS_AVTRANSPORT = "urn:schemas-upnp-org:service:AVTransport:1"
 NS_RENDERING = "urn:schemas-upnp-org:service:RenderingControl:1"
@@ -135,6 +171,7 @@ class DLNAProtocol:
     def __init__(self):
         self._device: Optional[Device] = None
         self._control_url: Optional[str] = None
+        self._last_resolve_attempt: float = 0.0
         self._renderer = None  # 渲染器引用，由 set_renderer() 设置
         self.running = False
         self.state_list = {}
@@ -324,14 +361,17 @@ class DLNAProtocol:
             time.sleep(0.3)
 
             # 设置 URI
-            self._send_action(
+            if self._send_action(
                 NS_AVTRANSPORT, "SetAVTransportURI",
                 {
                     "InstanceID": 0,
                     "CurrentURI": media_uri,
                     "CurrentURIMetaData": metadata,
                 }
-            )
+            ) is None:
+                raise ControlUrlUnavailable(
+                    f"{self._device.display_name} 的播放控制接口不可达"
+                    f"（没能解析出它的 AVTransport 地址）")
             self.set_state('CurrentTrackURI', media_uri)
 
             # 等待远端加载媒体（通过轮询 TrackDuration 判断）
@@ -684,18 +724,21 @@ class DLNAProtocol:
         self._last_set_uri_time = time.time()
         self.set_state_url(uri)
         title = "HanCast"
-        try:
-            meta = etree.fromstring(data['CurrentURIMetaData'].value.encode())
-            title_xml = meta.find('.//{{{}}}title'.format(meta.nsmap['dc']))
-            if title_xml is not None and title_xml.text is not None:
-                title = title_xml.text
-            metadata = etree.tostring(meta, encoding="UTF-8", xml_declaration=False)
-        except Exception as e:
-            logger.error(str(e))
-            logger.error(data['CurrentURIMetaData'].value)
-            self.set_state('CurrentTrackMetaData', data['CurrentURIMetaData'].value)
-        else:
-            self.set_state('CurrentTrackMetaData', metadata.decode())
+        # 不少控制器（含本项目的 Windows 端）会发空 DIDL，标签值甚至为 None；
+        # 直接 .encode() 抛 AttributeError，把一次正常投屏记成两条 ERROR
+        raw_meta = data['CurrentURIMetaData'].value
+        if raw_meta:
+            try:
+                meta = etree.fromstring(raw_meta.encode())
+                title_xml = meta.find('.//{{{}}}title'.format(meta.nsmap['dc']))
+                if title_xml is not None and title_xml.text is not None:
+                    title = title_xml.text
+                metadata = etree.tostring(
+                    meta, encoding="UTF-8", xml_declaration=False)
+                self.set_state('CurrentTrackMetaData', metadata.decode())
+            except Exception as e:
+                logger.warning(f"Unparsable CurrentURIMetaData: {e}")
+                self.set_state('CurrentTrackMetaData', raw_meta)
         self.set_state('CurrentTrackTitle', title)
         self.set_state('CurrentTrackURI', uri)
         self.set_state('RelativeTimePosition', '00:00:00')
@@ -832,45 +875,100 @@ class DLNAProtocol:
         return bool(self.get_state('DisplayCurrentSubtitle'))
 
     def _resolve_control_url(self):
-        """解析设备的控制 URL"""
+        """解析设备的 AVTransport 控制地址
+
+        设备描述并不固定在 /description.xml：TCL 电视（85T8G Max）只在根路径
+        "/" 提供描述，硬编码路径拿到 404 的 HTML 错误页，控制地址解析不出来，
+        之后每条 SOAP 都被静默跳过——电视一次都没收到投屏命令。
+        因此以 SSDP LOCATION / 手动添加命中的 URL 为基准，再回退常见路径。
+        """
         if not self._device:
             return
+        self._control_url = None
+        for desc_url in self._description_candidates():
+            root = self._fetch_device_root(desc_url)
+            if root is None:
+                continue
+            control_url = self._find_av_control_url(root, desc_url)
+            if control_url:
+                self._control_url = control_url
+                logger.info(
+                    f"Resolved control URL for {self._device.display_name}: "
+                    f"{control_url} (description: {desc_url})")
+                return
+            logger.debug(f"Description at {desc_url} has no AVTransport service")
+        logger.warning(
+            f"Cannot resolve AVTransport control URL for "
+            f"{self._device.ip}:{self._device.port} "
+            f"(tried: {', '.join(self._description_candidates())})")
 
-        url = f"http://{self._device.ip}:{self._device.port}/description.xml"
+    def _try_resolve_control_url(self, retry_after: float = 15.0) -> bool:
+        """控制地址缺失时低频重试（设备描述服务可能晚于投屏就绪）"""
+        now = time.monotonic()
+        if self._last_resolve_attempt and now - self._last_resolve_attempt < retry_after:
+            return bool(self._control_url)
+        self._last_resolve_attempt = now
+        self._resolve_control_url()
+        return bool(self._control_url)
+
+    def refresh_device(self, device: Device) -> None:
+        """替换设备信息并立即重解析控制地址"""
+        self._device = device
+        self._last_resolve_attempt = 0.0
+        self._resolve_control_url()
+
+    def _description_candidates(self) -> List[str]:
+        """设备描述的可能地址，按可信度排序"""
+        from urllib.parse import urljoin
+        base = (self._device.location or "").strip()
+        candidates: List[str] = []
+        if base.lower().startswith("http"):
+            candidates.append(base)
+        hostport = f"{self._device.ip}:{self._device.port}"
+        for path in ("/description.xml", "/root.xml", "/"):
+            url = f"http://{hostport}{path}"
+            if url not in candidates:
+                candidates.append(url)
+        if base.lower().startswith("http"):
+            # LOCATION 带子路径时，设备常把描述文件放在同一目录下
+            fallback = urljoin(base, "description.xml")
+            if fallback not in candidates:
+                candidates.append(fallback)
+        return candidates
+
+    def _fetch_device_root(self, url: str):
+        """抓取并解析设备描述 XML，失败返回 None"""
         try:
-            # 获取设备描述 XML
-            resp = requests.get(url, timeout=5)
-            logger.debug(f"Device description response: status={resp.status_code}, length={len(resp.content)}")
-
-            # 检查响应内容
-            if not resp.content:
-                logger.error(f"Empty response from device: {self._device.ip}:{self._device.port}")
-                return
-
-            # 尝试解析 XML
-            try:
-                root = etree.fromstring(resp.content)
-            except etree.XMLSyntaxError as xml_err:
-                logger.error(f"Invalid XML from device {self._device.ip}:{self._device.port}: {xml_err}")
-                logger.debug(f"Response content: {resp.content[:500]}")
-                return
-
-            # 查找 AVTransport 服务
-            ns = {"upnp": "urn:schemas-upnp-org:device-1-0"}
-            for service in root.iter('{urn:schemas-upnp-org:device-1-0}service'):
-                service_type = service.findtext('upnp:serviceType', '', ns)
-                if 'AVTransport' in service_type:
-                    control_url = service.findtext('upnp:controlURL', '', ns)
-                    if control_url:
-                        if not control_url.startswith('/'):
-                            control_url = '/' + control_url
-                        self._control_url = f"http://{self._device.ip}:{self._device.port}{control_url}"
-                        logger.debug(f"Control URL: {self._control_url}")
-                        break
+            resp = requests.get(url, timeout=5, proxies=_NO_PROXY)
+            if resp.status_code != 200 or not resp.content:
+                logger.debug(
+                    f"Description {url}: HTTP {resp.status_code}, "
+                    f"{len(resp.content)} bytes")
+                return None
+            return etree.fromstring(resp.content)
+        except etree.XMLSyntaxError as xml_err:
+            logger.debug(f"Invalid XML from {url}: {xml_err}")
+            return None
         except requests.RequestException as req_err:
-            logger.error(f"Failed to connect to device {self._device.ip}:{self._device.port}: {req_err}")
-        except Exception as e:
-            logger.error(f"Failed to resolve control URL from {url}: {e}")
+            logger.debug(f"Cannot reach {url}: {req_err}")
+            return None
+
+    @staticmethod
+    def _find_av_control_url(root, desc_url: str) -> Optional[str]:
+        """从设备描述里取 AVTransport 的 controlURL（相对描述地址解析）"""
+        from urllib.parse import urljoin
+        ns = {"upnp": "urn:schemas-upnp-org:device-1-0"}
+        for service in root.iter('{urn:schemas-upnp-org:device-1-0}service'):
+            service_type = service.findtext('upnp:serviceType', '', ns)
+            if 'AVTransport' not in service_type:
+                continue
+            control_url = service.findtext('upnp:controlURL', '', ns)
+            if not control_url:
+                continue
+            # RFC3986 相对解析：'AVTransport/x/control' 相对描述所在目录，
+            # '/AVTransport/x' 相对服务器根，绝对 URL 原样使用
+            return urljoin(desc_url, control_url)
+        return None
 
     def get_position_info(self) -> dict:
         """查询远程设备的播放进度 (GetPositionInfo)"""
@@ -944,9 +1042,11 @@ class DLNAProtocol:
             return {}
 
     def _send_action(self, service: str, action: str, params: dict):
-        """发送 SOAP 请求"""
-        if not self._control_url:
-            logger.debug("No control URL, skip action: %s", action)
+        """发送 SOAP 请求；控制地址不可用时返回 None（调用方按需报错）"""
+        if not self._control_url and not self._try_resolve_control_url():
+            logger.warning(
+                f"No control URL for {getattr(self._device, 'display_name', '?')}, "
+                f"skip action: {action}")
             return None
 
         logger.debug(f"SOAP OUT → {self._control_url} | {action} | params={params}")
@@ -981,10 +1081,24 @@ class DLNAProtocol:
                 data=xml_data,
                 headers=headers,
                 timeout=5,
+                proxies=_NO_PROXY,
             )
             response.raise_for_status()
         except requests.RequestException as e:
-            logger.error(f"SOAP {action} failed to {self._control_url}: {e}")
+            # DLNA 的失败原因只写在 SOAP Fault 正文里（error code 713=参数非法、
+            # 707=URI 不可用…），丢掉正文就等于只剩「电视拒绝播放」这种无信息报错
+            resp = getattr(e, "response", None)
+            fault = (resp.text or "")[:300].replace("\n", " ") if resp is not None else ""
+            logger.error(
+                f"SOAP {action} failed to {self._control_url}: {e} "
+                f"request={xml_data.decode('utf-8', 'replace')[:200]} "
+                f"fault={fault}")
+            if resp is not None and resp.status_code >= 500:
+                name = getattr(self._device, "display_name", "设备")
+                raise RendererUnresponsive(
+                    f"{name} 的 DLNA 控制服务返回 HTTP {resp.status_code}："
+                    f"电视端的投屏服务可能已退出，请在电视上打开"
+                    f"「多屏互动/无线投屏/DLNA」应用或重启电视后重试") from e
             raise
 
         logger.debug(f"SOAP OUT ← {response.status_code} | {action}")

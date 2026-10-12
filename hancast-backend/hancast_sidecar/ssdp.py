@@ -22,6 +22,12 @@ from .models.device import Device
 
 logger = logging.getLogger("hancast.ssdp")
 
+# 局域网内设备的 HTTP 请求必须绕过系统代理：macOS 的代理例外列表用 CIDR
+# （192.168.0.0/16）时 urllib 的匹配器认不出来，requests 会把设备描述抓取
+# 送进 127.0.0.1:7890/9565 这类本地代理；代理一掉线，现象就是「设备发现不了」
+# 且日志只有超时。DLNA 是链路内协议，本来也不该经路任何代理。
+_NO_PROXY = {"http": "", "https": ""}
+
 SSDP_PORT = 1900
 SSDP_ADDR = '239.255.255.250'
 SERVER_ID = 'SSDP Server'
@@ -153,6 +159,9 @@ class SSDPService:
         self._notify_bcast_dead = False
         # 最近一次设备发现走的通道（multicast / broadcast），用于日志定位
         self._discovery_via = "multicast"
+        # 上一轮 NOTIFY 实际发出的条数与通道（组播/广播兜底），供心跳日志
+        self._last_notify_count = 0
+        self._notify_channel = "multicast"
 
         # 已抓取过的设备描述缓存：location → 抓取时间。
         # 同一设备每 30s 会广播多条 NOTIFY（rootdevice/uuid/device/3×service），
@@ -163,6 +172,9 @@ class SSDPService:
         # 设备描述抓取去重窗口（秒）：同一设备 30s 广播多条 NOTIFY，
         # 窗口内只抓取一次
         self.fetch_dedup_window = 30.0
+        # location → 连续抓取失败次数：失败要重试（否则一次瞬断就把设备
+        # 藏住 30s 以上），但告警只打第一次，避免每轮刷屏
+        self._fetch_failures: Dict[str, int] = {}
 
         # 同一时刻只允许一个 M-SEARCH 扫描线程（避免用户连续点刷新时线程堆积）
         self._scan_lock = threading.Lock()
@@ -472,6 +484,14 @@ class SSDPService:
         (host, port) = host_port
         st = headers.get('st', '')
 
+        # 广播回退通道会把自家发出的 M-SEARCH 送回自己的 1900 监听口，
+        # 此时源地址是广播地址（或本机网卡 IP）。对它应答必然失败
+        # （应答套接字未开 SO_BROADCAST ⇒ Errno 49），每轮扫描白刷十几条 ERROR
+        if self._is_self_request(host):
+            logger.debug('Ignoring self-origin M-SEARCH from %s:%d' %
+                         (host, port))
+            return
+
         logger.debug('Discovery request from (%s,%d) for %s' %
                      (host, port, st))
 
@@ -540,6 +560,18 @@ class SSDPService:
         except (ValueError, AttributeError):
             return None
 
+    def _is_self_request(self, host: str) -> bool:
+        """判断 M-SEARCH 是否源自本机（含自己广播的自环回包）。"""
+        if host in ("255.255.255.255", SSDP_ADDR):
+            return True
+        own = {ip for ip, _ in self.ip_list}
+        if host in own:
+            return True
+        for ip, mask in self.ip_list:
+            if host == self._get_broadcast_ip(ip, mask):
+                return True
+        return False
+
     def _handle_notify(self, headers, host_port):
         """处理 NOTIFY 消息 — 设备上线/离线通知"""
         (host, port) = host_port
@@ -577,45 +609,80 @@ class SSDPService:
             parsed = urlparse(location)
             device_port = parsed.port or 80
 
-            resp = requests.get(location, timeout=5)
+            resp = requests.get(location, timeout=5, proxies=_NO_PROXY)
             resp.encoding = resp.apparent_encoding or 'utf-8'
             device = self._parse_device_description(
-                resp.text, ip, port=device_port)
-            if device:
-                # 检查设备是否应该被忽略（隐藏）
-                if self._should_ignore_device and self._should_ignore_device(device.id):
-                    logger.debug(f"Ignoring hidden device: {device.name} ({device.id})")
-                    return
-
-                with self._lock:
-                    if device.id not in self._devices:
-                        self._devices[device.id] = device
-                        logger.debug(f"Found device via NOTIFY: {device.name} ({device.ip})")
-                        if self._on_device_found:
-                            self._on_device_found(device)
-                    else:
-                        # 更新已有设备（保留用户自定义名称），不重复触发发现事件
-                        old = self._devices[device.id]
-                        if old.custom_name:
-                            device.custom_name = old.custom_name
-                        self._devices[device.id] = device
+                resp.text, ip, port=device_port, location=location)
+            self._fetch_failures.pop(location, None)
+            if device is None:
+                # 抓到了但认不出是 UPnP 设备：重抓无意义，留现场信息即可
+                logger.warning(
+                    "设备描述无法解析（非 UPnP 设备或 XML 损坏）: %s", location)
+                return
+            self._register_found_device(device, "NOTIFY")
         except Exception as e:
-            logger.debug(f"Failed to fetch device from NOTIFY: {e}")
+            # 抓取失败原本只记 DEBUG，且 location 已在去重表里 —— 一次瞬断
+            # 或一次防火墙拦截就把设备藏满整个去重窗口，用户看到的现象就是
+            # 「macOS 端发现不了 Windows 设备」，日志里还一行线索都没有。
+            # 失败改为放开去重（下轮 alive 重试），并首次/每 10 次告警。
+            n = self._fetch_failures.get(location, 0) + 1
+            self._fetch_failures[location] = n
+            self._fetched_locations[location] = 0.0
+            if n == 1 or n % 10 == 0:
+                logger.warning(
+                    "抓取设备描述失败 第%d次: %s（%s: %s）— 对端可能已离线，"
+                    "或其防火墙拦截了入站 HTTP（Windows 需在防火墙弹窗允许 "
+                    "HanCast 的专用/公用网络）", n, location,
+                    e.__class__.__name__, e)
+            else:
+                logger.debug("抓取设备描述重试中 第%d次: %s: %s", n, location, e)
+
+    def _register_found_device(self, device: Device, via: str = "NOTIFY") -> None:
+        """把发现到的设备并入设备表（保留用户改名，只在新增时通知前端）"""
+        if self._should_ignore_device and self._should_ignore_device(device.id):
+            logger.debug(f"Ignoring hidden device: {device.name} ({device.id})")
+            return
+        with self._lock:
+            old = self._devices.get(device.id)
+            if old is None:
+                self._devices[device.id] = device
+                logger.info(f"Found device via {via}: "
+                            f"{device.name} ({device.ip}:{device.port})")
+                if self._on_device_found:
+                    self._on_device_found(device)
+            else:
+                # 更新已有设备（保留用户自定义名称），不重复触发发现事件
+                if old.custom_name:
+                    device.custom_name = old.custom_name
+                self._devices[device.id] = device
 
     def _notify_loop(self):
         """每 30 秒发送 NOTIFY 广播（UPnP 规范允许最大 255 秒间隔）"""
+        round_no = 0
         while self._running:
             try:
                 self._do_notify()
+                round_no += 1
+                if round_no == 1 or round_no % 20 == 0:
+                    # 心跳：排查「对端发现不到本机」时，这是 alive 到底有没有
+                    # 发出去、走的组播还是广播兜底的唯一现场证据
+                    logger.info(
+                        "NOTIFY alive 心跳: 本轮 %d 条, 网卡 %s, 通道 %s",
+                        self._last_notify_count,
+                        ",".join(ip for ip, _ in self.ip_list) or "无",
+                        self._notify_channel)
                 for _ in range(30):
                     if not self._running:
                         return
                     time.sleep(1)
             except Exception as e:
                 logger.error(f"NOTIFY error: {e}")
+                time.sleep(5)
 
     def _do_notify(self):
         """发送 NOTIFY 广播（每个网卡每条 USN 仅发送一次）"""
+        sent_total = 0
+        self._notify_channel = 'multicast'
         for usn in self._known:
             logger.debug('Sending alive notification for %s' % usn)
             if usn not in self._known:
@@ -638,31 +705,35 @@ class SSDPService:
                 for s in self.sock_list:
                     if s.send_it('\r\n'.join(resp), (SSDP_ADDR, SSDP_PORT)):
                         sent = True
+                        sent_total += 1
                 if not sent:
                     # 组播通道全挂（系统策略阻断多播）：本机 renderer 对
                     # 手机侧不可见，退到子网广播把 alive 发出去
-                    self._notify_broadcast('\r\n'.join(resp))
+                    self._notify_channel = 'broadcast'
+                    sent_total += self._notify_broadcast('\r\n'.join(resp))
                 else:
                     logger.debug('NOTIFY sent for %s via %d interfaces' %
                                  (usn, len(self.sock_list)))
             except (AttributeError, socket.error) as msg:
                 logger.warning(
                     "failure sending out alive notification: %r" % msg)
+        self._last_notify_count = sent_total
 
-    def _notify_broadcast(self, template: str) -> None:
+    def _notify_broadcast(self, template: str) -> int:
         """NOTIFY 的组播兜底：向各接口子网广播地址发送同一份 alive 报文。
 
         与 M-SEARCH 的广播回退对称。HOST 头仍按 SSDP 规范写组播地址，
         多数控制点按 NT/NTS/USN 解析，不校验链路层地址。
+        返回本轮实际发出的条数（供心跳统计）。
         """
         if self._notify_bcast_dead:
-            return
+            return 0
         sock = None
+        sent_to = []
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
             sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
-            sent_to = []
             for ip, mask in self.ip_list:
                 bcast = self._get_broadcast_ip(ip, mask)
                 if not bcast:
@@ -688,6 +759,7 @@ class SSDPService:
         finally:
             if sock:
                 sock.close()
+        return len(sent_to)
 
     def _do_byebye(self):
         """发送 byebye"""
@@ -844,33 +916,34 @@ class SSDPService:
             device_port = 80
 
         try:
-            resp = requests.get(location, timeout=5)
+            resp = requests.get(location, timeout=5, proxies=_NO_PROXY)
             resp.encoding = resp.apparent_encoding or 'utf-8'
             device = self._parse_device_description(
-                resp.text, addr[0], port=device_port)
-            if device:
-                # 检查设备是否应该被忽略（隐藏）
-                if self._should_ignore_device and self._should_ignore_device(device.id):
-                    logger.debug(f"Ignoring hidden device: {device.name} ({device.id})")
-                    return
-
-                with self._lock:
-                    if device.id not in self._devices:
-                        self._devices[device.id] = device
-                        logger.debug(f"Found device: {device.name} ({device.ip})")
-                        if self._on_device_found:
-                            self._on_device_found(device)
-                    else:
-                        # 更新已有设备（保留用户自定义名称），不重复触发发现事件
-                        old = self._devices[device.id]
-                        if old.custom_name:
-                            device.custom_name = old.custom_name
-                        self._devices[device.id] = device
+                resp.text, addr[0], port=device_port, location=location)
+            self._fetch_failures.pop(location, None)
+            if device is None:
+                logger.warning(
+                    "设备描述无法解析（非 UPnP 设备或 XML 损坏）: %s", location)
+                return
+            self._register_found_device(device, "M-SEARCH")
         except Exception as e:
-            logger.debug(f"Failed to fetch device description: {e}")
+            # 同 NOTIFY 路径：失败必须放开去重，否则一次拦截就让设备
+            # 在接下来几轮刷新里持续缺席
+            n = self._fetch_failures.get(location, 0) + 1
+            self._fetch_failures[location] = n
+            self._fetched_locations[location] = 0.0
+            if n == 1 or n % 10 == 0:
+                logger.warning(
+                    "抓取设备描述失败 第%d次: %s（%s: %s）— 对端可能已离线，"
+                    "或其防火墙拦截了入站 HTTP（Windows 需在防火墙弹窗允许 "
+                    "HanCast 的专用/公用网络）", n, location,
+                    e.__class__.__name__, e)
+            else:
+                logger.debug("抓取设备描述重试中 第%d次: %s: %s", n, location, e)
 
     def _parse_device_description(self, xml_text: str, ip: str,
-                                  port: int = 8080) -> Optional[Device]:
+                                  port: int = 8080,
+                                  location: str = "") -> Optional[Device]:
         try:
             # 确保 XML 文本是字符串，然后编码为字节
             if isinstance(xml_text, bytes):
@@ -934,7 +1007,7 @@ class SSDPService:
             return Device(
                 id=udn, name=friendly_name, device_type=device_type,
                 ip=ip, port=port, status="online",
-                model_name=model_name, udn=udn,
+                model_name=model_name, udn=udn, location=location,
             )
         except Exception as e:
             logger.debug(f"XML parse error for {ip}: {e}")
@@ -962,7 +1035,7 @@ class SSDPService:
     # 常见 DLNA 服务器端口（MediaRenderer / DMS）
     _MANUAL_PORTS = (8080, 16514, 58880, 8200, 8888, 32400)
     # 常见设备描述路径
-    _MANUAL_PATHS = ("/description.xml", "/root.xml")
+    _MANUAL_PATHS = ("/description.xml", "/root.xml", "/")
     _MANUAL_TIMEOUT = 2.5
 
     def add_device_by_target(self, target: str) -> Device:
@@ -976,8 +1049,9 @@ class SSDPService:
             raise ValueError("请输入设备 IP 或描述地址")
 
         location, host, port = self._resolve_manual_target(target)
-        xml_text, used_port = self._fetch_description(location, host, port)
-        device = self._parse_device_description(xml_text, host, port=used_port)
+        xml_text, used_port, used_url = self._fetch_description(location, host, port)
+        device = self._parse_device_description(
+            xml_text, host, port=used_port, location=used_url)
         if not device:
             raise ValueError("该地址不是有效的 DLNA 设备描述")
 
@@ -1017,10 +1091,11 @@ class SSDPService:
 
     def _fetch_description(self, location: Optional[str], host: str,
                            port: Optional[int]):
-        """抓取设备描述 XML，返回 (xml, 端口)
+        """抓取设备描述 XML，返回 (xml, 端口, 命中的 URL)
 
         未直接命中时并发穷举常见端口×路径：串行穷举最坏 12 次 × 超时，
         会顶穿前端 60 秒命令超时，并发后上限就是一个探测超时。
+        命中的 URL 要随 Device 传下去——控制地址是相对它解析的。
         """
         from urllib.parse import urlparse
         from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -1033,7 +1108,8 @@ class SSDPService:
 
         def _probe(url):
             try:
-                resp = requests.get(url, timeout=self._MANUAL_TIMEOUT)
+                resp = requests.get(url, timeout=self._MANUAL_TIMEOUT,
+                                    proxies=_NO_PROXY)
                 if resp.status_code != 200:
                     return url, None, f"HTTP {resp.status_code}"
                 resp.encoding = resp.apparent_encoding or "utf-8"
@@ -1051,7 +1127,7 @@ class SSDPService:
                 if text is not None:
                     for other in futures:
                         other.cancel()
-                    return text, (urlparse(url).port or 80)
+                    return text, (urlparse(url).port or 80), url
                 errors.append(f"{url}: {err}")
         raise ValueError(
             "读取设备描述失败：" + (errors[0] if errors else "无响应"))

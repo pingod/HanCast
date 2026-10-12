@@ -15,6 +15,9 @@ class Device:
     model_name: Optional[str] = None
     udn: str = ""
     custom_name: Optional[str] = None  # 用户自定义名称
+    # SSDP LOCATION / 实际抓到的描述地址：设备描述未必在 /description.xml
+    # （TCL 电视只在根路径 "/" 提供），控制地址必须以它为基准解析
+    location: str = ""
 
     @property
     def display_name(self) -> str:

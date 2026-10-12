@@ -54,7 +54,8 @@ class FfmpegCapture:
         fps = int(video_cfg.get("fps") or 15)
         bitrate = video_cfg.get("bitrate") or "2M"
 
-        scale = f"{width}:{height}" if width > 0 and height > 0 else ""
+        from .ffmpeg_manager import FfmpegManager
+        vf = FfmpegManager.build_scale_filter(width, height)
 
         if os.path.isdir(out_dir):
             shutil.rmtree(out_dir, ignore_errors=True)
@@ -62,7 +63,7 @@ class FfmpegCapture:
 
         started_at = time.time()
         cmd = [self.ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin"]
-        cmd += self._video_input_args(source, fps, scale)
+        cmd += self._video_input_args(source, fps, vf)
         # 视频占输入 0，音频输入从 1 起（amix 标签需此偏移）
         audio_input = self._audio_input_args(audio_cfg, input_offset=1)
         if audio_input:
@@ -182,7 +183,17 @@ class FfmpegCapture:
         tail = [l for l in self._stderr_tail if l.strip()]
         if not tail:
             return ""
-        return "：" + " / ".join(tail[-3:])
+        # 「Error while opening encoder」是汇总行，真正的原因排在它前面
+        # （实测 "width not divisible by 2 (1921x1081)"）。只取最后三行的话，
+        # 用户和日志里就只剩一句看不出所以然的编码失败。
+        markers = ("not divisible", "Failed to", "Invalid argument",
+                   "Permission denied", "No such file", "Cannot open",
+                   "Device or resource busy")
+        reason = next((l for l in tail if any(m in l for m in markers)), None)
+        parts = tail[-3:]
+        if reason and reason not in parts:
+            parts = [reason] + parts
+        return "：" + " / ".join(parts)
 
     def _watch(self, proc: subprocess.Popen, m3u8_path: str, _err: Callable):
         """看门狗：FFmpeg 中途退出（窗口被关闭、设备被拔出）必须上报，
@@ -211,9 +222,9 @@ class FfmpegCapture:
                 self.stop()
                 return
 
-    def _video_input_args(self, source: Dict, fps: int, scale: str) -> List[str]:
+    def _video_input_args(self, source: Dict, fps: int, vf: str) -> List[str]:
         from .ffmpeg_manager import FfmpegManager
-        return FfmpegManager.build_video_input(source, fps, scale, self.ffmpeg)
+        return FfmpegManager.build_video_input(source, fps, vf, self.ffmpeg)
 
     def _audio_input_args(self, audio_cfg: Dict, input_offset: int = 0) -> List[str]:
         from .ffmpeg_manager import FfmpegManager

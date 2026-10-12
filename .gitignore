@@ -97,3 +97,9 @@ hancast-backend/mpv_diag.txt
 
 # pi 追踪目录
 .pi-traces/
+
+# 真机取证脚本（本地临时，不入库）
+.tmp-win/
+
+# 本地 cargo/tauri 冒烟构建残留的 Info.plist 桩
+src-tauri/Info.plist

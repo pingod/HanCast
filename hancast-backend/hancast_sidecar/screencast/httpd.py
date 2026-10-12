@@ -278,4 +278,12 @@ class ScreenCastHttpd:
             ctype = "application/octet-stream"
         # 直播列表每 1 秒重生成，缓存会让观众看到过期分片
         return web.FileResponse(path, headers={
-            "Content-Type": ctype, "Cache-Control": "no-cache, no-store"})
+            "Content-Type": ctype, "Cache-Control": "no-cache, no-store",
+            # DLNA 渲染器靠这两个头区分「边下边播」和「先下完再播」：缺
+            # transferMode 的直播播放列表会被部分电视当普通文件缓冲，
+            # 表现为控制器收到 Play 却迟迟等不到拉流请求
+            "transferMode.dlna.org": "Streaming",
+            "contentFeatures.dlna.org":
+                "DLNA.ORG_OP=01;DLNA.ORG_CI=0;"
+                "DLNA.ORG_FLAGS=01700000000000000000000000000000",
+        })

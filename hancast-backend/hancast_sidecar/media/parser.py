@@ -145,7 +145,10 @@ class MediaParser:
                     "-show_entries", "format=duration",
                     "-of", "csv=p=0", path
                 ],
-                capture_output=True, text=True, timeout=3
+                capture_output=True, text=True, timeout=3,
+                # 中文路径会让 cp936 解码抛错，异常被上层吞掉后表现为
+                # 「时长永远取不到」
+                encoding="utf-8", errors="replace"
             )
             if result.returncode == 0:
                 return float(result.stdout.strip())

@@ -20,6 +20,45 @@ logger = logging.getLogger("hancast.screencast.ffmpeg")
 _avf_screen_cache: Dict[str, Optional[int]] = {}
 _avf_screen_lock = threading.Lock()
 
+# 默认输出上限。多屏机器的「整个屏幕」是所有显示器的并集（现场实测
+# 4000x2571），既超出电视解码能力（Main profile 到 1080p 最稳），又会被
+# 2M 码率压成马赛克；奇数高度还会让 x264 直接拒绝初始化。
+DEFAULT_MAX_WIDTH = 1920
+DEFAULT_MAX_HEIGHT = 1080
+
+
+def _run_utf8(cmd: List[str], timeout: int) -> subprocess.CompletedProcess:
+    """跑 ffmpeg 枚举命令。
+
+    ffmpeg 往管道写的是 UTF-8，而 Windows 上 text=True 会按当前代码页
+    （简体中文 = cp936）解码，设备名/窗口标题里的中文直接抛
+    UnicodeDecodeError 并把读取线程干掉——枚举结果是空的。
+    """
+    return subprocess.run(
+        cmd, capture_output=True, text=True, timeout=timeout,
+        encoding="utf-8", errors="replace",
+        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+    )
+
+
+def _parse_screen_region(source_id: str) -> Optional[tuple]:
+    """解析显示器源 id "screen:x,y,w,h"，得到 gdigrab 的抓取区域。
+
+    解析不出（"desktop" 或脏数据）就返回 None —— 退回抓整个虚拟桌面。
+    """
+    if not source_id.startswith("screen:"):
+        return None
+    parts = source_id[len("screen:"):].split(",")
+    if len(parts) != 4:
+        return None
+    try:
+        x, y, w, h = (int(p) for p in parts)
+    except ValueError:
+        return None
+    if w <= 0 or h <= 0:
+        return None
+    return x, y, w, h
+
 
 def avfoundation_screen_index(ffmpeg_path: str) -> Optional[int]:
     """枚举 avfoundation 视频设备，返回 "Capture screen" 屏幕设备的索引。
@@ -34,11 +73,9 @@ def avfoundation_screen_index(ffmpeg_path: str) -> Optional[int]:
 
     idx: Optional[int] = None
     try:
-        result = subprocess.run(
+        result = _run_utf8(
             [ffmpeg_path, "-hide_banner", "-f", "avfoundation",
-             "-list_devices", "true", "-i", ""],
-            capture_output=True, text=True, timeout=10,
-        )
+             "-list_devices", "true", "-i", ""], 10)
         section = None
         for line in (result.stderr or "").splitlines():
             if "AVFoundation video devices" in line:
@@ -172,11 +209,7 @@ class FfmpegManager:
 
     def _validate(self, path: str) -> bool:
         try:
-            result = subprocess.run(
-                [path, "-version"],
-                capture_output=True, text=True, timeout=5,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
-            )
+            result = _run_utf8([path, "-version"], 5)
             return result.returncode == 0
         except (OSError, subprocess.TimeoutExpired):
             return False
@@ -184,11 +217,7 @@ class FfmpegManager:
     @staticmethod
     def _get_version(path: str) -> Optional[str]:
         try:
-            result = subprocess.run(
-                [path, "-version"],
-                capture_output=True, text=True, timeout=5,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
-            )
+            result = _run_utf8([path, "-version"], 5)
             first = (result.stdout or "").splitlines()
             if first:
                 return first[0].strip()
@@ -205,13 +234,14 @@ class FfmpegManager:
 
         返回:
             {
-              "screens": [{"id": "desktop", "title": "整个屏幕"}],
+              "screens": [{"id": "desktop"|"screen:x,y,w,h", "title": str, ...}],
               "windows": [{"id": "window:<title>", "title": "<title>"}],
               "audio_inputs": [{"name": "...", "kind": "mic|system"}],
               "ffmpeg": {...check()},
             }
         """
-        screens = [{"id": "desktop", "title": "整个屏幕"}]
+        screens = [{"id": "desktop", "title": "整个屏幕（所有显示器）"}]
+        screens += self._list_monitors()
         windows = self._list_windows()
         audio_inputs = self._list_audio_devices()
         return {
@@ -220,6 +250,64 @@ class FfmpegManager:
             "audio_inputs": audio_inputs,
             "ffmpeg": self.check(),
         }
+
+    def _list_monitors(self) -> List[Dict]:
+        """枚举单块显示器（Windows，ctypes EnumDisplayMonitors）
+
+        多屏机器上「整个屏幕」抓的是所有显示器的并集——现场实测
+        4000x2571：既超出电视解码能力，又是奇数高度（x264 直接拒绝初始化），
+        两块屏还会被压扁进同一帧。必须能只投其中一块屏。
+        """
+        if os.name != "nt":
+            return []
+        import ctypes
+        from ctypes import wintypes
+
+        primary_flag = 1
+        monitors: List[Dict] = []
+
+        class MONITORINFO(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.DWORD),
+                ("rcMonitor", wintypes.RECT),
+                ("rcWork", wintypes.RECT),
+                ("dwFlags", wintypes.DWORD),
+            ]
+
+        ENUM_PROC = ctypes.WINFUNCTYPE(
+            ctypes.c_bool, wintypes.HMONITOR, wintypes.HDC,
+            ctypes.POINTER(wintypes.RECT), wintypes.LPARAM)
+
+        def _callback(hmon, _hdc, _lprc, _lparam):
+            info = MONITORINFO()
+            info.cbSize = ctypes.sizeof(MONITORINFO)
+            if not ctypes.windll.user32.GetMonitorInfoW(hmon, ctypes.byref(info)):
+                return True
+            rect = info.rcMonitor
+            width = rect.right - rect.left
+            height = rect.bottom - rect.top
+            if width <= 0 or height <= 0:
+                return True
+            is_primary = bool(info.dwFlags & primary_flag)
+            label = f"显示器 {len(monitors) + 1} · {width}x{height}"
+            if is_primary:
+                label += "（主屏）"
+            monitors.append({
+                "id": f"screen:{rect.left},{rect.top},{width},{height}",
+                "title": label,
+                "width": width,
+                "height": height,
+                "primary": is_primary,
+            })
+            return True
+
+        try:
+            ctypes.windll.user32.EnumDisplayMonitors(
+                0, 0, ENUM_PROC(_callback), 0)
+        except Exception as e:
+            logger.warning(f"[ScreenCast] 显示器枚举失败: {e}")
+            return []
+        return monitors
 
     def _list_windows(self) -> List[Dict]:
         """枚举可见顶层窗口（Windows，ctypes EnumWindows）"""
@@ -267,12 +355,9 @@ class FfmpegManager:
         if os.name == "nt":
             # ffmpeg -list_devices true -f dshow -i dummy
             try:
-                result = subprocess.run(
+                result = _run_utf8(
                     [ffmpeg, "-hide_banner", "-list_devices", "true",
-                     "-f", "dshow", "-i", "dummy"],
-                    capture_output=True, text=True, timeout=8,
-                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
-                )
+                     "-f", "dshow", "-i", "dummy"], 8)
                 output = (result.stderr or "") + (result.stdout or "")
                 lines = output.splitlines()
                 current_kind = None
@@ -297,10 +382,9 @@ class FfmpegManager:
         elif sys.platform == "darwin":
             # avfoundation: ffmpeg -f avfoundation -list_devices true -i ""
             try:
-                result = subprocess.run(
-                    [ffmpeg, "-hide_banner", "-f", "avfoundation", "-list_devices", "true", "-i", ""],
-                    capture_output=True, text=True, timeout=8,
-                )
+                result = _run_utf8(
+                    [ffmpeg, "-hide_banner", "-f", "avfoundation",
+                     "-list_devices", "true", "-i", ""], 8)
                 output = (result.stderr or "") + (result.stdout or "")
                 section = None
                 for line in output.splitlines():
@@ -346,13 +430,28 @@ class FfmpegManager:
     # ────────────────────────────────────────
 
     @staticmethod
-    def build_video_input(source: Dict, fps: int, scale: str = "",
+    def build_scale_filter(width: int = 0, height: int = 0) -> str:
+        """构造缩放滤镜：压到电视可解的上限，并强制宽高为偶数。
+
+        x264 拒绝奇数尺寸（"width not divisible by 2" 后整个编码进程退出），
+        而桌面尺寸经常就是奇数——多屏并集实测 4000x2571，Windows 显示缩放
+        也会给出 1917x1081 这类值；force_divisible_by=2 是唯一兜底，
+        decrease 保证比上限小的源不被放大重编码。
+        """
+        w = int(width) if int(width or 0) > 0 else DEFAULT_MAX_WIDTH
+        h = int(height) if int(height or 0) > 0 else DEFAULT_MAX_HEIGHT
+        return (f"scale={w}:{h}:force_original_aspect_ratio=decrease"
+                ":force_divisible_by=2")
+
+    @staticmethod
+    def build_video_input(source: Dict, fps: int, vf: str = "",
                           ffmpeg_path: str = "") -> List[str]:
         """构造视频捕获输入参数（gdigrab / avfoundation / x11grab）
 
-        source: {"type": "screen"|"window", "id": "desktop"|"window:<title>", "title": str}
+        source: {"type": "screen"|"window",
+                 "id": "desktop"|"screen:x,y,w,h"|"window:<title>", "title": str}
         fps: 目标帧率
-        scale: 可选 "width:height" 缩放
+        vf: 完整 -vf 滤镜串（见 build_scale_filter）
         ffmpeg_path: 用于 macOS 动态枚举屏幕设备索引
         返回参数列表，不包含输出/编码段。
         """
@@ -364,7 +463,13 @@ class FfmpegManager:
                 title = source.get("title") or source.get("id", "").replace("window:", "", 1)
                 args += ["-i", f"title={title}"]
             else:
-                args += ["-framerate", str(fps), "-i", "desktop"]
+                args += ["-framerate", str(fps)]
+                region = _parse_screen_region(source.get("id") or "")
+                if region:
+                    x, y, w, h = region
+                    args += ["-offset_x", str(x), "-offset_y", str(y),
+                             "-video_size", f"{w}x{h}"]
+                args += ["-i", "desktop"]
         elif sys.platform == "darwin":
             # avfoundation 屏幕设备索引不固定（摄像头排在屏幕前面），动态枚举
             idx = avfoundation_screen_index(
@@ -382,8 +487,8 @@ class FfmpegManager:
             args += ["-f", "x11grab", "-framerate", str(fps),
                      "-i", os.environ.get("DISPLAY", ":0")]
 
-        if scale:
-            args += ["-vf", f"scale={scale}"]
+        if vf:
+            args += ["-vf", vf]
         return args
 
     @staticmethod

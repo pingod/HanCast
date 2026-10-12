@@ -67,6 +67,10 @@ def _app_sign(params: dict, appkey: str, appsec: str) -> str:
 class BiliResolver:
     """B站视频解析器"""
 
+    # Cookie 缓存有效期（秒）；必须是类属性——写成 __init__ 局部变量时
+    # self.COOKIE_CACHE_TTL 会在第二次解析（缓存已填充）抛 AttributeError
+    COOKIE_CACHE_TTL = 3600
+
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": UA, "Referer": REFERER})
@@ -74,8 +78,6 @@ class BiliResolver:
         # 反爬 Cookie 缓存（buvid3/buvid4 长期有效，无需每次解析都重新采集）
         self._cached_cookie: str | None = None
         self._cookie_fetched_at: float = 0.0
-        # Cookie 缓存有效期（秒）
-        COOKIE_CACHE_TTL = 3600
 
     def belongs_to(self, url: str) -> bool:
         """判断 URL 是否属于 B 站"""

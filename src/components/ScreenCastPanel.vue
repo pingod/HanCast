@@ -14,6 +14,7 @@ const deviceStore = useDeviceStore()
 // ── 表单状态 ──
 const target = ref<'dlna' | 'browser'>('browser')
 const sourceType = ref<'screen' | 'window'>('screen')
+const screenId = ref('desktop')
 const windowTitle = ref('')
 const deviceId = ref('')
 const micOn = ref(false)
@@ -59,13 +60,26 @@ const deviceOptions = computed(() =>
     .map(d => ({ value: d.id, label: d.name }))
 )
 
+const screenOptions = computed(() =>
+  (sc.sources?.screens ?? []).map(s => ({ value: s.id, label: s.title }))
+)
+
+// 多屏时默认投主屏：「整个屏幕」抓的是所有显示器的并集，
+// 画面被压扁、尺寸可能大到电视解不动（现场 4000x2571）
+watch(() => sc.sources?.screens, (screens) => {
+  if (!screens?.length) return
+  if (screens.some(s => s.id === screenId.value)) return
+  const primary = screens.find(s => s.primary)
+  screenId.value = screens.length > 1 && primary ? primary.id : 'desktop'
+}, { immediate: true })
+
 async function onStart() {
   const ok = await sc.start({
     target: target.value,
     ...(target.value === 'dlna' ? { device_id: deviceId.value } : {}),
     source: sourceType.value === 'window'
       ? { type: 'window', id: `window:${windowTitle.value}`, title: windowTitle.value }
-      : { type: 'screen', id: 'desktop' },
+      : { type: 'screen', id: screenId.value },
     audio: {
       mic: micOn.value,
       mic_device: micOn.value ? micDevice.value : undefined,
@@ -184,6 +198,14 @@ async function copyText(text: string) {
           :class="{ 'sc-target--active': sourceType === 'window' }"
           @click="sourceType = 'window'"
         >{{ t('screencast.window') }}</button>
+      </div>
+      <div v-if="sourceType === 'screen' && screenOptions.length > 1" class="sc-field">
+        <CustomSelect
+          :options="screenOptions"
+          :model-value="screenId"
+          @update:model-value="screenId = $event as string"
+        />
+        <div class="sc-empty-hint">{{ t('screencast.screenTip') }}</div>
       </div>
       <input
         v-if="sourceType === 'window'"

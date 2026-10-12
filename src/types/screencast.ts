@@ -5,6 +5,10 @@
 export interface ScreenSourceItem {
   id: string
   title: string
+  /** 仅显示器源（id 形如 screen:x,y,w,h）携带 */
+  width?: number
+  height?: number
+  primary?: boolean
 }
 
 export interface AudioDeviceItem {

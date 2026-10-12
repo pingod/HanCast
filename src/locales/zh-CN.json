@@ -135,6 +135,7 @@
   "screencast.noDevice": "未发现在线设备，请刷新设备列表",
   "screencast.source": "捕获源",
   "screencast.fullScreen": "整个屏幕",
+  "screencast.screenTip": "多屏时建议只投一块屏：「整个屏幕」抓的是所有显示器的并集，画面会被压缩、更吃码率，老电视还可能解不动。",
   "screencast.window": "指定窗口",
   "screencast.windowTitlePlaceholder": "输入窗口标题（如：记事本）",
   "screencast.audio": "音频",

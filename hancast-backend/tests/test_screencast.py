@@ -17,11 +17,15 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from lxml import etree
+
 from hancast_sidecar.screencast import manager as manager_mod
+from hancast_sidecar.screencast.manager import HLS_MIME, ScreenCastManager
 from hancast_sidecar.screencast.capture import FfmpegCapture
-from hancast_sidecar.screencast.ffmpeg_manager import FfmpegManager
+from hancast_sidecar.screencast.ffmpeg_manager import (
+    FfmpegManager, _parse_screen_region)
 from hancast_sidecar.screencast.httpd import ScreenCastHttpd
-from hancast_sidecar.screencast.manager import ScreenCastManager
+from hancast_sidecar.protocol.dlna import build_didl_item
 
 
 def _fake_proc():
@@ -47,18 +51,72 @@ class TestFfmpegManager(unittest.TestCase):
 
     def test_build_video_input_screen(self):
         args = FfmpegManager.build_video_input(
-            {"type": "screen", "id": "desktop"}, 15, "1280:720")
+            {"type": "screen", "id": "desktop"}, 15,
+            FfmpegManager.build_scale_filter(1280, 720))
         self.assertIn("-f", args)
         if os.name == "nt":
             self.assertIn("gdigrab", args)
             self.assertIn("desktop", args)
-            self.assertIn("scale=1280:720", args)
+            self.assertIn("scale=1280:720:force_original_aspect_ratio=decrease"
+                          ":force_divisible_by=2", args)
 
     def test_build_video_input_window(self):
         args = FfmpegManager.build_video_input(
             {"type": "window", "title": "记事本"}, 10, "")
         if os.name == "nt":
             self.assertIn("title=记事本", args)
+
+    def test_scale_filter_keeps_aspect_and_even_dims(self):
+        # 桌面尺寸常为奇数（多屏并集实测 4000x2571），x264 会直接拒绝初始化
+        self.assertEqual(
+            FfmpegManager.build_scale_filter(1921, 1081),
+            "scale=1921:1081:force_original_aspect_ratio=decrease"
+            ":force_divisible_by=2")
+
+    def test_scale_filter_defaults_to_tv_safe_cap(self):
+        self.assertEqual(
+            FfmpegManager.build_scale_filter(0, 0),
+            "scale=1920:1080:force_original_aspect_ratio=decrease"
+            ":force_divisible_by=2")
+        # 只给一个维度时不能退化成 "1280:0"
+        self.assertIn("scale=1280:1080:", FfmpegManager.build_scale_filter(1280, 0))
+
+    def test_parse_screen_region(self):
+        self.assertEqual(_parse_screen_region("screen:0,0,2560,1440"),
+                         (0, 0, 2560, 1440))
+        self.assertEqual(_parse_screen_region("screen:-1920,0,1920,1080"),
+                         (-1920, 0, 1920, 1080))
+        for bad in ("desktop", "window:记事本", "screen:1,2,3", "screen:a,b,c,d",
+                    "screen:0,0,0,1080"):
+            self.assertIsNone(_parse_screen_region(bad))
+
+    def test_monitor_region_reaches_gdigrab(self):
+        old = os.name
+        try:
+            os.name = "nt"
+            args = FfmpegManager.build_video_input(
+                {"type": "screen", "id": "screen:1920,0,1920,1080"}, 15, "")
+        finally:
+            os.name = old
+        self.assertEqual(
+            args[args.index("-offset_x") + 1], "1920")
+        self.assertEqual(
+            args[args.index("-offset_y") + 1], "0")
+        self.assertEqual(
+            args[args.index("-video_size") + 1], "1920x1080")
+        # 抓取参数必须排在 -i 之前，否则 gdigrab 用默认整屏
+        self.assertLess(args.index("-video_size"), args.index("desktop"))
+
+    def test_monitor_region_falls_back_to_desktop(self):
+        old = os.name
+        try:
+            os.name = "nt"
+            args = FfmpegManager.build_video_input(
+                {"type": "screen", "id": "desktop"}, 15, "")
+        finally:
+            os.name = old
+        self.assertNotIn("-offset_x", args)
+        self.assertIn("desktop", args)
 
     def test_build_audio_input_none(self):
         self.assertEqual(FfmpegManager.build_audio_input({}), [])
@@ -488,6 +546,26 @@ class TestManagerContract(unittest.TestCase):
         mgr.handler._stop_cast.assert_called_once_with({"device_id": "tv1"})
         self.assertFalse(mgr._state["running"])
         self.assertEqual(mgr._state["error"], "屏幕捕获进程已退出（退出码 1）")
+
+
+class TestHlsDidl(unittest.TestCase):
+    """DLNA 推送必须自带 DIDL：渲染器靠 res 的 protocolInfo 选解码栈"""
+
+    def test_advertises_hls_mime_and_title(self):
+        uri = "http://192.168.1.68:8765/hls/a50d42/live.m3u8"
+        didl = build_didl_item(uri, HLS_MIME, '屏幕投屏 <"HanCast">')
+        self.assertIn(f"http-get:*:{HLS_MIME}:*", didl)
+        self.assertIn("&lt;\"HanCast\"&gt;", didl)
+        root = etree.fromstring(didl.encode())
+        ns = {"d": "urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/",
+              "upnp": "urn:schemas-upnp-org:metadata-1-0/upnp/"}
+        self.assertEqual(root.find("d:item/d:res", ns).text, uri)
+        self.assertEqual(
+            root.find("d:item/upnp:class", ns).text, "object.item.videoItem")
+
+    def test_empty_title_falls_back(self):
+        self.assertIn("<dc:title>HanCast</dc:title>",
+                      build_didl_item("http://x/y.m3u8", HLS_MIME, ""))
 
 
 if __name__ == "__main__":

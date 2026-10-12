@@ -399,7 +399,12 @@ class CommandHandler:
     def _get_or_create_session(self, device_id: str) -> DeviceCastSession:
         """获取或创建设备投屏会话"""
         if device_id in self.device_sessions:
-            return self.device_sessions[device_id]
+            session = self.device_sessions[device_id]
+            live = self.ssdp.get_device(device_id)
+            if live and live.location != session.device.location:
+                # 描述地址变了（如修复前发现的老设备）：重解析控制地址
+                session.refresh_device(live)
+            return session
 
         # 创建新会话
         device = self.ssdp.get_device(device_id)

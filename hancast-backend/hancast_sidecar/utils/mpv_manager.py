@@ -174,6 +174,9 @@ class MpvManager:
                 [path, "--version"],
                 capture_output=True,
                 text=True,
+                # mpv 输出按 UTF-8 写；Windows 上默认按 cp936 解码，
+                # 用户名/路径含中文时解码异常会让校验直接失败
+                encoding="utf-8", errors="replace",
                 timeout=5,
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
             )

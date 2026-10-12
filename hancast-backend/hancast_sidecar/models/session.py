@@ -39,13 +39,23 @@ class DeviceCastSession:
 
         logger.info(f"DeviceCastSession created for: {device.display_name} ({device.ip})")
 
-    def play(self, media_uri: str, mime_type: str = "") -> None:
+    def refresh_device(self, device: Device) -> None:
+        """换用最新的设备记录并重解析控制地址
+
+        老会话里的 Device 可能是修复前发现的（没有描述地址），控制地址解析
+        不出来就只能一直「推送成功但电视黑屏」。
+        """
+        self.device = device
+        self.protocol.refresh_device(device)
+
+    def play(self, media_uri: str, mime_type: str = "",
+             metadata: str = "") -> None:
         """播放媒体"""
         # 如果是本地文件，通过媒体服务器提供 HTTP 访问
         if not media_uri.startswith("http"):
             media_uri = self.media_server.serve_file(media_uri)
 
-        self.protocol.play(media_uri)
+        self.protocol.play(media_uri, metadata)
         self.cast_state.status = "playing"
         # 从协议状态同步 URL/title（协议 state dict 在 play() 时已更新）
         self.cast_state.position = self.protocol.get_state_position() or "00:00:00"
