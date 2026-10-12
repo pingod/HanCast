@@ -231,3 +231,49 @@ def test_description_fetch_bypasses_system_proxy(service, monkeypatch):
     monkeypatch.setattr("hancast_sidecar.ssdp.requests.get", fake_get)
     service._fetch_device_from_notify(LOC, "192.168.1.68")
     assert seen.get("proxies") == {"http": "", "https": ""}
+
+
+def test_own_ip_list_excludes_virtual_nic_style_addresses(service):
+    # 本机地址算「自己」，异机地址必须照抓
+    service.ip_list = [("192.168.1.5", "255.255.255.0"),
+                       ("192.168.215.0", "255.255.255.0")]
+    assert service._is_own_location("http://192.168.215.0:8080/description.xml")
+    assert service._is_own_location("http://192.168.1.5:8080/description.xml")
+    assert not service._is_own_location(LOC)
+    assert not service._is_own_location("urn:schemas-upnp-org:service:AVTransport:1")
+    assert not service._is_own_location("://bad url")
+
+
+def test_self_announce_is_not_fetched_on_either_path(service, monkeypatch, caplog):
+    calls = []
+    monkeypatch.setattr(service, "_fetch_device_from_notify",
+                        lambda loc, ip: calls.append((loc, ip)))
+    monkeypatch.setattr("hancast_sidecar.ssdp.requests.get",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            requests.ConnectionError("[Errno 49] Can't assign requested address")))
+    service.ip_list = [("192.168.1.5", "255.255.255.0"),
+                       ("192.168.215.0", "255.255.255.0")]
+    own = "http://192.168.215.0:8080/description.xml"
+
+    with caplog.at_level(logging.WARNING):
+        # 广播兜底把自家 NOTIFY 送回自己的 1900 口
+        service._handle_notify({"nts": "ssdp:alive", "location": own,
+                               "usn": "uuid:hc"}, ("192.168.1.5", 1900))
+        # M-SEARCH 的 200 OK 里同样带着自己的 LOCATION
+        service._parse_response(
+            "HTTP/1.1 200 OK\r\nLOCATION: %s\r\n" % own, ("192.168.1.5", 1900))
+        time.sleep(0.2)
+
+    assert calls == []
+    assert [r for r in caplog.records if "抓取设备描述失败" in r.getMessage()] == []
+
+
+def test_foreign_announce_still_fetched(service, monkeypatch):
+    calls = []
+    monkeypatch.setattr(service, "_fetch_device_from_notify",
+                        lambda loc, ip: calls.append((loc, ip)))
+    service.ip_list = [("192.168.1.5", "255.255.255.0")]
+    service._handle_notify({"nts": "ssdp:alive", "location": LOC,
+                            "usn": "uuid:win"}, ("192.168.1.68", 1900))
+    time.sleep(0.3)
+    assert calls == [(LOC, "192.168.1.68")]

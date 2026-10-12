@@ -572,6 +572,23 @@ class SSDPService:
                 return True
         return False
 
+    def _is_own_location(self, location: str) -> bool:
+        """LOCATION 的主机部分是否就是本机自己的网卡地址。
+
+        广播兜底通道会把自家发出的 NOTIFY 送回自己的 1900 监听口，于是 sidecar
+        去抓自己通告的描述。真实网卡（192.168.1.5）能连通、只是白跑一趟，但
+        VMware/UTM 一类虚拟网卡挂的是网段地址（192.168.215.0、192.168.148.0），
+        connect 直接 Errno 49，结果是设备列表里根本没有这个东西，日志却被
+        「抓取设备描述失败」每轮刷满。"""
+        try:
+            from urllib.parse import urlparse
+            host = urlparse(location).hostname
+        except Exception:
+            return False
+        if not host:
+            return False
+        return host in {ip for ip, _ in self.ip_list}
+
     def _handle_notify(self, headers, host_port):
         """处理 NOTIFY 消息 — 设备上线/离线通知"""
         (host, port) = host_port
@@ -583,6 +600,10 @@ class SSDPService:
 
         location = headers.get('location', '')
         if not location:
+            return
+
+        if self._is_own_location(location):
+            logger.debug('Ignoring self-announce NOTIFY for %s' % location)
             return
 
         # 去重：同一 location 在去重窗口内不重复抓取
@@ -898,6 +919,10 @@ class SSDPService:
 
         location = headers.get("LOCATION")
         if not location:
+            return
+
+        if self._is_own_location(location):
+            logger.debug('Ignoring self-announce response for %s' % location)
             return
 
         # 去重：与 NOTIFY 路径共用缓存，避免同一设备被重复抓取描述
