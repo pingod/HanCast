@@ -24,6 +24,11 @@ from lxml import etree
 
 logger = logging.getLogger("hancast.guard")
 
+# 对端设备的描述抓取属于链路内 HTTP，必须绕开系统代理（详见 ssdp._NO_PROXY：
+# macOS 代理例外列表写 CIDR 时非豁免地址会被送进本地代理，代理一掉线，
+# 投屏来源就被识别成「未知设备」）
+_NO_PROXY = {"http": "", "https": ""}
+
 # SSDP 常量
 SSDP_PORT = 1900
 SSDP_ADDR = '239.255.255.250'
@@ -531,7 +536,7 @@ class DeviceGuard:
             # 如果 USN 中没有 UDN，尝试从 description.xml 获取
             if not udn:
                 try:
-                    resp = requests.get(location, timeout=1)
+                    resp = requests.get(location, timeout=1, proxies=_NO_PROXY)
                     if resp.status_code == 200:
                         device_info = self._parse_description_xml(resp.content, caller_ip)
                         if device_info:
@@ -544,7 +549,7 @@ class DeviceGuard:
                 friendly_name = caller_ip
                 model_name = ""
                 try:
-                    resp = requests.get(location, timeout=1)
+                    resp = requests.get(location, timeout=1, proxies=_NO_PROXY)
                     if resp.status_code == 200:
                         device_info = self._parse_description_xml(resp.content, caller_ip)
                         if device_info:
@@ -588,7 +593,7 @@ class DeviceGuard:
             """尝试从指定端口获取设备信息，返回 (port, device_info)"""
             try:
                 url = f"http://{caller_ip}:{port}/description.xml"
-                resp = requests.get(url, timeout=1)
+                resp = requests.get(url, timeout=1, proxies=_NO_PROXY)
                 if resp.status_code != 200:
                     return None
 
