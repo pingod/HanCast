@@ -4,6 +4,7 @@ import MediaInput from '@/components/MediaInput.vue'
 import DeviceList from '@/components/DeviceList.vue'
 import CastController from '@/components/CastController.vue'
 import ScreenCastPanel from '@/components/ScreenCastPanel.vue'
+import StopWarningBanner from '@/components/StopWarningBanner.vue'
 import Footer from '@/components/Footer.vue'
 import AutostartPromptModal from '@/components/AutostartPromptModal.vue'
 import { useCastStore } from '@/stores/cast'
@@ -43,6 +44,11 @@ const { isRunning: screenCastRunning } = storeToRefs(screenCastStore)
       </div>
 
       <MediaInput />
+      <!-- 停止未送达告警：控制器/投屏条在停止后都会关闭，只有页面能留住这句话 -->
+      <StopWarningBanner
+        :warning="castStore.stopWarning"
+        @close="castStore.dismissStopWarning()"
+      />
       <DeviceList />
     </main>
     <Footer />

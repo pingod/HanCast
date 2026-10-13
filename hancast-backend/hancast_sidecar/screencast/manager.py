@@ -133,16 +133,24 @@ class ScreenCastManager:
 
         target = self._state.get("target")
         device_id = self._state.get("device_id")
+        control_failed: list = []
+        reasons: Dict[str, str] = {}
         if target == "dlna":
             try:
-                self.handler._stop_cast(
+                res = self.handler._stop_cast(
                     {"device_id": device_id} if device_id else {})
+                control_failed = res.get("control_failed") or []
+                reasons = res.get("reasons") or {}
             except Exception as e:
                 logger.warning(f"[ScreenCast] dlna stop: {e}")
+                control_failed = [device_id] if device_id else []
+                reasons = {device_id: str(e)} if device_id else {}
 
         self._teardown()
         self._emit()
-        return {"ok": True}
+        # 分片目录已删、HTTP 服务已停，电视顶多把缓冲播完；但 Stop 没送达时
+        # 必须让前端知道，否则用户以为「停止」= 电视已经回到待机。
+        return {"ok": True, "control_failed": control_failed, "reasons": reasons}
 
     def status(self) -> Dict:
         """当前投屏状态"""

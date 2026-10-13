@@ -15,6 +15,7 @@ import {
   setMute as apiSetMute,
   getAutostart,
 } from '@/api/commands'
+import type { StopWarning } from '@/api/commands'
 
 /** Parse "HH:MM:SS" to total seconds */
 function parseTimeToSeconds(time: string): number {
@@ -38,6 +39,9 @@ export const useCastStore = defineStore('cast', () => {
 
   // ── Embedded controller modal state ──
   const showController = ref(false)
+
+  // 「点了停止但电视没确认收到 Stop」的设备与原因，由界面翻译成一句话展示
+  const stopWarning = ref<StopWarning | null>(null)
 
   // ── Autostart prompt state ──
   const showAutostartPrompt = ref(false)
@@ -301,6 +305,7 @@ export const useCastStore = defineStore('cast', () => {
   // ── Cast actions ──
   async function startCast(deviceId: string, mediaUri: string, mediaInfo?: { title?: string; mime_type?: string; thumbnail?: string | null }) {
     loading.value = true
+    stopWarning.value = null
     try {
       await apiStartCast(deviceId, mediaUri, mediaInfo?.mime_type)
       // Preserve existing session's volume/mute if restarting on same device
@@ -365,13 +370,28 @@ export const useCastStore = defineStore('cast', () => {
 
   async function stopCast(deviceId?: string) {
     loading.value = true
+    stopWarning.value = null
+    const ids = deviceId ? [deviceId] : Object.keys(sessions.value)
+    const names = ids.map((id) => sessions.value[id]?.device_name ?? id)
+    let failed: string[] = []
+    let reasons: string[] = []
     try {
-      await apiStopCast(deviceId)
+      const res = await apiStopCast(deviceId)
+      failed = res?.control_failed ?? []
+      const map = res?.reasons ?? {}
+      reasons = failed.map((id) => map[id] ?? '')
+    } catch (err) {
+      // 命令层本身失败（sidecar 超时/异常）时无法确认电视收到 Stop
+      console.error('Failed to stop cast:', err)
+      failed = ids
+      reasons = ids.map(() => String(err))
+    } finally {
+      // 本地会话一律先释放：留着它只会让界面停在「正在投屏」，
+      // 而这正是用户抱怨的「怎么点都停不掉」
       if (deviceId) {
         stopSim(deviceId)
         removeSession(deviceId)
       } else {
-        // Stop all
         stopAllSim()
         sessions.value = {}
         focusedDeviceId.value = null
@@ -381,9 +401,12 @@ export const useCastStore = defineStore('cast', () => {
         stopPolling()
         showController.value = false
       }
-    } catch (err) {
-      console.error('Failed to stop cast:', err)
-    } finally {
+      if (failed.length) {
+        stopWarning.value = {
+          devices: failed.map((id) => names[ids.indexOf(id)] ?? id),
+          reasons: reasons.filter(Boolean),
+        }
+      }
       loading.value = false
     }
   }
@@ -571,6 +594,7 @@ export const useCastStore = defineStore('cast', () => {
     activeDeviceIds,
     loading,
     showController,
+    stopWarning,
 
     // Autostart prompt
     showAutostartPrompt,
@@ -607,5 +631,6 @@ export const useCastStore = defineStore('cast', () => {
 
     // Autostart prompt actions
     closeAutostartPrompt: () => { showAutostartPrompt.value = false },
+    dismissStopWarning: () => { stopWarning.value = null },
   }
 })

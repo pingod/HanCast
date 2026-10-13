@@ -36,6 +36,8 @@ class DeviceCastSession:
         self._poll_running = False
         self._poll_thread: Optional[threading.Thread] = None
         self._poll_callback: Optional[Callable] = None
+        # 最近一次 stop() 未送达的原因（None = 已送达或尚未停止）
+        self.stop_error: Optional[str] = None
 
         logger.info(f"DeviceCastSession created for: {device.display_name} ({device.ip})")
 
@@ -70,16 +72,25 @@ class DeviceCastSession:
     def stop(self) -> bool:
         """停止播放。
 
-        返回 False 表示远端 Stop 动作失败（设备失联时必然如此），但本地会话
-        一律已经释放——调用方必须照常丢弃该会话，否则残留会话会让用户
-        「怎么点都停不掉投屏」。
+        返回 False 表示远端没有确认收到 Stop（设备失联、控制服务已退出、或
+        本机根本没解析出它的控制地址），但本地会话一律已经释放——调用方必须
+        照常丢弃该会话，否则残留会话会让用户「怎么点都停不掉投屏」。
+        失败原因记在 `stop_error`，供前端把「界面停了但电视还在播」讲清楚。
         """
         self.stop_poll()
+        self.stop_error = None
         ok = True
         try:
-            self.protocol.stop()
+            if not self.protocol.stop():
+                ok = False
+                self.stop_error = (
+                    f"{self.device.display_name} 的播放控制接口不可达，"
+                    f"停止指令没有送达")
+                logger.warning(f"Stop action skipped for "
+                               f"{self.device.display_name}: no control URL")
         except Exception as e:
             ok = False
+            self.stop_error = str(e) or e.__class__.__name__
             logger.warning(
                 f"Stop action failed for {self.device.display_name}: {e}")
         self.cast_state.status = "idle"

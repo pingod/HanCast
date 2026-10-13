@@ -67,6 +67,7 @@
   "cast.paused": "已暂停",
   "cast.error": "出错了",
   "cast.stop": "停止投屏",
+  "cast.stopNotDelivered": "本机已停止，但 {devices} 没有确认收到停止指令，画面可能仍在播放。",
   "cast.closeImage": "关闭图片",
   "cast.play": "播放",
   "cast.pause": "暂停",

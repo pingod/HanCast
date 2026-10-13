@@ -1,6 +1,8 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { defineStore } from 'pinia'
 import type { UnlistenFn } from '@tauri-apps/api/event'
+import type { StopWarning } from '@/api/commands'
+import { useDeviceStore } from '@/stores/device'
 import type {
   ScreenSources,
   ScreenCastState,
@@ -23,6 +25,8 @@ export const useScreenCastStore = defineStore('screencast', () => {
   const stopping = ref(false)
   const showPanel = ref(false)
   const lastError = ref<string | null>(null)
+  // 电视没确认收到 Stop 时的告警（分片已删，但电视可能还在播缓冲）
+  const stopWarning = ref<StopWarning | null>(null)
 
   // ── Computed ──
   const isRunning = computed(() => state.value.running)
@@ -62,6 +66,7 @@ export const useScreenCastStore = defineStore('screencast', () => {
   async function start(params: ScreenCastStartParams) {
     starting.value = true
     lastError.value = null
+    stopWarning.value = null
     try {
       const result = await apiStartScreenCast(params)
       if (!result.ok) {
@@ -81,12 +86,35 @@ export const useScreenCastStore = defineStore('screencast', () => {
 
   async function stop() {
     stopping.value = true
+    stopWarning.value = null
+    // fetchStatus 之后 state 已被重置，设备身份要先摘下来
+    const deviceId = state.value.device_id
+    const isDlna = state.value.target === 'dlna'
+    let failed: string[] = []
+    let reasons: string[] = []
     try {
-      await apiStopScreenCast()
-      await fetchStatus()
+      const res = await apiStopScreenCast()
+      failed = res?.control_failed ?? []
+      const map = res?.reasons ?? {}
+      reasons = failed.map((id) => map[id] ?? '')
     } catch (err) {
       console.error('Failed to stop screencast:', err)
+      // 命令层本身失败时无法确认电视收到 Stop
+      if (isDlna && deviceId) {
+        failed = [deviceId]
+        reasons = [String(err)]
+      }
     } finally {
+      await fetchStatus()
+      if (failed.length) {
+        const deviceStore = useDeviceStore()
+        stopWarning.value = {
+          devices: failed.map(
+            (id) => deviceStore.devices.find((d) => d.id === id)?.name ?? id
+          ),
+          reasons: reasons.filter(Boolean),
+        }
+      }
       stopping.value = false
     }
   }
@@ -115,6 +143,7 @@ export const useScreenCastStore = defineStore('screencast', () => {
 
   function closePanel() {
     showPanel.value = false
+    stopWarning.value = null
   }
 
   // ── Event listeners ──
@@ -153,6 +182,7 @@ export const useScreenCastStore = defineStore('screencast', () => {
     stopping,
     showPanel,
     lastError,
+    stopWarning,
     isRunning,
     ffmpegOk,
     micDevices,
@@ -165,5 +195,6 @@ export const useScreenCastStore = defineStore('screencast', () => {
     setFfmpegPath,
     openPanel,
     closePanel,
+    dismissStopWarning: () => { stopWarning.value = null },
   }
 })

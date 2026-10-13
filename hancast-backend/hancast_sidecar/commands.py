@@ -483,22 +483,31 @@ class CommandHandler:
 
         先摘会话再发 SOAP Stop：设备关机/切源/掉线时 Stop 必然抛错，若让它
         冒泡到命令循环，会话永远留在 device_sessions 里，用户点多少次都停不掉。
+
+        反过来，本地会话释放了并不等于电视真的停了：`control_failed` 必须一路
+        传到前端，否则「界面关了、电视还在播」会被当成一次成功的停止。
         """
         device_id = params.get("device_id")
         targets = [device_id] if device_id else list(self.device_sessions.keys())
         failed = []
+        reasons = {}
         for did in targets:
             session = self.device_sessions.pop(did, None)
             if session is None:
                 continue
             if not session.stop():
                 failed.append(did)
+                reasons[did] = session.stop_error or "停止指令未送达"
+                logger.error(
+                    f"Cast stopped locally but device {did} did not confirm: "
+                    f"{reasons[did]}")
             self._emit_session_state(did, session.cast_state)
 
         if not self.device_sessions or device_id == self.cast_state.device_id:
             self.cast_state.status = "idle"
             self.cast_state.device_id = None
-        return {"ok": True, "stopped": targets, "control_failed": failed}
+        return {"ok": True, "stopped": targets, "control_failed": failed,
+                "reasons": reasons}
 
     def _emit_session_state(self, device_id: str, state) -> None:
         event_data = {

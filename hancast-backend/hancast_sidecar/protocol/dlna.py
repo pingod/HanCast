@@ -402,14 +402,21 @@ class DLNAProtocol:
             time.sleep(0.3)
         return False
 
-    def stop(self):
-        """停止播放"""
+    def stop(self) -> bool:
+        """停止播放，返回 Stop 动作是否真的送达远端。
+
+        控制地址解析不出来时 `_send_action` 只记 warning 并返回 None——若不把
+        这个结果带出去，调用方会把「一条指令都没发出去」当成「已停止」，
+        用户看到 UI 关了、电视却还在播，这正是「投屏停不下来」的形态。
+        """
+        delivered = True
         if self._device:
-            self._send_action(
+            delivered = self._send_action(
                 NS_AVTRANSPORT, "Stop",
                 {"InstanceID": 0}
-            )
+            ) is not None
         self.set_state('TransportState', 'STOPPED')
+        return delivered
 
     def pause(self):
         """暂停播放"""

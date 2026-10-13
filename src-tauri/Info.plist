@@ -2,15 +2,22 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- macOS 15+ 把「本地网络」做成 TCC 权限：Info.plist 里没有
-	     NSLocalNetworkUsageDescription 的应用不会弹窗询问，而是被静默拒绝。
-	     表现全部集中在投屏链路上——出站组播 [Errno 65] No route to host
-	     （SSDP 发不出去，只能靠子网广播兜底），入站 LAN 连接握手后零字节。
-	     2026-10-13 在同一台机器上实测：给已装的 2.2.11 补这一条并重签名后，
-	     NOTIFY 心跳立刻从「通道 broadcast / 18 条」变成「通道 multicast / 24 条」，
-	     从 192.168.1.5:8080 抓 description.xml 也返回 200。
+	<!-- macOS 15+ 把「本地网络」做成 TCC 权限：缺声明的应用不会弹窗询问，
+	     而是被静默拒绝。表现全部集中在投屏链路上——出站组播
+	     [Errno 65] No route to host（SSDP 发不出去，只能靠子网广播兜底），
+	     入站 LAN 连接握手后零字节。
+	     两条都要写，缺一不可（2026-10-13 在同一台机器上对同一份 CI 产物做的 A/B）：
+	       只写 NSLocalNetworkUsageDescription → 心跳仍是「通道 broadcast」+ Errno 65；
+	       再补 NSBonjourServices=["_upnp._tcp"] 并重签名 → 「通道 multicast / 24 条」，
+	       入站 http://192.168.1.5:8080/description.xml 返回 200 / 2224 字节。
+	     组播的收发在 Apple 那边归 Bonjour/mDNS 管辖，所以要按 UPnP 规范报出
+	     _upnp._tcp；本程序不使用其它 Bonjour 服务类型，多写等于白要权限。
 	     这个文件必须纳入版本控制：CI 从仓库构建，本地未跟踪的副本不会进产物。 -->
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>HanCast 需要访问本地网络，用于发现局域网内的 DLNA 电视与投屏设备并与它们通信。</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_upnp._tcp</string>
+	</array>
 </dict>
 </plist>

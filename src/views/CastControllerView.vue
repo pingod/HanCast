@@ -3,6 +3,7 @@ import { computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useCastStore } from '@/stores/cast'
 import { useDeviceStore } from '@/stores/device'
+import StopWarningBanner from '@/components/StopWarningBanner.vue'
 
 const { t } = useI18n()
 const castStore = useCastStore()
@@ -85,6 +86,10 @@ onMounted(async () => {
 
 <template>
   <div class="ctrl" data-tauri-drag-region>
+    <StopWarningBanner
+      :warning="castStore.stopWarning"
+      @close="castStore.dismissStopWarning()"
+    />
 
     <!-- ═══ 图片模式：仅标题 + 停止 ═══ -->
     <template v-if="isImage">

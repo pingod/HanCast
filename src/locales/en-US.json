@@ -67,6 +67,7 @@
   "cast.paused": "Paused",
   "cast.error": "Error",
   "cast.stop": "Stop Casting",
+  "cast.stopNotDelivered": "Stopped locally, but {devices} did not confirm the stop command — playback may continue.",
   "cast.closeImage": "Close Image",
   "cast.play": "Play",
   "cast.pause": "Pause",

@@ -92,7 +92,7 @@ const MOCK_DEVICES: Device[] = [
 const MOCK_SETTINGS: AppSettings = {
   usn: 'hancast-uuid-001',
   friendly_name: 'HanCast',
-  version: '2.2.12',
+  version: '2.2.13',
   media_port: 8080,
   default_device: null,
   network_interface: '',
@@ -223,6 +223,8 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
         position: '00:02:15',
         status: 'PLAYING',
       } as T
+    case 'stop_cast':
+      return { ok: true, stopped: [], control_failed: [], reasons: {} } as T
     case 'get_guard_devices':
       return {
         trusted: [],
@@ -244,8 +246,8 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
     case 'check_update':
       return {
         has_update: false,
-        current: '2.2.12',
-        latest: '2.2.12',
+        current: '2.2.13',
+        latest: '2.2.13',
         url: '',
         body: '',
         source: 'github',
@@ -269,7 +271,7 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
     case 'start_screen_cast':
       return { ok: true, target: 'browser', session_id: 'abc123', watch_url: 'http://127.0.0.1:8765/r/abc123' } as T
     case 'stop_screen_cast':
-      return { ok: true } as T
+      return { ok: true, control_failed: [], reasons: {} } as T
     case 'screen_cast_status':
       return { running: false, ffmpeg: { ok: true } } as T
     case 'set_ffmpeg_path':
@@ -458,9 +460,25 @@ export async function startCast(deviceId: string, mediaUri: string, mimeType?: s
   await invoke('start_cast', { deviceId, mediaUri, mimeType })
 }
 
-export async function stopCast(deviceId?: string): Promise<void> {
+// 停止类命令的返回体：control_failed 是「本地会话已释放、但电视没确认收到
+// Stop」的设备列表，前端必须据此提示，不能把「界面关了」当成「电视停了」。
+export interface StopCastResult {
+  ok: boolean
+  stopped?: string[]
+  control_failed?: string[]
+  reasons?: Record<string, string>
+  already_stopped?: boolean
+}
+
+/** 界面用的停止告警：哪些设备没确认收到 Stop、以及后端给的原因 */
+export interface StopWarning {
+  devices: string[]
+  reasons: string[]
+}
+
+export async function stopCast(deviceId?: string): Promise<StopCastResult> {
   const invoke = await initInvoke()
-  await invoke('stop_cast', deviceId ? { deviceId } : {})
+  return invoke<StopCastResult>('stop_cast', deviceId ? { deviceId } : {})
 }
 
 export async function pauseCast(deviceId?: string): Promise<void> {
@@ -638,9 +656,9 @@ export async function startScreenCast(params: ScreenCastStartParams): Promise<{ 
   return invoke('start_screen_cast', { params })
 }
 
-export async function stopScreenCast(): Promise<{ ok: boolean }> {
+export async function stopScreenCast(): Promise<StopCastResult> {
   const invoke = await initInvoke()
-  return invoke('stop_screen_cast')
+  return invoke<StopCastResult>('stop_screen_cast')
 }
 
 export async function getScreenCastStatus(): Promise<ScreenCastState> {

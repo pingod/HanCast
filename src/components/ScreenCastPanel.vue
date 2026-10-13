@@ -3,6 +3,7 @@ import { ref, computed, watch, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Modal from '@/components/Modal.vue'
 import CustomSelect from '@/components/CustomSelect.vue'
+import StopWarningBanner from '@/components/StopWarningBanner.vue'
 import { useScreenCastStore } from '@/stores/screencast'
 import { useDeviceStore } from '@/stores/device'
 import { writeClipboardText } from '@/api/commands'
@@ -313,6 +314,9 @@ async function copyText(text: string) {
     <div v-if="sc.lastError" class="sc-error">
       <div class="sc-error-title">{{ sc.lastError }}</div>
     </div>
+
+    <!-- 电视没确认收到停止指令 -->
+    <StopWarningBanner :warning="sc.stopWarning" @close="sc.dismissStopWarning()" />
 
     <template #actions>
       <button v-if="!sc.isRunning" class="btn-cancel" @click="sc.closePanel()">

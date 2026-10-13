@@ -318,11 +318,12 @@ async fn start_cast(
 async fn stop_cast(
     sidecar: State<'_, SidecarManager>,
     device_id: Option<String>,
-) -> Result<(), String> {
+) -> Result<serde_json::Value, String> {
+    // 返回体里的 control_failed 不能丢：本地会话已释放、但电视没收到 Stop 时，
+    // 前端要靠它解释「界面停了、电视还在播」。
     sidecar
         .send_command("stop_cast", serde_json::json!({"device_id": device_id}))
-        .await?;
-    Ok(())
+        .await
 }
 
 #[tauri::command]
