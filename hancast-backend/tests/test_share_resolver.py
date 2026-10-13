@@ -16,17 +16,21 @@ import os
 import json
 import shutil
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
 import requests
 
 from hancast_sidecar.media.server import (
-    MediaHandler, _content_range_total, _is_leech_placeholder, _rewrite_playlist,
+    MediaHandler, _content_range_total, _disguise_offset, _disguised_ts,
+    _is_leech_placeholder, _needs_bare_retry, _rewrite_playlist,
+    player_ext_ok, player_safe_suffix,
 )
 from hancast_sidecar.media.share_resolver import (
-    ShareResolver, extract_candidates, _EXT_MIME, _ext_of,
-    _master_variant_url, _stream_candidates_from_text, UnplayableSource,
+    ShareResolver, extract_candidates, _EXT_MIME, _ascii_url, _ext_of,
+    _master_variant_url, _nested_media_urls, _stream_candidates_from_text,
+    UnplayableSource,
 )
 
 
@@ -36,9 +40,10 @@ class FakeMediaServer:
     def __init__(self):
         self.proxies: list[str] = []
 
-    def register_proxy(self, remote_url: str, headers: dict = None) -> str:
+    def register_proxy(self, remote_url: str, headers: dict = None,
+                       suffix: str = "") -> str:
         self.proxies.append(remote_url)
-        return f"http://127.0.0.1:9/proxy/{len(self.proxies)}"
+        return f"http://127.0.0.1:9/proxy/{len(self.proxies)}{suffix}"
 
 
 def _no_follow(url, session, referer, deadline, _hop=0):
@@ -116,6 +121,74 @@ class TestExtractCandidates(unittest.TestCase):
             with self.assertRaises(ValueError):
                 resolver.resolve('推广 https://ads.example.com/lp 快看 https://b23.tv/AbCdEf')
         self.assertEqual(tried[0], "https://b23.tv/AbCdEf")
+
+
+CJK_M3U8 = ("https://m3.example.com:907/hls7/"
+            "%E7%94%9F%E5%8C%96%E5%8D%B1%E6%9C%BA%EF%BC%9A%E7%88%86%E5%8F%91%E5%A4%9C.m3u8")
+# 采集站的真实形态：iframe → 播放器壳，壳把真流地址塞在 url= 里（4kcz / 站群模板）
+SHELL = ("https://plaa.example.com:8181/player/py.php?code=cs&if=1&url="
+         "https://m3.example.com:907/hls7/生化危机：爆发夜.m3u8")
+
+
+class TestCollectSiteExtraction(unittest.TestCase):
+    """采集站三坑：真流藏在壳地址的 query 里、文件名是中文、分片伪装成 .png"""
+
+    def test_non_ascii_url_is_percent_encoded(self):
+        self.assertEqual(_ascii_url("https://m3.example.com:907/hls7/生化危机：爆发夜.m3u8"),
+                         CJK_M3U8)
+        # 幂等：已经编码过的地址不再动
+        self.assertEqual(_ascii_url(CJK_M3U8), CJK_M3U8)
+        # 纯 ASCII 与相对路径原样保留
+        self.assertEqual(_ascii_url("/api/m3u8?id=1"), "/api/m3u8?id=1")
+        self.assertEqual(_ascii_url("https://a.example/x.mp4?t=1"),
+                         "https://a.example/x.mp4?t=1")
+
+    def test_nested_stream_url_is_unwrapped(self):
+        self.assertEqual(_nested_media_urls(SHELL), [CJK_M3U8])
+        # 二次编码的壳地址同样能解出来
+        from urllib.parse import quote
+        self.assertEqual(_nested_media_urls(
+            "https://p.example/x.php?url=" + quote(CJK_M3U8, safe="")), [CJK_M3U8])
+        # 普通地址不该被拆
+        self.assertEqual(_nested_media_urls("https://a.example/x.mp4?t=1"), [])
+
+    def test_page_scan_yields_unwrapped_normalized_stream(self):
+        html = f'<html><body><iframe src="{SHELL}"></iframe></body></html>'
+        cands = _stream_candidates_from_text(html)
+        self.assertIn(CJK_M3U8, cands)
+        # 壳排在前面（保持文档顺序），交给 _stream_rank 决定谁先验证
+        self.assertLess(cands.index(CJK_M3U8), len(cands))
+
+    def test_disguised_segment_extension_forces_local_proxy(self):
+        """分片是 .png：字节能解，但播放器按后缀白名单拒绝拉 → 只能走代理"""
+        resolver = ShareResolver(FakeMediaServer(), rules_dir=_isolated_rules_dir(self))
+        playlist = b"#EXTM3U\n#EXT-X-TARGETDURATION:10\n#EXTINF:10,\nhttps://cdn.example/1.png\n"
+        peeked: list[str] = []
+
+        def fake_peek(url, deadline, use_range=True):
+            peeked.append(url)
+            return (playlist if url.endswith(".m3u8")
+                    else b"\x89PNG\r\n\x1a\n", "text/html", 200)
+
+        with patch.object(ShareResolver, "_peek", side_effect=fake_peek):
+            self.assertFalse(resolver._tv_can_fetch(
+                "https://m3.example.com:907/hls7/x.m3u8",
+                "application/vnd.apple.mpegurl", time.monotonic() + 20))
+        # 后缀不合规时分片根本不该被请求
+        self.assertEqual(peeked, ["https://m3.example.com:907/hls7/x.m3u8"])
+
+    def test_friendly_segment_extension_still_delivered_direct(self):
+        resolver = ShareResolver(FakeMediaServer(), rules_dir=_isolated_rules_dir(self))
+        playlist = b"#EXTM3U\n#EXTINF:10,\nhttps://cdn.example/1.ts\n"
+
+        def fake_peek(url, deadline, use_range=True):
+            return (playlist if url.endswith(".m3u8") else b"G\x47\x00\x10",
+                    "video/mp2t", 200)
+
+        with patch.object(ShareResolver, "_peek", side_effect=fake_peek):
+            self.assertTrue(resolver._tv_can_fetch(
+                "https://cdn.example/a.m3u8", "application/vnd.apple.mpegurl",
+                time.monotonic() + 20))
 
 
 PAGE_HTML = """<html><head>
@@ -440,9 +513,9 @@ class TestMediaProxyRewrite(unittest.TestCase):
         self.addCleanup(self._base.stop)
         self.registered: list[tuple[str, dict]] = []
 
-        def fake_register(cls, remote_url, headers=None):
-            self.registered.append((remote_url, headers))
-            return f"/proxy/{len(self.registered):012x}"
+        def fake_register(cls, remote_url, headers=None, suffix=""):
+            self.registered.append((remote_url, headers, suffix))
+            return f"/proxy/{len(self.registered):012x}{suffix}"
 
         self._reg = patch.object(MediaHandler, "register", classmethod(fake_register))
         self._reg.start()
@@ -454,14 +527,29 @@ class TestMediaProxyRewrite(unittest.TestCase):
                 '#EXTINF:10,\n/api/ts?i=0\n')
         out = _rewrite_playlist(text, "https://box.example.com/api/m3u8?id=1",
                                {"Cookie": "sion_id=6ac4"})
-        self.assertIn('URI="http://192.168.1.9:8080/proxy/000000000001"', out)
-        self.assertIn("http://192.168.1.9:8080/proxy/000000000003", out)
+        # 密钥/分片/子列表都要带一个播放器认账的后缀，否则 mpv 与电视按
+        # 扩展名白名单直接把分片判死（"blocked for security reasons"）
+        self.assertIn('URI="http://192.168.1.9:8080/proxy/000000000001.ts"', out)
+        self.assertIn("http://192.168.1.9:8080/proxy/000000000002.m3u8", out)
+        self.assertIn("http://192.168.1.9:8080/proxy/000000000003.ts", out)
         self.assertNotIn("/api/ts", out)
         self.assertEqual(
-            [u for u, _ in self.registered],
-            ["https://k.example.com/k.bin", "https://box.example.com/api/m3u8?id=2&x=1",
-             "https://box.example.com/api/ts?i=0"])
-        self.assertTrue(all(h == {"Cookie": "sion_id=6ac4"} for _, h in self.registered))
+            [(u, s) for u, _, s in self.registered],
+            [("https://k.example.com/k.bin", ".ts"),
+             ("https://box.example.com/api/m3u8?id=2&x=1", ".m3u8"),
+             ("https://box.example.com/api/ts?i=0", ".ts")])
+        self.assertTrue(all(h == {"Cookie": "sion_id=6ac4"} for _, h, _ in self.registered))
+
+    def test_player_suffix(self):
+        """伪装成图片的 TS 分片：给代理路径换成 .ts，字节原样透传"""
+        self.assertEqual(player_safe_suffix("https://f.cdn/x/y_1.png"), ".ts")
+        self.assertEqual(player_safe_suffix("https://f.cdn/x/y_1.ts?k=a"), ".ts")
+        self.assertEqual(player_safe_suffix("https://f.cdn/x/init.mp4"), ".mp4")
+        self.assertEqual(player_safe_suffix("https://f.cdn/api/m3u8?id=1"), ".m3u8")
+        self.assertEqual(player_safe_suffix("https://f.cdn/proxy/abcdef"), ".ts")
+        self.assertTrue(player_ext_ok("https://f.cdn/a.mp4?x=1"))
+        self.assertFalse(player_ext_ok("https://f.cdn/a.png"))
+        self.assertFalse(player_ext_ok("https://f.cdn/m3u8"))
 
     def test_leech_placeholder_detection(self):
         self.assertTrue(_is_leech_placeholder(b"\x89PNG\r\n\x1a\n"))
@@ -469,6 +557,141 @@ class TestMediaProxyRewrite(unittest.TestCase):
         self.assertTrue(_is_leech_placeholder(b"<!DOCTYPE html>"))
         self.assertFalse(_is_leech_placeholder(b"G\x00\x00\x00\x00"))
         self.assertFalse(_is_leech_placeholder(b"\x00\x00\x00 ftypisom"))
+
+    def test_disguised_ts_is_not_a_placeholder(self):
+        """61 字节假 PNG 头 + 188 对齐的 TS：是真分片，代理要剥头再转发"""
+        stub = b"\x89PNG\r\n\x1a\n" + b"\x00" * 8 + b"IHDR" + b"\x00" * 41
+        head = stub + b"".join(b"\x47\x40\x11\x00" + b"\x00" * 184 for _ in range(4))
+        self.assertEqual(len(stub), 61)
+        self.assertTrue(_is_leech_placeholder(head[:6]))
+        self.assertEqual(_disguise_offset(head), 61)
+        self.assertTrue(_disguised_ts(head))
+        # 真海报图：没有 TS 对齐，不许剥字节
+        self.assertEqual(_disguise_offset(b"\x89PNG\r\n\x1a\n" + b"\x00" * 1024), 0)
+        # 裸 TS（无伪装头）不动
+        self.assertEqual(_disguise_offset(head[61:]), 0)
+        # 首块太短判不出来就不动，宁可少剥也不要剥错
+        self.assertEqual(_disguise_offset(head[:400]), 0)
+
+    def test_peek_upstream_accumulates_small_chunks(self):
+        """分块编码下首块可能只有几十字节：peek 要累计到够判型的长度"""
+        class Resp:
+            @staticmethod
+            def iter_content(chunk_size=1024):
+                data = b"".join(b"\x47\x40\x11\x00" + b"\x00" * 184 for _ in range(8))
+                for i in range(0, len(data), 40):
+                    yield data[i:i + 40]
+
+        head = MediaHandler._peek_upstream(Resp())
+        self.assertGreaterEqual(len(head), 1024)
+
+    def test_proxy_bare_retry_predicate(self):
+        """页面域头可能就是被拒的原因，4xx 时该用裸 UA 再试一次"""
+        self.assertTrue(_needs_bare_retry({"Referer": "https://a.example/p"}))
+        self.assertTrue(_needs_bare_retry({"Cookie": "t=1", "User-Agent": "x"}))
+        self.assertFalse(_needs_bare_retry({"User-Agent": "x"}))
+
+    def test_proxy_strips_disguise_for_range_requests(self):
+        """播放器一定带 Range：bytes=0-… 也要剥伪装头
+
+        剥过头就不能再宣称「这是从 0 开始的区间」，ffmpeg 的 http.c 会报
+        Unexpected offset 直接拒收，所以按整条资源（200）应答。
+        """
+        status, hdrs, body = self._drive_proxy("bytes=0-")
+        self.assertEqual(status, 200)
+        self.assertEqual(hdrs["Content-Type"], "video/mp2t")
+        self.assertEqual(hdrs["Content-Length"], str(len(body)))
+        self.assertNotIn("Content-Range", hdrs)
+        self.assertEqual(body, self._DISGUISED_TS[61:])
+        self.assertEqual(len(body), len(self._DISGUISED_TS) - 61)
+
+    def test_proxy_strips_disguise_without_range(self):
+        """电视不带 Range：照旧剥头，状态按上游 200 透传"""
+        status, hdrs, body = self._drive_proxy(None)
+        self.assertEqual(status, 200)
+        self.assertEqual(body, self._DISGUISED_TS[61:])
+        self.assertNotIn("Content-Range", hdrs)
+
+    def test_proxy_leaves_mid_range_untouched(self):
+        """拖拽后的分段请求从文件中间开始，那里没有伪装头，不许动字节"""
+        status, hdrs, body = self._drive_proxy("bytes=4000-8000")
+        self.assertEqual(status, 206)
+        self.assertEqual(body, self._DISGUISED_TS)
+        self.assertEqual(hdrs["Content-Type"], "image/png")
+
+    def _drive_proxy(self, range_header):
+        from io import BytesIO
+        from hancast_sidecar.media import server as srv
+
+        class Resp:
+            url = "https://file.icve.com.cn/rc/a.png"
+
+            def __init__(self, data):
+                self.status_code = 206 if range_header else 200
+                self.headers = {"Content-Type": "image/png",
+                                "Content-Length": str(len(data))}
+                if range_header:
+                    self.headers["Content-Range"] = f"bytes 0-{len(data) - 1}/{len(data)}"
+                    self.headers["Accept-Ranges"] = "bytes"
+                self._parts = [data]
+
+            def iter_content(self, chunk_size=1024):
+                # 与真实流一致：peek 读过的字节不会在后续转发里重复出现
+                while self._parts:
+                    yield self._parts.pop(0)
+
+            def close(self):
+                pass
+
+        sent: dict = {}
+        h = MediaHandler.__new__(MediaHandler)
+        h.path = "/proxy/abc.ts"
+        h.headers = {} if range_header is None else {"Range": range_header}
+        h.proxy_targets = {h.path: "https://file.icve.com.cn/rc/a.png"}
+        h.proxy_headers = {h.path: {"Referer": "https://www.4kcz.com/v/1.html"}}
+        h.wfile = BytesIO()
+        h.send_response = lambda code: sent.__setitem__("status", code)
+        h.send_header = lambda k, v: sent.setdefault("headers", {}).__setitem__(k, v)
+        h.end_headers = lambda: None
+        h.send_error = lambda code, msg=None: sent.__setitem__("status", code)
+
+        with patch.object(srv, "upstream_get",
+                          return_value=Resp(self._DISGUISED_TS)):
+            h._handle_proxy()
+        return sent["status"], sent.get("headers", {}), h.wfile.getvalue()
+
+    _DISGUISED_TS = (b"\x89PNG\r\n\x1a\n" + b"\x00" * 8 + b"IHDR" + b"\x00" * 41
+                    + b"".join(b"\x47\x40\x11\x00" + b"\x00" * 184 for _ in range(4)))
+
+    def test_upstream_get_falls_back_to_direct(self):
+        """系统代理端口一坏（127.0.0.1:9565 类），代理转发不该整段 502"""
+        from hancast_sidecar.media import server as srv
+        seen: list = []
+
+        def fake_get(url, **kw):
+            seen.append(kw.get("proxies"))
+            if kw.get("proxies") is None:
+                raise requests.exceptions.ProxyError("Cannot connect to proxy")
+            return "ok"
+
+        with patch.object(srv.http_requests, "get", side_effect=fake_get):
+            self.assertEqual(srv.upstream_get("https://cdn.example/a.ts"), "ok")
+        self.assertIsNone(seen[0])
+        self.assertEqual(seen[1], {"http": None, "https": None})
+
+    def test_upstream_get_does_not_retry_real_errors(self):
+        """非代理故障只试一次：DNS/超时不该被伪装成「直连就能通」"""
+        from hancast_sidecar.media import server as srv
+        hits: list[int] = []
+
+        def fake_get(url, **kw):
+            hits.append(1)
+            raise requests.exceptions.ConnectionError("name resolution failed")
+
+        with patch.object(srv.http_requests, "get", side_effect=fake_get):
+            with self.assertRaises(requests.exceptions.ConnectionError):
+                srv.upstream_get("https://nope.example/a.ts")
+        self.assertEqual(len(hits), 1)
 
     def test_content_range_total(self):
         self.assertEqual(_content_range_total("bytes 0-1023/409600"), 409600)

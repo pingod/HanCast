@@ -280,7 +280,8 @@ hancast-backend/
 │   ├── media/
 │   │   ├── __init__.py
 │   │   ├── parser.py           # 媒体解析 (新增)
-│   │   ├── server.py           # HTTP 媒体服务 + 防盗链代理 (新增)
+│   │   ├── server.py           # HTTP 媒体服务 + 防盗链代理（播放列表改写、分片后缀合规、
+│   │   │                       #   图片伪装 TS 分片剥头、Referer 被拒转裸 UA、系统代理失效转直连）
 │   │   ├── bili_resolver.py    # B 站官方接口取流
 │   │   ├── share_resolver.py   # 粘贴文本 → 可播直链（规则管线，见 docs/分享解析规则.md）
 │   │   └── rules/              # 站点解析规则：内置模块 + 外置声明式 JSON

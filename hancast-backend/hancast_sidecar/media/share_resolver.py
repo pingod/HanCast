@@ -16,11 +16,12 @@ import re
 import time
 import logging
 import requests
-from urllib.parse import urlparse, urljoin, unquote
+from urllib.parse import (parse_qs, quote, urlparse, urljoin, unquote, urlunparse)
 from html import unescape as html_unescape
 
 from .bili_resolver import BiliResolver
-from .server import MediaServer
+from .server import (MediaServer, player_ext_ok, player_safe_suffix,
+                     _proxy_broken)
 from .rules import (RuleContext, matching as rules_matching,
                     refresh_external as refresh_external_rules)
 from .rules.base import DESKTOP_UA, decode_body, normalize_text
@@ -109,9 +110,105 @@ class UnplayableSource(ValueError):
     """
 
 
+class ResilientSession(requests.Session):
+    """系统代理坏了就改直连，而不是让整条解析链报错
+
+    本机这类 127.0.0.1 代理端口常只服务于浏览器，它一失效，第一个请求就是
+    ConnectionError —— 用户看到的现象是「同一个链接昨天能投今天不能」。
+    仍然先按环境配置走代理：公司网络里直连不通的用户不受影响。
+    """
+
+    def __init__(self):
+        super().__init__()
+        self._bypassed = False
+
+    def send(self, request, **kwargs):
+        try:
+            return super().send(request, **kwargs)
+        except requests.RequestException as e:
+            if self._bypassed or not _proxy_broken(e):
+                raise
+            logger.info(f"本地代理不可用（{type(e).__name__}），改用直连重试")
+            self._bypassed = True
+            self.trust_env = False
+            kwargs.pop("proxies", None)
+            return super().send(self.prepare_request(request), **kwargs)
+
+
 def _clean_url(url: str) -> str:
     """剥离口令文案粘连在 URL 尾部的标点"""
     return url.rstrip(_TRAILING_PUNCT)
+
+
+_URL_SAFE_CHARS = "/%:@!$&'()*+,;=~-._"
+
+
+def _ascii_url(url: str) -> str:
+    """把 URL 里的非 ASCII 字符转成百分号编码
+
+    中文文件名在采集站很常见（…/生化危机：爆发夜.m3u8），留着原样会炸三处：
+    requests 按 latin-1 编码请求头，把它当 Referer 直接 UnicodeEncodeError；
+    电视与 mpv 的 URI 解析只吃 ASCII；代理改写分片地址时同样会带上裸中文。
+    """
+    if not any(ord(c) > 127 for c in url):
+        return url
+    try:
+        p = urlparse(url)
+    except ValueError:
+        return url
+    netloc = p.netloc
+    try:
+        if any(ord(c) > 127 for c in netloc):
+            netloc = netloc.encode("idna").decode()
+    except UnicodeError:
+        pass
+    return urlunparse((p.scheme, netloc,
+                       quote(p.path, safe=_URL_SAFE_CHARS), p.params,
+                       quote(p.query, safe=_URL_SAFE_CHARS + "?"),
+                       quote(p.fragment, safe=_URL_SAFE_CHARS)))
+
+
+# 「壳地址」：真流挂在包装 URL 的 query 里。采集站的播放 iframe 十有八九是这一型
+# （iframe → py.php?code=cs&url=<m3u8>），而壳本身常带防盗链、甚至直接 403
+_NESTED_QUERY_KEYS = ("url", "u", "src", "source", "playurl", "play",
+                      "video", "v", "m3u8", "vid")
+
+
+def _is_media_url(url: str) -> bool:
+    """绝对地址本身是否已经指向流文件 / 流接口"""
+    return bool(_EMBEDDED_STREAM_RE.fullmatch(url)) or _playlist_path(url)
+
+
+def _nested_media_urls(url: str) -> list[str]:
+    """从包装地址的 query 里解出真正的流地址（值可能被二次编码）"""
+    out: list[str] = []
+    try:
+        pairs = parse_qs(urlparse(url).query, keep_blank_values=True)
+    except ValueError:
+        return out
+    for key, vals in pairs.items():
+        if key.lower() not in _NESTED_QUERY_KEYS:
+            continue
+        for raw in vals:
+            for cand in (raw, unquote(raw)):
+                cand = _ascii_url(cand.strip())
+                if cand.startswith(("http://", "https://")) and _is_media_url(cand):
+                    if cand not in out:
+                        out.append(cand)
+                    break
+    return out
+
+
+def _with_nested(streams: list[str]) -> list[str]:
+    """给每个包装地址补一条「query 里那条真流地址」，紧跟在壳后面"""
+    out: list[str] = []
+    for u in streams:
+        if u not in out:
+            out.append(u)
+        for nested in _nested_media_urls(u):
+            if nested not in out:
+                out.append(nested)
+    return out
 
 
 def _sane_url(url: str) -> bool:
@@ -125,11 +222,12 @@ def _stream_candidates_from_text(text: str) -> list[str]:
     found += [m.group(1) for m in _QUOTED_STREAM_RE.finditer(norm)]
     out: list[str] = []
     for u in found:
-        u = _clean_url(u.strip())
+        u = _ascii_url(_clean_url(u.strip()))
         if _sane_url(u) and u not in out:
             out.append(u)
     # 绝对 URL 正则只吃到扩展名、引号正则吃到带 query 的完整地址时留最长的那个
-    return [u for u in out if not any(o != u and o.startswith(u) for o in out)]
+    out = [u for u in out if not any(o != u and o.startswith(u) for o in out)]
+    return _with_nested(out)
 
 
 def _playlist_path(url: str) -> bool:
@@ -199,7 +297,7 @@ def extract_candidates(text: str) -> list[str]:
     candidates: list[str] = []
 
     def _add(url: str):
-        url = _clean_url(url)
+        url = _ascii_url(_clean_url(url))
         if url and url.lower() not in seen:
             seen.add(url.lower())
             candidates.append(url)
@@ -264,7 +362,7 @@ class ShareResolver:
         errors: list[str] = []
         # 一次解析共用一个 Session：页面下发的 Cookie 要能带进
         # /api/m3u8?origin=xx&url=yy 这类「播放地址由接口再给一次」的二次请求
-        with requests.Session() as session:
+        with ResilientSession() as session:
             for url in candidates[:3]:
                 try:
                     return self._resolve_url(url, deadline, session)
@@ -403,7 +501,8 @@ class ShareResolver:
             logger.info(f"直链可播性检查跳过 {uri[:80]}: {e}")
             return uri, mime, via
         headers = self._snapshot_headers(session, referer, uri)
-        proxied = self.media_server.register_proxy(uri, headers)
+        suffix = ".m3u8" if _playlist_mime(mime, uri) else player_safe_suffix(uri)
+        proxied = self.media_server.register_proxy(uri, headers, suffix)
         logger.info(f"直链需要页面请求头，改走本机代理: {uri[:80]}")
         return proxied, mime, via + "+proxy"
 
@@ -419,7 +518,14 @@ class ShareResolver:
             seg = next((ln.strip() for ln in text.splitlines()
                         if ln.strip() and not ln.startswith("#")), None)
             if seg:
-                h2, c2, s2 = self._peek(urljoin(url, seg), deadline, use_range=False)
+                seg_url = urljoin(url, seg)
+                if not player_ext_ok(seg_url):
+                    # 采集站把 TS 分片伪装成 .png 传到图片 CDN：字节没问题，
+                    # 但 mpv/电视的 HLS 客户端按后缀白名单直接拒绝拉流，
+                    # 只有本机代理能给路径换回合规后缀
+                    logger.info(f"分片后缀播放器不认（{seg_url[-60:]}），改走本机代理")
+                    return False
+                h2, c2, s2 = self._peek(seg_url, deadline, use_range=False)
                 return self._media_ok(s2, c2, h2)
         return True
 
@@ -435,16 +541,17 @@ class ShareResolver:
         headers = {"User-Agent": DESKTOP_UA}
         if use_range:
             headers["Range"] = "bytes=0-1023"
-        r = requests.get(url, timeout=min(timeout, 6.0), stream=True, headers=headers)
-        try:
-            head = b""
-            for chunk in r.iter_content(chunk_size=1024):
-                head += chunk
-                if len(head) >= 1024:
-                    break
-            return head[:2048], r.headers.get("Content-Type", ""), r.status_code
-        finally:
-            r.close()
+        with ResilientSession() as probe:
+            r = probe.get(url, timeout=min(timeout, 6.0), stream=True, headers=headers)
+            try:
+                head = b""
+                for chunk in r.iter_content(chunk_size=1024):
+                    head += chunk
+                    if len(head) >= 1024:
+                        break
+                return head[:2048], r.headers.get("Content-Type", ""), r.status_code
+            finally:
+                r.close()
 
     @staticmethod
     def _media_ok(status: int, ctype: str, head: bytes) -> bool:
@@ -588,9 +695,10 @@ class ShareResolver:
 
         streams: list[str] = []
         for cand in declared + embedded:
-            absu = urljoin(page_url, cand.strip())
-            if absu.lower().startswith(("http://", "https://")) and absu not in streams:
+            absu = _ascii_url(urljoin(page_url, cand.strip()))
+            if absu.lower().startswith(("http://", "https://")):
                 streams.append(absu)
+        streams = _with_nested(streams)
         if not streams:
             netloc = urlparse(page_url).netloc
             raise ValueError(

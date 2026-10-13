@@ -36,6 +36,31 @@ _PRIVATE_HOST_PREFIXES = ("127.", "10.", "169.254.", "192.168.", "0.")
 _PROXY_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
              "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
+# requests 会把值为 None 的键从合并结果里删掉，等于「这一次不走任何代理」
+_NO_PROXY = {"http": None, "https": None}
+
+
+def _proxy_broken(exc: Exception) -> bool:
+    """这次失败是不是本地代理造成的（macOS 上 requests 会读系统代理配置）"""
+    return (isinstance(exc, http_requests.exceptions.ProxyError)
+            or "proxy" in str(exc).lower())
+
+
+def upstream_get(url: str, **kwargs):
+    """系统代理坏了就改直连，而不是让代理整段 502
+
+    本机这类 127.0.0.1 代理端口常只服务于浏览器，它一失效，第一个请求就是
+    ConnectionError —— 用户看到的现象是「同一个链接昨天能投今天不能」。
+    仍然先按环境配置走代理：公司网络里直连不通的用户不受影响。
+    """
+    try:
+        return http_requests.get(url, **kwargs)
+    except http_requests.RequestException as e:
+        if kwargs.get("proxies") is not None or not _proxy_broken(e):
+            raise
+        logger.info(f"本地代理不可用（{type(e).__name__}），改用直连重试")
+        return http_requests.get(url, **{**kwargs, "proxies": _NO_PROXY})
+
 
 def _is_private_host(host: str) -> bool:
     h = (host or "").lower()
@@ -67,6 +92,36 @@ def _looks_like_playlist(ctype: str, url: str) -> bool:
     return seg.endswith(".m3u8") or seg == "m3u8"
 
 
+# mpv/ffmpeg 的 hls.c 与多数电视的 HLS 客户端会按「分片 URL 的后缀」白名单决定
+# 拉不拉这个分片，无后缀或 .png 这类一律 "blocked for security reasons"。
+# 采集站爱把 TS 分片伪装成 .png 传到图片 CDN 上（file.icve.com.cn 等），
+# 所以代理改写列表时必须给路径换一个播放器认账的后缀。
+_PLAYER_SEGMENT_EXTS = frozenset("""
+ts m2ts mp2t mp4 m4s m4v mov aac ac3 ec3 eac3 mp3 mp2 mkv mka webm ogg ogx
+opus flac wav wma wmv flv f4f m3u8""".split())
+_SEG_EXT_RE = re.compile(r"\.([A-Za-z0-9]{1,5})(?:[?#]|$)")
+
+
+def player_ext_ok(url: str) -> bool:
+    """分片子列表的后缀是否落在播放器的白名单里（无后缀也算不合格）"""
+    m = _SEG_EXT_RE.search(urlparse(url).path.rsplit("/", 1)[-1])
+    return bool(m) and m.group(1).lower() in _PLAYER_SEGMENT_EXTS
+
+
+def player_safe_suffix(url: str) -> str:
+    """代理路径该带的后缀：远端后缀本身合规就用它，否则按类型兜底
+
+    只改「看起来的后缀」，字节仍是上游原样 —— 播放器靠魔数判型，实测带
+    61 字节假 PNG 头的 TS 照样能解出 10.5 秒。
+    """
+    if _looks_like_playlist("", url):
+        return ".m3u8"
+    seg = urlparse(url).path.rsplit("/", 1)[-1]
+    m = _SEG_EXT_RE.search(seg)
+    ext = m.group(1).lower() if m else ""
+    return f".{ext}" if ext in _PLAYER_SEGMENT_EXTS else ".ts"
+
+
 _LEECH_PLACEHOLDER_PREFIXES = (b"\x89png", b"\xff\xd8", b"gif8", b"<html", b"<!doc", b"bm")
 _RANGE_FALLBACK_END = 4294967295          # 4G-1，足够覆盖任何分片，服务端会钳到文件尾
 
@@ -87,6 +142,42 @@ def _content_range_total(value: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
+_SYNC = 0x47
+_TS_PACKET = 188
+_DISGUISE_SCAN = 400          # 假 PNG 头实测 61 字节，给到两个 TS 包的余量
+_FAKE_IMAGE_MAGICS = (b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff", b"GIF87a", b"GIF89a")
+
+
+def _disguise_offset(head: bytes) -> int:
+    """「披着图片皮的 TS」里图片头有多少字节；不是这种分片就返回 0
+
+    采集站把分片当图片传到免费 CDN（file.icve.com.cn 等）：前 61 字节是一段
+    合法的 1x1 PNG（IHDR+IDAT+IEND），之后才是 188 字节对齐的 TS。后缀换成
+    .ts 只够骗过后缀白名单 —— mpv 内的 ffmpeg 会用 analyzeduration 有限的首块
+    探测，看到 PNG 魔数就判成 png 解码器然后报 "error reading packet"，
+    所以代理转发时要把这段伪装头剥掉，让播放器从同步字节开始读。
+    """
+    if not head.startswith(_FAKE_IMAGE_MAGICS):
+        return 0
+    need = 12 + 3 * _TS_PACKET
+    if len(head) < need:
+        return 0
+    for off in range(1, min(_DISGUISE_SCAN, len(head) - need + 1)):
+        if all(head[off + _TS_PACKET * i] == _SYNC for i in range(3)):
+            return off
+    return 0
+
+
+def _disguised_ts(head: bytes) -> bool:
+    return _disguise_offset(head) > 0
+
+
+def _needs_bare_retry(headers: dict) -> bool:
+    """页面域请求头是否可能正是被拒绝的原因（Referer/Origin/Cookie 全空再试一次）"""
+    lowered = {k.lower() for k in headers}
+    return bool(lowered & {"referer", "origin", "cookie"})
+
+
 def _rewrite_playlist(text: str, base_url: str, headers: dict) -> str:
     """把 m3u8 里的每一处地址换成本机代理路径
 
@@ -96,7 +187,8 @@ def _rewrite_playlist(text: str, base_url: str, headers: dict) -> str:
     from urllib.parse import urljoin
 
     def _local(remote: str) -> str:
-        return f"{MediaHandler.base_url}{MediaHandler.register(remote, headers)}"
+        return f"{MediaHandler.base_url}" \
+               f"{MediaHandler.register(remote, headers, player_safe_suffix(remote))}"
 
     out = []
     for line in text.splitlines():
@@ -129,11 +221,16 @@ class MediaHandler(BaseHTTPRequestHandler):
     }
 
     @classmethod
-    def register(cls, remote_url: str, headers: dict = None) -> str:
-        """登记一个代理目标，返回本机相对路径（调用方拼上 base_url）"""
+    def register(cls, remote_url: str, headers: dict = None,
+                 suffix: str = "") -> str:
+        """登记一个代理目标，返回本机相对路径（调用方拼上 base_url）
+
+        suffix 只影响路径看起来的扩展名（HLS 客户端按后缀白名单决定拉不拉分片），
+        转发的字节仍是上游原样。
+        """
         url_hash = hashlib.md5(
             (remote_url + json.dumps(headers or {}, sort_keys=True)).encode()).hexdigest()[:12]
-        path = f"/proxy/{url_hash}"
+        path = f"/proxy/{url_hash}{suffix}"
         cls.proxy_targets[path] = remote_url
         if headers:
             cls.proxy_headers[path] = headers
@@ -300,7 +397,20 @@ class MediaHandler(BaseHTTPRequestHandler):
             headers["Range"] = range_val
 
         try:
-            resp = http_requests.get(remote_url, headers=headers, timeout=30, stream=True)
+            resp = upstream_get(remote_url, headers=headers, timeout=30, stream=True)
+            if resp.status_code >= 400 and _needs_bare_retry(headers):
+                # 另一类站点正好相反：把「页面域的 Referer」当盗链特征拒掉
+                # （file.icve.com.cn 带 4kcz 的 Referer 回 403，裸 UA 才给量）
+                denied = resp.status_code
+                resp.close()
+                logger.info(f"代理带页面头被拒 {denied}，改用裸 UA 重试: {host}")
+                bare = {"User-Agent": _PROXY_UA}
+                if range_val:
+                    # 裸头只甩掉防盗链字段，Range 必须原样保留，否则电视的
+                    # 分段请求会拿到整条资源却仍是 206 语义之外的响应
+                    bare["Range"] = range_val
+                resp = upstream_get(remote_url, headers=bare,
+                                    timeout=30, stream=True)
         except Exception as e:
             logger.error(f"代理请求失败: {e}")
             self.send_error(502, f"Proxy Error: {e}")
@@ -318,19 +428,30 @@ class MediaHandler(BaseHTTPRequestHandler):
 
             first = b""
             full_len: int | None = None
-            if "Range" not in headers:
-                # 电视不带 Range：先看首块是不是防盗链占位
+            rng = headers.get("Range", "")
+            if not rng or rng.startswith("bytes=0-"):
+                # 只有从文件头开始的请求能判伪装头/占位图：播放器（mpv、浏览器）
+                # 几乎必然带 bytes=0-… 的 Range，不覆盖这条分支就等于永远不剥
                 first = self._peek_upstream(resp)
-                if _is_leech_placeholder(first):
+                if (_is_leech_placeholder(first) and not _disguised_ts(first)
+                        and (not rng or rng.rstrip().endswith("-"))):
                     resp.close()
                     # 必须是闭合区间：这些站点按 end 是否为空判断「像不像播放器」，
                     # bytes=0- 会被判定为非法并 302 到推广图
-                    resp = http_requests.get(
+                    resp = upstream_get(
                         remote_url, headers={**headers, "Range": f"bytes=0-{_RANGE_FALLBACK_END}"},
                         timeout=30, stream=True)
                     ctype = resp.headers.get("Content-Type", ctype)
                     full_len = _content_range_total(resp.headers.get("Content-Range"))
                     first = self._peek_upstream(resp)
+
+            skip = _disguise_offset(first)
+            if skip:
+                logger.info(f"分片带 {skip} 字节图片伪装头，转发前剥掉: {host}")
+                first = first[skip:]
+                # 类型也一并纠正：播放器会按 Content-Type 选解封装器，
+                # 留着 image/png 它就去找 PNG 解码器了
+                ctype = "video/mp2t"
 
             out_status = 200 if full_len else resp.status_code
             resp_headers = {
@@ -339,8 +460,18 @@ class MediaHandler(BaseHTTPRequestHandler):
             }
             if full_len:
                 # 上游被我们驱动成了分段请求，对电视仍按完整资源应答
-                resp_headers["Content-Length"] = str(full_len)
+                resp_headers["Content-Length"] = str(full_len - skip)
                 resp_headers["Accept-Ranges"] = "bytes"
+            elif skip:
+                # 伪装头一剥，上游报的区间起点就不再是播放器请求的那个偏移，
+                # ffmpeg 会直接判 "Unexpected offset" 拒收 —— 改成整条资源应答，
+                # 只保留修正后的长度，不带 Content-Range
+                out_status = 200
+                length = resp.headers.get("Content-Length", "")
+                if length.isdigit():
+                    resp_headers["Content-Length"] = str(int(length) - skip)
+                if "Accept-Ranges" in resp.headers:
+                    resp_headers["Accept-Ranges"] = resp.headers["Accept-Ranges"]
             else:
                 for h in ("Content-Range", "Accept-Ranges", "Content-Length"):
                     if h in resp.headers:
@@ -373,11 +504,18 @@ class MediaHandler(BaseHTTPRequestHandler):
             resp.close()
 
     @staticmethod
-    def _peek_upstream(resp) -> bytes:
-        """取上游首块（只够判型），后续 iter_content 会从断点继续"""
+    def _peek_upstream(resp, want: int = 1024) -> bytes:
+        """取上游开头若干字节（只够判型），后续 iter_content 会从断点继续
+
+        分块编码下首个 chunk 可能只有几十字节，而「图片伪装头 + 188 字节对齐」
+        的判定至少要 576 字节，所以按目标长度累计而不是取一块就返回。
+        """
+        buf = b""
         for chunk in resp.iter_content(chunk_size=1024):
-            return chunk[:1024]
-        return b""
+            buf += chunk
+            if len(buf) >= want:
+                break
+        return buf[:want]
 
     def _send_rewritten_playlist(self, resp, headers: dict):
         text = resp.content.decode("utf-8", errors="replace")
@@ -477,13 +615,15 @@ class MediaServer:
 
         return f"http://{self._lan_ip}:{self.port}{url_path}"
 
-    def register_proxy(self, remote_url: str, headers: dict = None) -> str:
+    def register_proxy(self, remote_url: str, headers: dict = None,
+                       suffix: str = "") -> str:
         """注册远程 URL 代理，返回本地代理 URL
 
         headers 为空时走白名单站点默认（B站系 Referer）；外部站点必须显式带上
         Cookie/Referer，否则代理出去同样被防盗链挡掉。
+        suffix 用于给播放器一个合规的后缀（见 player_safe_suffix）。
         """
-        path = MediaHandler.register(remote_url, headers)
+        path = MediaHandler.register(remote_url, headers, suffix)
         return f"http://{self._lan_ip}:{self.port}{path}"
 
     def get_file(self, file_id: str) -> Tuple[str, int, str]:
