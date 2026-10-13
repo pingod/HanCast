@@ -356,6 +356,37 @@ jobs:
           fi
           echo "sidecar OK"
 
+      # macOS 15+ 的「本地网络」按**代码身份**判定，而 Tauri 不签名时主程序留下的是
+      # Rust 链接器写的 adhoc 签名：Identifier 形如 `HanCast-<16位hex>`、
+      # flags=0x20002(adhoc,linker-signed)。同一个 bundle id 每次构建换一个身份，
+      # NetworkAgent 认不出它，就静默拒绝组播（sendto 239.255.255.250 → Errno 65），
+      # 连弹窗都没有、TCC.db 里也不留记录，所以「Info.plist 声明齐全却仍走广播兜底」。
+      # 2026-10-13 同一台机器、同一份字节 A/B：产物原样 → 心跳 `通道 broadcast`；
+      # `codesign --force --deep -s -` 重签 → `通道 multicast`(24 条) + 入站 200。
+      # 必须在打 dmg **之前**签：签完再动 bundle 会让签名失效。
+      - name: Adhoc sign macOS app (unblock Local Network multicast)
+        if: matrix.runner-os == 'macOS'
+        shell: bash
+        run: |
+          set -e
+          APP="$(find src-tauri/target/release/bundle/macos -maxdepth 1 -name '*.app' | head -1)"
+          if [ -z "$APP" ]; then
+            echo "::error::no .app found under bundle/macos"
+            exit 1
+          fi
+          codesign --force --deep --sign - "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          idt="$(codesign -dvvv "$APP" 2>&1 | sed -n 's/^Identifier=//p' | head -1)"
+          if [ "$idt" != "com.han.hancast" ]; then
+            echo "::error::签名 Identifier 是 '$idt'，主程序仍是 linker-signed，装完组播必被拒"
+            exit 1
+          fi
+          if codesign -dvvv "$APP" 2>&1 | grep -q 'linker-signed'; then
+            echo "::error::签名仍带 linker-signed 标志"
+            exit 1
+          fi
+          echo "signed: $idt (adhoc)"
+
       # 自己打 dmg，而不是再调一次 `tauri build --bundles dmg`。
       # 原因：dmg bundler 会重新跑一遍 cargo 并重建 .app（日志里能看到
       # Compiling → Bundling HanCast.app），重建出来的 .app 没有上一步的
@@ -387,6 +418,15 @@ jobs:
           # 挂载 dmg 里的 .app 真跑一次 sidecar，确保链接确实进了 dmg
           MNT="$(mktemp -d)"
           hdiutil attach -nobrowse -quiet -mountpoint "$MNT" "$out"
+          # dmg 里那份必须是签过名的：cp/hdiutil 若把签名弄丢，装完又会退回
+          # linker-signed，而这是打包版组播被静默拒绝的唯一征兆。
+          dmg_idt="$(codesign -dvvv "$MNT"/*.app 2>&1 | sed -n 's/^Identifier=//p' | head -1)"
+          echo "dmg app signature: $dmg_idt"
+          if [ "$dmg_idt" != "com.han.hancast" ]; then
+            echo "::error::dmg 内的 .app 签名 Identifier 是 '$dmg_idt'（应为 com.han.hancast）"
+            hdiutil detach "$MNT" -quiet || true
+            exit 1
+          fi
           # shellcheck disable=SC1091
           . "$RUNNER_TEMP/sidecar_timeout.sh"
           echo "=== dmg sidecar smoke test ==="
