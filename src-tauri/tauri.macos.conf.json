@@ -1,5 +1,8 @@
 {
   "bundle": {
+    "macOS": {
+      "infoPlist": "Info.plist"
+    },
     "resources": [
       "mpv/mpv.app/**/*",
       "mpv/portable_config/**/*",
