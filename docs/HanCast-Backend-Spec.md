@@ -280,7 +280,15 @@ hancast-backend/
 │   ├── media/
 │   │   ├── __init__.py
 │   │   ├── parser.py           # 媒体解析 (新增)
-│   │   └── server.py           # HTTP 媒体服务 (新增)
+│   │   ├── server.py           # HTTP 媒体服务 + 防盗链代理 (新增)
+│   │   ├── bili_resolver.py    # B 站官方接口取流
+│   │   ├── share_resolver.py   # 粘贴文本 → 可播直链（规则管线，见 docs/分享解析规则.md）
+│   │   └── rules/              # 站点解析规则：内置模块 + 外置声明式 JSON
+│   │       ├── __init__.py     # 导入即注册内置规则
+│   │       ├── base.py         # SiteRule / RuleContext / 注册表与重载指纹
+│   │       ├── bili.py         # url 阶段：B 站
+│   │       ├── douyin.py       # page 阶段：抖音分享页
+│   │       └── declarative.py  # share_rules/*.json 声明式规则
 │   ├── types/
 │   │   ├── __init__.py
 │   │   ├── device.py           # 设备数据结构

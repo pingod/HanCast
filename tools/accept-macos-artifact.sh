@@ -29,7 +29,9 @@ else
 fi
 
 cd /Users/pavia/githome/HanCast || exit 1
-for rel in ssdp.py commands.py security/guard.py protocol/dlna.py models/session.py screencast/manager.py; do
+for rel in ssdp.py commands.py security/guard.py protocol/dlna.py models/session.py screencast/manager.py \
+           media/share_resolver.py media/rules/__init__.py media/rules/base.py \
+           media/rules/bili.py media/rules/douyin.py media/rules/declarative.py; do
   want=$(git show "$TAG:hancast-backend/hancast_sidecar/$rel" | shasum -a 256 | cut -d' ' -f1)
   got=$(shasum -a 256 "$RES/$rel" 2>/dev/null | cut -d' ' -f1)
   chk "sha256 $rel" "${got:0:12}" "${want:0:12}"

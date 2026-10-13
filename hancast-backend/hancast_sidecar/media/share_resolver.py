@@ -13,7 +13,6 @@
 
 import os
 import re
-import json
 import time
 import logging
 import requests
@@ -22,17 +21,19 @@ from html import unescape as html_unescape
 
 from .bili_resolver import BiliResolver
 from .server import MediaServer
+from .rules import (RuleContext, matching as rules_matching,
+                    refresh_external as refresh_external_rules)
+from .rules.base import DESKTOP_UA, decode_body, normalize_text
 from ..models.media import MediaInfo
+from ..utils.config import SETTING_DIR
 
 logger = logging.getLogger("hancast.media.share")
 
 _TOTAL_BUDGET = 25.0       # 单次 resolve 总时长上限（秒）
 _MAX_BODY = 2 * 1024 * 1024  # 页面正文读取上限（字节）
 
-_DESKTOP_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-               "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
-_MOBILE_UA = ("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
-              "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1")
+# 外置声明式规则目录：改这里的 JSON 不用重启应用、不用重新打包
+DEFAULT_RULES_DIR = os.path.join(SETTING_DIR, "share_rules")
 
 # 已知短链域名（分享文案中常不带 scheme）
 _SHORT_HOSTS = (
@@ -52,8 +53,6 @@ SHORT_RE = re.compile(
     r"(?<![\w./-])(" + _SHORT_ALT + r")(" + _URL_CHARS + r"*)?", re.I)
 BV_RE = re.compile(r"\bBV[0-9A-Za-z]{10}\b")
 AV_RE = re.compile(r"\bav\d{1,9}\b", re.I)
-
-BILI_SUFFIXES = {"bilibili.com", "b23.tv", "bilibili.tv"}
 
 # 已知有专路/通用提取把握较高的平台（候选排序时优先）
 _KNOWN_MEDIA_HOSTS = (
@@ -115,21 +114,13 @@ def _clean_url(url: str) -> str:
     return url.rstrip(_TRAILING_PUNCT)
 
 
-def _normalize_text(text: str) -> str:
-    """归一化 JS 转义与 HTML 实体：\\/ 、\\u002F → / ；\\u0026 、&amp; → &"""
-    text = text.replace("\\/", "/")
-    text = re.sub(r"\\u002F", "/", text, flags=re.I)
-    text = re.sub(r"\\u0026", "&", text, flags=re.I)
-    return html_unescape(text)
-
-
 def _sane_url(url: str) -> bool:
     return bool(url) and len(url) <= 600 and not (set(url) & _JUNK_CHARS)
 
 
 def _stream_candidates_from_text(text: str) -> list[str]:
     """从页面/接口正文中取出候选流地址（绝对流 URL + 引号内的相对流接口）"""
-    norm = _normalize_text(text)
+    norm = normalize_text(text)
     found = [m.group(0) for m in _EMBEDDED_STREAM_RE.finditer(norm)]
     found += [m.group(1) for m in _QUOTED_STREAM_RE.finditer(norm)]
     out: list[str] = []
@@ -141,11 +132,6 @@ def _stream_candidates_from_text(text: str) -> list[str]:
     return [u for u in out if not any(o != u and o.startswith(u) for o in out)]
 
 
-_PLAYLIST_MIMES = {"application/vnd.apple.mpegurl", "application/x-mpegurl",
-                   "application/mpegurl", "application/vnd.mpegurl",
-                   "application/audio/mpegurl"}
-
-
 def _playlist_path(url: str) -> bool:
     """路径末段是否就是播放列表（/api/m3u8 这类无扩展名接口也算）"""
     seg = urlparse(url).path.rsplit("/", 1)[-1].lower()
@@ -153,7 +139,9 @@ def _playlist_path(url: str) -> bool:
 
 
 def _playlist_mime(mime: str, url: str) -> bool:
-    return (mime or "") in _PLAYLIST_MIMES or _playlist_path(url)
+    """m3u8 的 Content-Type 五花八门（application/vnd.apple.mpegurl、
+    audio/mpegurl、x-mpegURL…），认子串比枚举整串可靠；无扩展名的 /m3u8 接口也算"""
+    return "mpegurl" in (mime or "").lower() or _playlist_path(url)
 
 
 def _is_playlist(content_type: str, url: str, body: bytes | None) -> bool:
@@ -184,14 +172,6 @@ def _master_variant_url(text: str, base: str) -> str | None:
                 best = (pending, line)
             pending = None
     return urljoin(base, best[1]) if best else None
-
-
-def _decode_js_string(raw: str) -> str:
-    """JS/JSON 字符串字面量 → 真实文本（\\/ 、\\u002F 、\\u0026 等转义一次解干净）"""
-    try:
-        return json.loads(f'"{raw}"')
-    except (ValueError, json.JSONDecodeError):
-        return _normalize_text(raw)
 
 
 def _sniff_magic(body: bytes) -> str | None:
@@ -253,25 +233,17 @@ def _ext_of(url: str) -> str:
     return name.rsplit(".", 1)[-1].lower() if "." in name else ""
 
 
-def _decode_body(body: bytes, content_type: str) -> str:
-    m = re.search(r"charset=([\w-]+)", content_type, re.I)
-    encodings = ([m.group(1)] if m else []) + ["utf-8", "gbk"]
-    for enc in encodings:
-        try:
-            return body.decode(enc)
-        except (UnicodeDecodeError, LookupError):
-            continue
-    return body.decode("utf-8", errors="replace")
-
-
 class ShareResolver:
     """分享文本 → 可播放 MediaInfo"""
 
     def __init__(self, media_server: MediaServer,
-                 bili_resolver: BiliResolver | None = None):
+                 bili_resolver: BiliResolver | None = None,
+                 rules_dir: str | None = None, config=None):
         self.media_server = media_server
         # 共享 BiliResolver 实例：反爬 Cookie 缓存跨调用复用
         self.bili = bili_resolver or BiliResolver()
+        self.rules_dir = rules_dir or getattr(config, "share_rules_dir",
+                                              None) or DEFAULT_RULES_DIR
 
     # ── 对外入口 ──
 
@@ -280,6 +252,7 @@ class ShareResolver:
         if not text:
             raise ValueError("粘贴内容为空")
 
+        self._load_external_rules()
         candidates = extract_candidates(text)
         if not candidates:
             raise ValueError(
@@ -298,7 +271,8 @@ class ShareResolver:
                 except Exception as e:
                     logger.warning(f"候选地址解析失败 {url}: {e}")
                     errors.append(f"{urlparse(url).netloc}: {e}")
-        raise ValueError("无法解析出可播放地址 — " + "；".join(errors))
+        raise ValueError("无法解析出可播放地址 — " + "；".join(errors) +
+                         f"（可为该站点在 {self.rules_dir} 添加解析规则，无需重装）")
 
     def resolve_bilibili_media_info(self, url: str) -> dict:
         """B站链接 → 本地代理可播信息（原 resolve_bilibili 命令的实现）"""
@@ -333,26 +307,56 @@ class ShareResolver:
 
     # ── 路由 ──
 
+    def _load_external_rules(self) -> None:
+        """按目录指纹重载外置规则；规则目录有问题不能连累解析本身"""
+        try:
+            os.makedirs(self.rules_dir, exist_ok=True)
+            refresh_external_rules(self.rules_dir)
+        except Exception as e:
+            logger.warning(f"外置解析规则加载失败 {self.rules_dir}: {e}")
+
+    def _run_rules(self, url: str, html: str, stage: str,
+                   ctx: RuleContext) -> dict | None:
+        """逐条试命中该地址的规则，全都不适用时返回 None 交给通用管线
+
+        「这条规则拿不下」不是错误：只记日志，绝不冒泡成用户看到的解析失败，
+        否则加一条写错的规则就会毁掉本来能成功的粘贴。
+        """
+        for rule in rules_matching(url, stage):
+            try:
+                return rule.resolve(url, html, ctx)
+            except Exception as e:
+                logger.info(f"规则 {rule.name}（{stage} 阶段）未取到地址，换下一条: {e}")
+        return None
+
     def _resolve_url(self, url: str, deadline: float,
                      session: requests.Session) -> dict:
-        if self._is_bili(url):
-            return self.resolve_bilibili_media_info(url)
+        ctx = RuleContext(resolver=self, session=session, deadline=deadline,
+                          source_url=url)
+
+        # 拿到链接就能解析的站点（B 站官方接口、声明式 url 阶段规则）
+        hit = self._run_rules(url, "", "url", ctx)
+        if hit is not None:
+            return hit
 
         # 短链/重定向展开：一次 GET 同时拿到最终地址与正文
         final_url, content_type, content_length, body = self._open(
             url, deadline, session=session)
 
-        if self._is_bili(final_url):
-            return self.resolve_bilibili_media_info(final_url)
+        if final_url != url:
+            # 展开后可能落到某个规则负责的域（b23.tv → bilibili.com）
+            hit = self._run_rules(final_url, "", "url", ctx)
+            if hit is not None:
+                return hit
 
         base_mime = content_type.split(";")[0].strip().lower()
-        if base_mime.startswith(("video/", "audio/", "image/")) or \
-                (base_mime == "application/octet-stream" and _ext_of(final_url) in _EXT_MIME):
-            return self._direct_info(final_url, base_mime, content_length, url)
-
-        # 粘贴的就是播放列表：主列表先挑最高码率的分片列表，电视不用自己选流
-        if _is_playlist(base_mime, final_url, body):
-            text = _decode_body(body or b"", content_type)
+        # 播放列表判定在「音视频类型」之前：不少 CDN 给 m3u8 回 audio/mpegurl，
+        # 按直链处理就把主列表原样丢给电视，省掉了选最高码率那一步。
+        # 反过来，服务器明确说这是视频/音频文件时（哪怕路径以 .m3u8 结尾）按文件交付。
+        concrete_media = (base_mime.startswith(("video/", "audio/"))
+                          and "mpegurl" not in base_mime)
+        if not concrete_media and _is_playlist(base_mime, final_url, body):
+            text = decode_body(body or b"", content_type)
             uri = _master_variant_url(text, final_url) or final_url
             media_info = MediaInfo(
                 media_type="url",
@@ -363,20 +367,18 @@ class ShareResolver:
             )
             return {**media_info.to_dict(), "source_url": url, "via": "playlist"}
 
-        # 抖音专路（share 页内嵌 JSON 比通用 HTML 提取可靠）
-        if "douyin.com" in (urlparse(final_url).hostname or ""):
-            try:
-                return self._resolve_douyin(final_url, deadline, url, session)
-            except Exception as e:
-                logger.info(f"抖音专路解析失败，回退通用提取: {e}")
+        if concrete_media or base_mime.startswith("image/") or \
+                (base_mime == "application/octet-stream" and _ext_of(final_url) in _EXT_MIME):
+            return self._direct_info(final_url, base_mime, content_length, url)
 
-        html = _decode_body(body or b"", content_type)
+        html = decode_body(body or b"", content_type)
+
+        # 必须先见到正文才能取地址的站点（抖音分享页、声明式 page 阶段规则）
+        hit = self._run_rules(final_url, html, "page", ctx)
+        if hit is not None:
+            return hit
+
         return self._resolve_page(final_url, html, url, deadline, session)
-
-    @staticmethod
-    def _is_bili(url: str) -> bool:
-        host = urlparse(url).hostname or ""
-        return any(host == s or host.endswith("." + s) for s in BILI_SUFFIXES)
 
     @staticmethod
     def _candidate_priority(url: str) -> int:
@@ -430,7 +432,7 @@ class ShareResolver:
         而电视恰恰不带 Range。
         """
         timeout = self._remaining(deadline)
-        headers = {"User-Agent": _DESKTOP_UA}
+        headers = {"User-Agent": DESKTOP_UA}
         if use_range:
             headers["Range"] = "bytes=0-1023"
         r = requests.get(url, timeout=min(timeout, 6.0), stream=True, headers=headers)
@@ -465,7 +467,7 @@ class ShareResolver:
         （global.dyrsxm.cc 发 sion_id，box.dyrs.com.de 认它），按浏览器同源规则
         过滤会把关键 Cookie 滤掉，所以页面域与目标域都取。
         """
-        headers = {"User-Agent": _DESKTOP_UA, "Referer": referer}
+        headers = {"User-Agent": DESKTOP_UA, "Referer": referer}
         origin = urlparse(referer)
         if origin.scheme and origin.netloc:
             headers["Origin"] = f"{origin.scheme}://{origin.netloc}"
@@ -493,7 +495,7 @@ class ShareResolver:
         return min(remaining, 10.0)
 
     def _open(self, url: str, deadline: float,
-              ua: str = _DESKTOP_UA, session: requests.Session | None = None,
+              ua: str = DESKTOP_UA, session: requests.Session | None = None,
               referer: str | None = None) -> tuple[str, str, str | None, bytes | None]:
         """GET（流式、正文封顶）→ (最终URL, Content-Type, Content-Length, 正文或None)
 
@@ -513,7 +515,9 @@ class ShareResolver:
             content_type = r.headers.get("Content-Type", "")
             content_length = r.headers.get("Content-Length")
             base = content_type.split(";")[0].strip().lower()
-            if base.startswith(("video/", "audio/", "image/")):
+            # 播放列表要读正文（挑最高码率的分片列表）；mpegurl 常挂在 audio/ 前缀下，
+            # 别被它骗住。真正的音视频/图片文件正文没有判断价值，不下载。
+            if base.startswith(("video/", "audio/", "image/")) and "mpegurl" not in base:
                 body = None
             else:
                 buf, size = [], 0
@@ -545,49 +549,6 @@ class ShareResolver:
             file_size=int(content_length) if content_length else None,
         )
         return {**media_info.to_dict(), "source_url": source_url, "via": "direct"}
-
-    # ── 抖音 ──
-
-    def _resolve_douyin(self, page_url: str, deadline: float,
-                        source_url: str, session: requests.Session) -> dict:
-        m = re.search(r"/(?:video|note)/(\d+)", page_url) or \
-            re.search(r"[?&](?:vid|aweme_id)=(\d+)", page_url)
-        if not m:
-            raise ValueError("未能提取抖音视频 ID")
-        html = _decode_body(
-            self._open(f"https://www.iesdouyin.com/share/video/{m.group(1)}/",
-                       deadline, ua=_MOBILE_UA, session=session,
-                       referer=page_url)[3] or b"", "text/html")
-
-        mp = re.search(r'"play_addr"\s*:\s*\{[^{}]*?"url_list"\s*:\s*\[\s*"([^"]+)"', html)
-        if not mp:
-            raise ValueError("抖音分享页未找到播放地址")
-        # 分享页 JSON 里的斜杠是 \u002F 形式，必须按 JSON 字面量解码，
-        # 否则交给电视的是一个带 \\u002F 的废地址
-        video_url = _decode_js_string(mp.group(1))
-        # 去水印变体（playwm → play），两者内容一致、play 更通用
-        video_url = video_url.replace("playwm", "play")
-
-        title = ""
-        mt = re.search(r'"desc"\s*:\s*"((?:[^"\\]|\\.)*)"', html)
-        if mt:
-            try:
-                title = json.loads(f'"{mt.group(1)}"')
-            except (ValueError, json.JSONDecodeError):
-                title = mt.group(1)
-        if not title:
-            t = re.search(r"<title[^>]*>([^<]+)</title>", html, re.I)
-            title = html_unescape(t.group(1)).strip() if t else "抖音视频"
-
-        uri, mime, via = self._publish(video_url, "video/mp4", session,
-                                       page_url, deadline, "douyin")
-        media_info = MediaInfo(
-            media_type="url",
-            uri=uri,
-            title=title[:80],
-            mime_type=mime,
-        )
-        return {**media_info.to_dict(), "source_url": source_url, "via": via}
 
     # ── 通用页面提取 ──
 
@@ -679,7 +640,7 @@ class ShareResolver:
         timeout = self._remaining(deadline)
         try:
             r = session.get(url, timeout=min(timeout, 8.0), allow_redirects=True,
-                            headers={"User-Agent": _DESKTOP_UA, "Referer": referer,
+                            headers={"User-Agent": DESKTOP_UA, "Referer": referer,
                                      "Accept": "*/*"}, stream=True)
         except requests.RequestException as e:
             raise ValueError(f"候选地址不可达: {e}") from e
@@ -703,7 +664,7 @@ class ShareResolver:
 
             # 「播放地址由接口下发」：JSON/纯文本里再抽一次候选
             nested = _stream_candidates_from_text(
-                _decode_body(body, r.headers.get("Content-Type", "")))
+                decode_body(body, r.headers.get("Content-Type", "")))
             if nested and _hop < _MAX_HOP:
                 nested.sort(key=self._stream_rank)
                 last: UnplayableSource | None = None

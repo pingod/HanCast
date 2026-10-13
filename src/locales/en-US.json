@@ -125,7 +125,7 @@
   "autostartPrompt.hint": "You can also enable this later in Settings or the system tray",
   "autostartPrompt.skip": "Not Now",
   "autostartPrompt.enable": "Enable",
-  "screencast.entry": "🖥️ Cast Your Screen",
+  "screencast.entry": "Cast Your Screen",
   "screencast.entryRunning": "Screen Casting",
   "screencast.viewers": "viewing",
   "screencast.title": "Screen Cast",

@@ -36,7 +36,7 @@ class Config:
         # platform.node() 在某些系统上可能返回空字符串，使用 fallback
         node_name = platform.node() or f"Macast-{uuid.uuid4().hex[:8]}"
         self.friendly_name = f"HanCast({node_name})"
-        self.version = "2.2.13"
+        self.version = "2.2.16"
         self.usn = str(uuid.uuid4())
         self._save_lock = threading.Lock()
 
@@ -112,6 +112,14 @@ class Config:
     def media_port(self) -> int:
         """媒体服务器端口"""
         return self.settings.get('media_port', 0)  # 0 表示自动选择
+
+    @property
+    def share_rules_dir(self) -> str:
+        """粘贴解析的外置站点规则目录（相对路径按配置目录解析）"""
+        raw = (self.settings.get('share_rules_dir') or '').strip()
+        if raw:
+            return raw if os.path.isabs(raw) else os.path.join(SETTING_DIR, raw)
+        return os.path.join(SETTING_DIR, "share_rules")
 
     @property
     def default_device(self) -> Optional[str]:

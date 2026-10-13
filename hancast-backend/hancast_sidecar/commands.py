@@ -103,7 +103,7 @@ class CommandHandler:
         self.media_server = MediaServer(
             lan_ip=self.config.network_interface or None)
         # 分享文本/任意页面 → 可播直链解析器（共享 BiliResolver 的 Cookie 缓存）
-        self.share_resolver = ShareResolver(self.media_server)
+        self.share_resolver = ShareResolver(self.media_server, config=self.config)
         # 异步解析任务表 {task_id: {status: pending|done|error, result?, error?, ts}}
         self._resolve_tasks: Dict[str, dict] = {}
         self._resolve_lock = threading.Lock()

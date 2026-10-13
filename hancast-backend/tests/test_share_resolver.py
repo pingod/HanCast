@@ -8,10 +8,14 @@
 - 主列表下钻（BANDWIDTH 最优）、播放列表粘贴路由
 - 电视视角可播性判定（TS/HTML/PNG 魔数）与 Cookie 快照
 - 代理侧播放列表改写、防盗链占位图识别、Content-Range 总量
-- 抖音分享页 JSON 提取
+- 站点规则：内置抖音/B站规则、外置声明式 JSON（page 与 url 阶段、失效回退）
 - B站路由 → 本地代理注册
 """
 
+import os
+import json
+import shutil
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -45,6 +49,13 @@ def _no_follow(url, session, referer, deadline, _hop=0):
 def _no_publish(uri, mime, session, referer, deadline, via):
     """离线替身：跳过「电视不带 Cookie 能否拉到」的探测"""
     return uri, mime, via
+
+
+def _isolated_rules_dir(test) -> str:
+    """测试专用规则目录 —— 绝不读用户真实的 share_rules"""
+    d = tempfile.mkdtemp(prefix="hancast-rules-")
+    test.addCleanup(shutil.rmtree, d, True)
+    return d
 
 
 class TestExtractCandidates(unittest.TestCase):
@@ -93,7 +104,8 @@ class TestExtractCandidates(unittest.TestCase):
 
     def test_known_platform_candidate_preferred(self):
         """推广链接在前时，已知平台链接优先解析"""
-        resolver = ShareResolver(FakeMediaServer())
+        resolver = ShareResolver(FakeMediaServer(),
+                                 rules_dir=_isolated_rules_dir(self))
         tried: list[str] = []
 
         def fake(url, deadline, session):
@@ -120,7 +132,7 @@ PAGE_HTML = """<html><head>
 class TestResolveRouting(unittest.TestCase):
     def setUp(self):
         self.server = FakeMediaServer()
-        self.resolver = ShareResolver(self.server)
+        self.resolver = ShareResolver(self.server, rules_dir=_isolated_rules_dir(self))
         self._offline = [
             patch.object(ShareResolver, "_follow_stream", side_effect=_no_follow),
             patch.object(ShareResolver, "_publish", side_effect=_no_publish),
@@ -196,6 +208,17 @@ class TestResolveRouting(unittest.TestCase):
         self.assertEqual(info["uri"], "https://cdn.example.net/api/m3u8?id=9")
         self.assertEqual(info["mime_type"], "application/vnd.apple.mpegurl")
 
+    def test_audio_mpegurl_playlist_is_not_treated_as_direct(self):
+        """CDN 给 m3u8 回 audio/mpegurl 时也要走播放列表分支，把主列表选完流再交给电视"""
+        body = ("#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=500000\nlo.m3u8\n"
+                "#EXT-X-STREAM-INF:BANDWIDTH=3000000\nhi.m3u8\n").encode()
+        with patch.object(ShareResolver, "_open",
+                          return_value=("https://streams.example/x/index.m3u8",
+                                        "audio/mpegurl", None, body)):
+            info = self.resolver.resolve("https://streams.example/x/index.m3u8")
+        self.assertEqual(info["via"], "playlist")
+        self.assertEqual(info["uri"], "https://streams.example/x/hi.m3u8")
+
     def test_douyin_share_json(self):
         dy_html = (
             '{"video":{"play_addr":{"url_list":['
@@ -220,6 +243,128 @@ class TestResolveRouting(unittest.TestCase):
         with self.assertRaises(ValueError) as ctx:
             self.resolver.resolve("纯文本没有任何链接")
         self.assertIn("未从粘贴内容中找到链接", str(ctx.exception))
+
+
+COLLECT_HTML = ('<html><head><title>采集站·第1集</title></head><body>'
+                'var player_aaaa={"url":"/api/h.m3u8?id=7&t=abc"};'
+                '</body></html>')
+
+
+class TestSiteRules(unittest.TestCase):
+    """站点规则：内置模块 + 外置声明式 JSON（share_rules/*.json），全程离线"""
+
+    def setUp(self):
+        from hancast_sidecar.media.rules.base import refresh_external
+        self.rules_dir = _isolated_rules_dir(self)
+        self.server = FakeMediaServer()
+        self.resolver = ShareResolver(self.server, rules_dir=self.rules_dir)
+        # 规则注册表是进程级全局状态，进出都要清空外置规则
+        refresh_external(self.rules_dir)
+        self.addCleanup(refresh_external, self.rules_dir)
+        self._offline = [
+            patch.object(ShareResolver, "_follow_stream", side_effect=_no_follow),
+            patch.object(ShareResolver, "_publish", side_effect=_no_publish),
+        ]
+        for p in self._offline:
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _write(self, spec, name="rule"):
+        with open(os.path.join(self.rules_dir, f"{name}.json"), "w",
+                  encoding="utf-8") as f:
+            json.dump(spec, f, ensure_ascii=False)
+
+    def test_builtin_rules_are_registered(self):
+        from hancast_sidecar.media.rules.base import registered
+        names = {r.name for r in registered()}
+        self.assertTrue({"bilibili", "douyin"} <= names)
+
+    def test_external_page_rule_resolves_collect_site(self):
+        """采集站「正文里那坨 player_aaaa」由一条 JSON 规则描述，不用改代码"""
+        self._write({
+            "name": "collect", "hosts": ["box.example.net"], "path_regex": "^/play/",
+            "steps": [
+                {"regex": r"player_aaaa\s*=\s*(\{.*?\})", "as": "cfg"},
+                {"json": "url", "from": "cfg", "as": "play"},
+            ],
+            "output": "{play}",
+        })
+        with patch.object(ShareResolver, "_open",
+                          return_value=("https://box.example.net/play/1.html",
+                                        "text/html", None, COLLECT_HTML.encode())):
+            info = self.resolver.resolve("https://box.example.net/play/1.html")
+        self.assertEqual(info["via"], "collect")
+        self.assertEqual(info["uri"], "https://box.example.net/api/h.m3u8?id=7&t=abc")
+        self.assertEqual(info["mime_type"], "application/vnd.apple.mpegurl")
+        self.assertEqual(info["title"], "采集站·第1集")
+
+    def test_external_rule_without_output_scans_body(self):
+        self._write({"name": "scan", "hosts": ["scan.example"]})
+        with patch.object(ShareResolver, "_open",
+                          return_value=("https://scan.example/watch", "text/html",
+                                        None,
+                                        b'<script>{"u":"https:\\/\\/cdn.scan.example'
+                                        b'\\/a.m3u8\\u0026t=1"}</script>')):
+            info = self.resolver.resolve("https://scan.example/watch")
+        self.assertEqual(info["via"], "scan")
+        self.assertEqual(info["uri"], "https://cdn.scan.example/a.m3u8&t=1")
+
+    def test_external_page_rule_overrides_builtin(self):
+        """外置规则 priority 更低：同一站点先按用户的取法，失败才回退内置"""
+        self._write({"name": "dy-custom", "hosts": ["douyin.com"],
+                     "output": "https://custom.example/v.mp4"})
+        with patch.object(ShareResolver, "_open",
+                          return_value=("https://www.douyin.com/video/74123456789",
+                                        "text/html", None, b"<html></html>")):
+            info = self.resolver.resolve("https://v.douyin.com/abc/")
+        self.assertEqual(info["via"], "dy-custom")
+        self.assertEqual(info["uri"], "https://custom.example/v.mp4")
+
+    def test_url_stage_rule_runs_without_fetching_page(self):
+        self._write({"name": "api-first", "hosts": ["vod.example.net"],
+                     "stage": "url", "output": "https://cdn.example.net/{host}/x.m3u8"})
+
+        def no_fetch(*_a, **_k):
+            self.fail("url 阶段规则命中后不应再抓页面")
+
+        with patch.object(ShareResolver, "_open", side_effect=no_fetch):
+            info = self.resolver.resolve("https://vod.example.net/play/1")
+        self.assertEqual(info["via"], "api-first")
+        self.assertEqual(info["uri"],
+                         "https://cdn.example.net/vod.example.net/x.m3u8")
+
+    def test_rule_failure_falls_back_to_generic_extraction(self):
+        """一条不适用/写坏的规则只能让路，绝不能把本来成功的粘贴判成失败"""
+        self._write({"name": "wrong", "hosts": ["example.org"],
+                     "steps": [{"regex": "player_aaaa", "as": "x"}]})
+        with patch.object(ShareResolver, "_open",
+                          return_value=("https://example.org/watch/1",
+                                        "text/html; charset=utf-8", None,
+                                        PAGE_HTML.encode())):
+            info = self.resolver.resolve("https://example.org/watch/1")
+        self.assertEqual(info["via"], "page")
+        self.assertEqual(info["uri"], "https://example.org/stream/main.m3u8?token=abc")
+
+    def test_broken_rule_file_only_skips_itself(self):
+        with open(os.path.join(self.rules_dir, "broken.json"), "w",
+                  encoding="utf-8") as f:
+            f.write("{ this is not json")
+        self._write({"name": "good", "hosts": ["good.example"],
+                     "output": "https://good.example/a.m3u8"}, name="good")
+        with patch.object(ShareResolver, "_open",
+                          return_value=("https://good.example/p", "text/html",
+                                        None, b"<html></html>")):
+            info = self.resolver.resolve("https://good.example/p")
+        self.assertEqual(info["via"], "good")
+
+    def test_disabled_rule_is_not_loaded(self):
+        self._write({"name": "off", "hosts": ["off.example"], "enabled": False,
+                     "output": "https://off.example/a.m3u8"})
+        with patch.object(ShareResolver, "_open",
+                          return_value=("https://off.example/p", "text/html",
+                                        None, PAGE_HTML.encode())):
+            info = self.resolver.resolve("https://off.example/p")
+        self.assertEqual(info["via"], "page")   # 规则让路，通用提取接手
 
 
 class TestStreamExtraction(unittest.TestCase):
