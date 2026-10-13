@@ -92,7 +92,7 @@ const MOCK_DEVICES: Device[] = [
 const MOCK_SETTINGS: AppSettings = {
   usn: 'hancast-uuid-001',
   friendly_name: 'HanCast',
-  version: '2.2.20',
+  version: '2.2.21',
   media_port: 8080,
   default_device: null,
   network_interface: '',
@@ -291,8 +291,8 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
     case 'check_update':
       return {
         has_update: false,
-        current: '2.2.20',
-        latest: '2.2.20',
+        current: '2.2.21',
+        latest: '2.2.21',
         url: '',
         body: '',
         source: 'github',
@@ -311,6 +311,7 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
           { name: '麦克风 (Realtek)', kind: 'mic' },
           { name: '立体声混音', kind: 'system' },
         ],
+        platform: /Mac|iPhone|iPad/.test(navigator.platform) ? 'darwin' : 'win32',
         ffmpeg: { ok: true, path: 'ffmpeg', version: 'mock' },
       } as T
     case 'start_screen_cast':

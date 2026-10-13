@@ -559,19 +559,32 @@ class TestMediaProxyRewrite(unittest.TestCase):
         self.assertFalse(_is_leech_placeholder(b"\x00\x00\x00 ftypisom"))
 
     def test_disguised_ts_is_not_a_placeholder(self):
-        """61 字节假 PNG 头 + 188 对齐的 TS：是真分片，代理要剥头再转发"""
+        """假 PNG 头 + 188 对齐的 TS：是真分片，代理要剥头再转发"""
         stub = b"\x89PNG\r\n\x1a\n" + b"\x00" * 8 + b"IHDR" + b"\x00" * 41
-        head = stub + b"".join(b"\x47\x40\x11\x00" + b"\x00" * 184 for _ in range(4))
+        head = stub + b"".join(b"\x47\x40\x11\x00" + b"\x00" * 184 for _ in range(8))
         self.assertEqual(len(stub), 61)
         self.assertTrue(_is_leech_placeholder(head[:6]))
         self.assertEqual(_disguise_offset(head), 61)
         self.assertTrue(_disguised_ts(head))
         # 真海报图：没有 TS 对齐，不许剥字节
-        self.assertEqual(_disguise_offset(b"\x89PNG\r\n\x1a\n" + b"\x00" * 1024), 0)
+        self.assertEqual(_disguise_offset(b"\x89PNG\r\n\x1a\n" + b"\x00" * 4096), 0)
         # 裸 TS（无伪装头）不动
         self.assertEqual(_disguise_offset(head[61:]), 0)
         # 首块太短判不出来就不动，宁可少剥也不要剥错
         self.assertEqual(_disguise_offset(head[:400]), 0)
+
+    def test_disguise_offset_handles_long_skin(self):
+        """低端影视（box.dyrs.com.de）的皮有 583 字节：窄窗口等于没修
+
+        实测 1.7MB 的分片前 583 字节是合法 PNG（IHDR+IDAT），ffprobe 原样读它
+        判成 png_pipe，mpv 直接 "no audio or video data played"。
+        """
+        ts = b"".join(b"\x47\x40\x11\x00" + b"\x00" * 184 for _ in range(12))
+        for skin_len in (61, 112, 583, 653, 1900):
+            stub = b"\x89PNG\r\n\x1a\n" + b"\x00" * (skin_len - 8)
+            self.assertEqual(len(stub), skin_len)
+            self.assertEqual(_disguise_offset(stub + ts), skin_len,
+                             f"{skin_len} 字节的图片头要能扫出来")
 
     def test_peek_upstream_accumulates_small_chunks(self):
         """分块编码下首块可能只有几十字节：peek 要累计到够判型的长度"""
@@ -661,7 +674,7 @@ class TestMediaProxyRewrite(unittest.TestCase):
         return sent["status"], sent.get("headers", {}), h.wfile.getvalue()
 
     _DISGUISED_TS = (b"\x89PNG\r\n\x1a\n" + b"\x00" * 8 + b"IHDR" + b"\x00" * 41
-                    + b"".join(b"\x47\x40\x11\x00" + b"\x00" * 184 for _ in range(4)))
+                     + b"".join(b"\x47\x40\x11\x00" + b"\x00" * 184 for _ in range(12)))
 
     def test_upstream_get_falls_back_to_direct(self):
         """系统代理端口一坏（127.0.0.1:9565 类），代理转发不该整段 502"""

@@ -24,5 +24,15 @@
 	<array>
 		<string>_upnp._tcp</string>
 	</array>
+	<!-- 投屏要采麦克风，ScreenCaptureKit 采系统声音同样要求这条声明。
+	     缺它的后果不是「弹窗询问被拒」，而是**根本不弹**：TCC 直接判「拒绝且
+	     不再提示」，于是 ffmpeg 作为子进程从 App 继承这条授权，抓到的音频恒为静音
+	     ——设备照样枚举得到（枚举不过是以 "Microphone" 开头的字符串），
+	     所以用户看到的是「选了麦克风但投出去没声音」。
+	     声明只是前提：TCC 在第一次*真正访问*音频时才写库，而 ffmpeg 自己不会触发
+	     弹窗。所以前端在勾选麦克风时先用 webview 走一次 getUserMedia 把授权拿到，
+	     再让 ffmpeg 接手（见 ScreenCastPanel.vue 的 ensureMicAccess）。 -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>HanCast 需要访问麦克风，用于在屏幕投屏时把你的讲话一起播出去。</string>
 </dict>
 </plist>

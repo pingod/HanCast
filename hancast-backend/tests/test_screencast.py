@@ -47,9 +47,128 @@ class TestFfmpegManager(unittest.TestCase):
         self.assertEqual(FfmpegManager._classify_audio_device("VB-Audio Virtual Cable"), "system")
         self.assertEqual(FfmpegManager._classify_audio_device("BlackHole 2ch"), "system")
         self.assertEqual(FfmpegManager._classify_audio_device("BlackHole 16ch"), "system")
+        # macOS 自建的 Audio Tap 环回（macos_tap.py）
+        self.assertEqual(FfmpegManager._classify_audio_device("HanCast 系统声音"), "system")
         self.assertEqual(FfmpegManager._classify_audio_device("Realtek Microphone"), "mic")
         self.assertEqual(FfmpegManager._classify_audio_device("麦克风 (Realtek Audio)"), "mic")
         self.assertEqual(FfmpegManager._classify_audio_device("Built-in Microphone"), "mic")
+
+    @patch("sys.platform", "darwin")
+    @patch("os.name", "posix")
+    @patch("hancast_sidecar.screencast.ffmpeg_manager._run_utf8")
+    def test_macosenumerates_tap_device_is_marked(self, mock_run):
+        """自建环回要能被标出来：它的 avfoundation 索引随别的设备增减而变"""
+        mock_run.return_value = MagicMock(stderr=(
+            "AVFoundation video devices:\n"
+            "[0] FaceTime高清相机\n"
+            "[1] Capture screen 0\n"
+            "AVFoundation audio devices:\n"
+            "[0] MacBook Pro麦克风\n"
+            "[3] HanCast 系统声音\n"), stdout="")
+        fm = FfmpegManager()
+        fm._path = "/usr/bin/ffmpeg"
+        with patch("hancast_sidecar.screencast.macos_tap.ensure_device",
+                   return_value=True), \
+             patch("hancast_sidecar.screencast.macos_tap.is_tap_device",
+                   lambda n: n == "HanCast 系统声音"):
+            devices = fm._list_audio_devices()
+        by_name = {d["name"]: d for d in devices}
+        self.assertEqual(by_name["3:HanCast 系统声音"]["kind"], "system")
+        self.assertTrue(by_name["3:HanCast 系统声音"]["tap"])
+        self.assertNotIn("tap", by_name["0:MacBook Pro麦克风"])
+
+    # .68 实测：打包的 ffmpeg 6.1.1 与系统 8.1.2 都不打印
+    # "DirectShow audio devices" 分段头（那条字符串根本不在 exe 里），
+    # 设备行只靠尾缀标类型。只按分段头切段的话 Windows 永远列不出麦克风。
+    DSHOW_NO_HEADER = (
+        "[dshow @ 1] \"Smart Connect Camera\" (video)\n"
+        "[dshow @ 1]   Alternative name \"@device_pnp_x\"\n"
+        "[dshow @ 1] \"OBS Virtual Camera\" (none)\n"
+        "[dshow @ 1] \"麦克风 (2- ORBBEC Audio Device)\" (audio)\n"
+        "[dshow @ 1]   Alternative name \"@device_cm_y\"\n"
+        "[dshow @ 1] \"耳机式麦克风 (HUAWEI Sound Joy-06342)\" (audio)\n"
+        "[dshow @ 1] \"麦克风 (Realtek(R) Audio)\" (audio)\n"
+        "[dshow @ 1] \"立体声混音 (Realtek(R) Audio)\" (audio)\n"
+        "[in#0 @ 2] Error opening input: Immediate exit requested\n"
+        "Error opening input file dummy.\n")
+
+    @patch("sys.platform", "win32")
+    @patch("os.name", "nt")
+    @patch("hancast_sidecar.screencast.ffmpeg_manager._run_utf8")
+    def test_windows_lists_mics_from_dshow_suffix(self, mock_run):
+        """按 (audio) 后缀认设备：Windows 麦克风选择器不再空列表"""
+        mock_run.return_value = MagicMock(stderr=self.DSHOW_NO_HEADER, stdout="")
+        fm = FfmpegManager()
+        fm._path = "ffmpeg"
+        with patch("hancast_sidecar.screencast.loopback.loopback_devices",
+                   return_value=[]):
+            devices = fm._list_audio_devices()
+        mics = [d["name"] for d in devices if d["kind"] == "mic"]
+        self.assertEqual(mics, ["麦克风 (2- ORBBEC Audio Device)",
+                                "耳机式麦克风 (HUAWEI Sound Joy-06342)",
+                                "麦克风 (Realtek(R) Audio)"])
+        # 相机、虚拟摄像头、Alternative name 行、错误行都不能混进来
+        self.assertNotIn("Smart Connect Camera", [d["name"] for d in devices])
+        self.assertNotIn("OBS Virtual Camera", [d["name"] for d in devices])
+
+    @patch("sys.platform", "win32")
+    @patch("os.name", "nt")
+    @patch("hancast_sidecar.screencast.ffmpeg_manager._run_utf8")
+    def test_windows_falls_back_to_dshow_section_header(self, mock_run):
+        """带分段头的 build 仍然认得出（别把老格式判成没设备）"""
+        mock_run.return_value = MagicMock(stderr=(
+            "DirectShow video devices (some may be both video and audio devices)\n"
+            "\"相机\" (video)\n"
+            "DirectShow audio devices\n"
+            "\"麦克风 (Realtek(R) Audio)\"\n"), stdout="")
+        fm = FfmpegManager()
+        fm._path = "ffmpeg"
+        with patch("hancast_sidecar.screencast.loopback.loopback_devices",
+                   return_value=[]):
+            devices = fm._list_audio_devices()
+        self.assertEqual([d["name"] for d in devices],
+                         ["麦克风 (Realtek(R) Audio)"])
+
+    @patch("sys.platform", "darwin")
+    @patch("os.name", "posix")
+    @patch("hancast_sidecar.screencast.ffmpeg_manager._run_utf8")
+    def test_macos_tap_absent_when_device_not_built(self, mock_run):
+        """环回没建起来（macOS 14.1 及以下）时列表里就没有它，别给界面假选项"""
+        mock_run.return_value = MagicMock(stderr=(
+            "AVFoundation audio devices:\n"
+            "[0] MacBook Pro麦克风\n"), stdout="")
+        fm = FfmpegManager()
+        fm._path = "/usr/bin/ffmpeg"
+        with patch("hancast_sidecar.screencast.macos_tap.ensure_device",
+                   return_value=False):
+            devices = fm._list_audio_devices()
+        self.assertEqual([d["name"] for d in devices], ["0:MacBook Pro麦克风"])
+
+    def test_audio_input_silent_reads_wav_pcm(self):
+        """静音判据只能认「全零」：真实麦克风的底噪也必须算有信号"""
+        import io as _io
+        import wave as _wave
+
+        def wav(samples):
+            buf = _io.BytesIO()
+            with _wave.open(buf, "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(48000)
+                w.writeframes("".join(chr(s & 0xFF) + chr((s >> 8) & 0xFF)
+                                      for s in samples).encode("latin-1"))
+            return buf.getvalue()
+
+        fm = FfmpegManager()
+        fm._path = "/usr/bin/ffmpeg"
+        for payload, want in ((wav([0] * 5000), True), (wav([0] * 4999 + [7]), False)):
+            with patch("subprocess.run",
+                       return_value=MagicMock(returncode=0, stdout=payload,
+                                              stderr=b"")):
+                self.assertIs(fm.audio_input_silent("0:Mic"), want)
+        with patch("subprocess.run",
+                   side_effect=OSError("ffmpeg 起不来")):
+            self.assertIsNone(fm.audio_input_silent("0:Mic"))
 
     def test_build_video_input_screen(self):
         args = FfmpegManager.build_video_input(
@@ -159,7 +278,8 @@ class TestFfmpegManager(unittest.TestCase):
     @patch("sys.platform", "darwin")
     @patch("os.name", "posix")
     def test_build_audio_input_macos_mic_plus_blackhole(self):
-        # 麦克风 + BlackHole 双路混音；amix 标签按音频起始序号（视频占输入 0）
+        # 麦克风 + 系统声音双路混音；amix 标签按音频起始序号（视频占输入 0），
+        # 且每路先 aformat 规整成 48k/立体声/s16，否则 amix 图建不起来
         args = FfmpegManager.build_audio_input({
             "mic": True, "mic_device": "0:Built-in Microphone",
             "system": True, "system_device": "2:BlackHole 2ch",
@@ -168,7 +288,12 @@ class TestFfmpegManager(unittest.TestCase):
             "-f", "avfoundation", "-i", ":0",
             "-f", "avfoundation", "-i", ":2",
             "-filter_complex",
-            "[1:a][2:a]amix=inputs=2:duration=longest:dropout_transition=0",
+            "[1:a]aformat=sample_fmts=s16:sample_rates=48000"
+            ":channel_layouts=stereo[m0];"
+            "[2:a]aformat=sample_fmts=s16:sample_rates=48000"
+            ":channel_layouts=stereo[m1];"
+            "[m0][m1]amix=inputs=2:duration=longest"
+            ":dropout_transition=0:normalize=0",
         ])
 
     @patch("sys.platform", "darwin")
@@ -202,7 +327,7 @@ class TestHlsEncode(unittest.TestCase):
         captured = {}
         m3u8 = os.path.join(out_dir, "live.m3u8")
 
-        def fake_spawn(cmd):
+        def fake_spawn(cmd, use_stdin=False):
             captured["cmd"] = cmd
             # 播放列表由"本次进程"新建，就绪判定才算通过
             with open(m3u8, "w", encoding="utf-8") as f:
@@ -306,7 +431,7 @@ class TestHlsEncode(unittest.TestCase):
             f.write(b"\x47" * 188)
         seen = {}
 
-        def fake_spawn(cmd):
+        def fake_spawn(cmd, use_stdin=False):
             seen["gone"] = not os.path.exists(stale)
             with open(cmd[-1], "w", encoding="utf-8") as f:
                 f.write("#EXTM3U\n")
@@ -526,6 +651,55 @@ class TestManagerContract(unittest.TestCase):
                                 "audio": {"system": True}})
         self.assertFalse(result["ok"])
         self.assertIn("系统声音设备", result["error"])
+
+    @patch("sys.platform", "darwin")
+    def test_macos_tap_index_is_refreshed_at_start(self):
+        """环回设备是枚举时现建的，avfoundation 索引随别的设备增减而变：
+        界面里存的那份必须按名称换成本次枚举到的真实索引，否则采的是别的设备"""
+        mgr = _manager()
+        mgr._state["running"] = False
+        started = {}
+
+        def fake_start(target, params, source, audio, video):
+            started.update(audio)
+            return {"ok": True, "target": target, "session_id": "abc123"}
+
+        with patch.object(mgr.ffmpeg, "check", return_value={"ok": True}), \
+             patch.object(mgr.ffmpeg, "_list_audio_devices", return_value=[
+                 {"name": "2:MacBook Pro麦克风", "kind": "mic"},
+                 {"name": "5:HanCast 系统声音", "kind": "system", "tap": True}]), \
+             patch.object(mgr.ffmpeg, "audio_input_silent", return_value=False), \
+             patch.object(mgr, "_start", side_effect=fake_start):
+            result = mgr.start({"target": "browser",
+                                "source": {"type": "screen"},
+                                "audio": {"system": True,
+                                          "system_device": "3:HanCast 系统声音"}})
+        self.assertTrue(result["ok"])
+        self.assertEqual(started["system_device"], "5:HanCast 系统声音")
+
+    def test_mic_without_signal_blocks_start(self):
+        """没有录音权限时系统不报错、也不弹窗，采回来的全是 0：
+        宁可不投，也不能投出一条用户以为在收声的哑流"""
+        mgr = _manager()
+        mgr._state["running"] = False
+        with patch.object(mgr.ffmpeg, "check", return_value={"ok": True}), \
+             patch.object(mgr.ffmpeg, "_list_audio_devices", return_value=[
+                 {"name": "麦克风", "kind": "mic"}]), \
+             patch.object(mgr.ffmpeg, "audio_input_silent", return_value=True):
+            result = mgr.start({"target": "browser",
+                                "source": {"type": "screen"},
+                                "audio": {"mic": True, "mic_device": "麦克风"}})
+        self.assertFalse(result["ok"])
+        self.assertIn("静音", result["error"])
+        self.assertIn("权限", result["error"])
+
+    @patch("sys.platform", "darwin")
+    def test_teardown_releases_tap_device(self):
+        """停投就把自建的系统声音设备摘掉，别在用户的声音列表里留尾巴"""
+        mgr = _manager(running=False)
+        with patch("hancast_sidecar.screencast.macos_tap.destroy_device") as dd:
+            mgr._teardown()
+        dd.assert_called_once()
 
     def test_ffmpeg_missing_blocks_start(self):
         mgr = _manager()

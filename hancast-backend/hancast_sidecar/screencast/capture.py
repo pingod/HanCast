@@ -36,6 +36,9 @@ class FfmpegCapture:
         self._error: Optional[str] = None
         self._stderr_tail: deque = deque(maxlen=_STDERR_TAIL)
         self._stop_requested = False
+        # Windows 系统声音：sidecar 自己采 WASAPI 环回，PCM 写进 ffmpeg 的 stdin
+        self._loopback = None
+        self._feeder: Optional[threading.Thread] = None
 
     # ────────────────────────────────────────
     # HLS 输出
@@ -125,9 +128,22 @@ class FfmpegCapture:
                     logger.exception("[ScreenCast] HLS error callback failed")
 
         logger.info(f"[ScreenCast] HLS cmd: {' '.join(cmd)}")
+
+        # WASAPI 环回必须在 FFmpeg 之前打开：设备被别的程序独占、或者用户在
+        # 选完之后把输出切走了，都要在这里就说清楚，而不是留下一个没声音的会话
+        lb_cfg = audio_cfg.get("_loopback") if audio_input else None
+        if lb_cfg:
+            from .loopback import open_stream
+            self._loopback = open_stream(lb_cfg.get("name"))
+            if self._loopback is None:
+                return {"ok": False,
+                        "error": "系统声音采不起来：输出设备可能已被切换或独占，"
+                                 "请重新选择系统声音设备"}
+
         try:
-            proc = self._spawn(cmd)
+            proc = self._spawn(cmd, use_stdin=self._loopback is not None)
         except Exception as e:
+            self._close_loopback()
             return {"ok": False, "error": f"启动 HLS 编码失败: {e}"}
 
         self._proc = proc
@@ -137,6 +153,11 @@ class FfmpegCapture:
             target=self._drain_stderr, args=(proc,), daemon=True,
             name="ffmpeg-hls-stderr"))
         self._threads[-1].start()
+        if self._loopback is not None:
+            self._feeder = threading.Thread(
+                target=self._feed_loopback, args=(proc,), daemon=True,
+                name="ffmpeg-hls-loopback")
+            self._feeder.start()
 
         # 等待首个播放列表生成（最多 8s）。必须在 m3u8 由本次进程新建之后
         # 才算成功，否则会把上一轮残留的播放列表当成就绪信号。
@@ -173,15 +194,48 @@ class FfmpegCapture:
     # 内部
     # ────────────────────────────────────────
 
-    def _spawn(self, cmd: List[str]) -> subprocess.Popen:
+    def _spawn(self, cmd: List[str], use_stdin: bool = False) -> subprocess.Popen:
         creationflags = 0
         if os.name == "nt":
             creationflags = subprocess.CREATE_NO_WINDOW | getattr(
                 subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        # stdin 默认给 DEVNULL：不显式指定的话 FFmpeg 继承 sidecar 的 stdin，
+        # 而 sidecar 的 stdin 正是与 Tauri 之间的 JSON 行协议管道 —— 一旦被
+        # 子进程读走，主命令循环就会凭空丢指令。
         return subprocess.Popen(
-            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+            cmd, stdin=subprocess.PIPE if use_stdin else subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
             creationflags=creationflags, bufsize=0,
         )
+
+    def _feed_loopback(self, proc: subprocess.Popen):
+        """把 WASAPI 环回 PCM 持续写进 FFmpeg 的 stdin。
+
+        PortAudio 的读是阻塞的，且实测按实时节奏交付（静音期也给零块），
+        所以不需要按单调时钟补零；写失败只意味着 FFmpeg 已经退了。
+        """
+        lb = self._loopback
+        if lb is None:
+            return
+        try:
+            while not self._stop_requested:
+                data = lb.read()
+                if data:
+                    proc.stdin.write(data)
+        except (BrokenPipeError, ValueError, OSError):
+            logger.info("[ScreenCast] loopback feeder: FFmpeg stdin 已关闭")
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[ScreenCast] loopback feeder: {e}")
+        finally:
+            try:
+                proc.stdin.close()
+            except Exception:
+                pass
+
+    def _close_loopback(self):
+        lb, self._loopback = self._loopback, None
+        if lb is not None:
+            lb.close()
 
     def _drain_stderr(self, proc: subprocess.Popen):
         """读取 FFmpeg stderr。不读满 64KB 管道会把 FFmpeg 卡死在写日志上"""
@@ -249,6 +303,8 @@ class FfmpegCapture:
         """停止捕获进程（幂等）"""
         with self._lock:
             self._stop_requested = True
+            feeder = self._feeder
+            self._feeder = None
             proc = self._proc
             self._proc = None
             if proc is not None and proc.poll() is None:
@@ -265,6 +321,11 @@ class FfmpegCapture:
                     except Exception:
                         pass
             self._running = False
+            # 先等 feeder 退出再关 PortAudio 流：在 read() 进行中关掉流会在
+            # C 扩展里踩到已释放的 stream
+            if feeder is not None:
+                feeder.join(timeout=2)
+            self._close_loopback()
 
     @property
     def running(self) -> bool:

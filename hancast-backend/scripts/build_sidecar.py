@@ -308,6 +308,16 @@ def build(force=False):
         "--assume-yes-for-downloads",
     ]
 
+    # Windows 系统声音靠 WASAPI 环回（screencast/loopback.py）：
+    # pyaudiowpatch 的 Python 部分是纯源码，真正的采集在顶层二进制的
+    # `_portaudiowpatch…pyd` 里，而它只在 try/except 里被 import——不点名的话
+    # 打出来的包就没有环回能力，表现为界面上「系统声音」永远选不到设备。
+    if sys.platform == "win32":
+        args += [
+            "--include-package=pyaudiowpatch",
+            "--include-module=_portaudiowpatch",
+        ]
+
     # 添加图标参数（仅支持 ICO 格式）
     if icon_path and sys.platform == "win32":
         args.append(f"--windows-icon-from-ico={icon_path}")

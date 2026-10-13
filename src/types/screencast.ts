@@ -14,12 +14,18 @@ export interface ScreenSourceItem {
 export interface AudioDeviceItem {
   name: string
   kind: 'mic' | 'system'
+  /** macOS 上由 HanCast 自建的 Audio Tap 环回（索引会变，后端每次按名称重解析） */
+  tap?: boolean
+  /** Windows WASAPI 环回：ffmpeg 没有这个输入设备，由 sidecar 灌 PCM */
+  loopback?: boolean
 }
 
 export interface ScreenSources {
   screens: ScreenSourceItem[]
   windows: ScreenSourceItem[]
   audio_inputs: AudioDeviceItem[]
+  /** sidecar 的 sys.platform：'darwin' | 'win32' | 'linux' */
+  platform?: string
   ffmpeg: {
     ok: boolean
     path?: string | null

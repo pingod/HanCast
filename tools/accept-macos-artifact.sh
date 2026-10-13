@@ -32,7 +32,7 @@ cd /Users/pavia/githome/HanCast || exit 1
 for rel in ssdp.py commands.py params.py security/guard.py protocol/dlna.py protocol/server.py \
            models/session.py renderer/mpv.py screencast/manager.py screencast/capture.py \
            screencast/httpd.py screencast/ffmpeg_manager.py screencast/www/index.html \
-           utils/logger.py utils/config.py main.py \
+           screencast/macos_tap.py utils/logger.py utils/config.py main.py \
            media/server.py media/share_resolver.py media/rules/__init__.py media/rules/base.py \
            media/rules/bili.py media/rules/douyin.py media/rules/declarative.py; do
   want=$(git show "$TAG:hancast-backend/hancast_sidecar/$rel" | shasum -a 256 | cut -d' ' -f1)
@@ -135,6 +135,48 @@ open -a HanCast
 # 漏改会让真机上的「版本号」不再能证明装的是哪版（v2.2.19 就漏了这一处）。
 SIDE_VER=$(grep -o 'self\.version = "[^"]*"' "$RES/utils/config.py" | head -1 | sed 's/.*"\(.*\)"/\1/')
 chk "sidecar 自报版本" "$SIDE_VER" "$VER"
+
+# ── v2.2.21 本轮契约：窗口选择 + 系统声音 + 麦克风 ──
+
+# 麦克风授权声明：Info.plist 里缺 NSMicrophoneUsageDescription 时，TCC 不是
+# 「弹窗被拒」而是「拒绝且不再提示」，ffmpeg 从 App 继承这条授权后抓回的样本
+# 恒为 0 —— 设备照样列得出、投屏照样流畅，只是永远没声。
+chk "NSMicrophoneUsageDescription" "$(plutil -extract NSMicrophoneUsageDescription raw "$PLIST" 2>/dev/null | cut -c1-7)" "HanCast"
+
+# 勾了麦克风却没有输入权限，以前是静默降级成 -an；现在开录前试采一秒，
+# 采到全零就如实报错。这条判据在打包产物里必须在。
+if grep -q 'audio_input_silent' "$RES/screencast/manager.py"; then
+  say "PASS 静音闸门（无录音权限时如实报错）"
+else
+  say "FAIL 打包产物缺 audio_input_silent 闸门（又会静默投哑）"; fails=$((fails+1))
+fi
+
+# macOS 系统声音：CoreAudio Audio Tap（14.2+）现建「HanCast 系统声音」设备，
+# 不装虚拟声卡也能投。缺这个模块 = 界面里根本没有系统声音可选项。
+if grep -q 'AudioHardwareCreateAggregateDevice' "$RES/screencast/macos_tap.py" 2>/dev/null; then
+  say "PASS Audio Tap 系统声音模块已打包"
+else
+  say "FAIL 打包产物缺 macos_tap.py（macOS 系统声音没辙）"; fails=$((fails+1))
+fi
+
+# 窗口选择器：macOS 交的是「窗口号 + 该窗口的裁剪区域」，Windows 过滤掉框架
+# 影子窗口（裸 EnumWindows 会把 com.han.hancast-siw 这类 16x16 隐形窗口塞进
+# 列表，选到了就是黑屏）。两者都在 ffmpeg_manager 里。
+if grep -q 'def darwin_windows' "$RES/screencast/ffmpeg_manager.py" \
+   && grep -q 'def _castable' "$RES/screencast/ffmpeg_manager.py"; then
+  say "PASS 窗口枚举与过滤（选择器不再靠手打标题）"
+else
+  say "FAIL 缺窗口枚举/过滤实现"; fails=$((fails+1))
+fi
+
+# Windows 麦克风列不出来的根因：现在的 dshow -list_devices 不打印
+# "DirectShow audio devices" 分段头，只按分段头切段的解析永远进不了音频段。
+# 产物里必须认设备行的 (audio) 后缀。
+if grep -q '(audio|video|none)' "$RES/screencast/ffmpeg_manager.py"; then
+  say "PASS dshow 按 (audio) 后缀认设备"
+else
+  say "FAIL dshow 解析仍只认分段头（Windows 一个麦克风都列不出）"; fails=$((fails+1))
+fi
 
 say "--- $([ $fails -eq 0 ] && echo 'ALL PASS' || echo "$fails FAIL") ---"
 exit $fails

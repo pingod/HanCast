@@ -16,12 +16,13 @@
 
 import os
 import shutil
+import sys
 import time
 import logging
 import tempfile
 import secrets
 import threading
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from ..utils import protocol_io
 from ..params import get as param
@@ -105,11 +106,52 @@ class ScreenCastManager:
             source = {"type": "screen", "id": "desktop"}
         if source.get("type") == "window" and not (source.get("title") or source.get("id")):
             return {"ok": False, "error": "窗口源缺少窗口信息"}
+        if source.get("type") == "window" and sys.platform == "darwin":
+            # mac 上没有窗口抓取，只能抓它所在屏再按几何裁——坐标必须是此刻的
+            err = self.ffmpeg.refresh_window(source)
+            if err:
+                return {"ok": False, "error": err}
 
         audio = params.get("audio") or {}
         video = params.get("video") or {}
         if audio.get("system") and not audio.get("system_device"):
-            return {"ok": False, "error": "未选择系统声音设备（需立体声混音/虚拟声卡）"}
+            return {"ok": False,
+                    "error": "未选择系统声音设备（Windows 选带 [Loopback] 的渲染设备；"
+                             "macOS 选「HanCast 系统声音」，14.2 以下需虚拟声卡）"}
+        if audio.get("mic") and not audio.get("mic_device"):
+            return {"ok": False, "error": "未选择麦克风设备"}
+        # 勾了声学设备却拿不到对应的输入，宁可直接说清楚：以前这里静默降级成
+        # -an，用户以为在收声，实际投出去的每一帧都是哑的
+        devices = self.ffmpeg._list_audio_devices()
+        missing = self._missing_audio_devices(audio, devices)
+        if missing:
+            return {"ok": False, "error": missing}
+        if audio.get("mic") and self.ffmpeg.audio_input_silent(
+                audio.get("mic_device")) is True:
+            # 没有录音权限时系统不报错、也不弹窗（macOS 尤其如此），设备照样
+            # 枚举得到，只是采回来的每个样本都是 0 —— 投出去的每一帧都没有人声，
+            # 而且画面流畅、毫无异常。开录前试采一秒，把这件事如实报出来。
+            return {"ok": False,
+                    "error": "麦克风采到的全是静音，一个非零样本都没有——多半是没给录音权限："
+                             "macOS 请在「系统设置 → 隐私与安全性 → 麦克风」里允许 HanCast；"
+                             "Windows 请在「设置 → 隐私和安全性 → 麦克风」里允许桌面应用录音。"
+                             "授权后重试，或先取消勾选「麦克风」"}
+        if audio.get("system"):
+            # 用户选的是 WASAPI 环回（Windows 上系统声音的默认形态）时，
+            # ffmpeg 里没有这个设备，得由 sidecar 自己采 PCM 灌进 stdin
+            for d in devices:
+                if d.get("loopback") and d["name"] == audio.get("system_device"):
+                    audio["_loopback"] = {"name": d["name"], "rate": d["rate"],
+                                          "channels": d["channels"]}
+                    break
+            # macOS 的 Audio Tap 设备是枚举时现建的，avfoundation 里的索引跟着
+            # 其他设备的增减走；界面存的是用户当时看到的索引，这里换成本次
+            # 枚举到的真实索引（按名称匹配，BlackHole 那类物理设备不受影响）
+            sel = str(audio.get("system_device") or "").split(":", 1)[-1]
+            for d in devices:
+                if d.get("tap") and str(d["name"]).split(":", 1)[-1] == sel:
+                    audio["system_device"] = d["name"]
+                    break
 
         # 每次会话一个全新的分片目录 + 全新的 URL
         self._session_id = secrets.token_hex(3)
@@ -125,6 +167,39 @@ class ScreenCastManager:
         else:
             self._teardown()
         return result
+
+    def _missing_audio_devices(self, audio: Dict,
+                               devices: Optional[List[Dict]] = None) -> Optional[str]:
+        """勾了声学设备、系统里却找不到它 —— 说清楚，而不是静默降级成 -an
+
+        以前的表现：用户在界面上勾了「系统声音」，设备早被拔了/驱动装坏了，
+        投屏照旧启动、画面流畅，只是永远没声音，谁也不知道为什么。
+        """
+        wanted = [("麦克风", audio.get("mic_device")) if audio.get("mic") else None,
+                  ("系统声音", audio.get("system_device")) if audio.get("system") else None]
+        wanted = [w for w in wanted if w]
+        if not wanted:
+            return None
+        if devices is None:
+            devices = self.ffmpeg._list_audio_devices()
+        try:
+            names = {d["name"] for d in devices}
+        except Exception as e:
+            logger.warning(f"[ScreenCast] 音频设备校验跳过: {e}")
+            return None
+        if not names:
+            return None        # 枚举本身不可用（ffmpeg 缺失等），别拦住投屏
+        for label, dev in wanted:
+            if not dev:
+                continue
+            # macOS 的设备名是 "索引:名称"，索引随设备增减变化，只比名称部分
+            base = str(dev).split(":", 1)[-1] if sys.platform == "darwin" else str(dev)
+            if str(dev) not in names and not any(
+                    n.split(":", 1)[-1] == base for n in names):
+                return (f"选中的{label}设备已不可用：{base}；请重新选择"
+                        f"（Windows 系统声音用「[Loopback]」结尾的渲染设备，"
+                        f"macOS 需 CoreAudio 系统音频或虚拟声卡）")
+        return None
 
     def stop(self) -> Dict:
         """停止屏幕投屏（幂等）"""
@@ -181,10 +256,8 @@ class ScreenCastManager:
             self.httpd.stop()
         except Exception as e:
             logger.warning(f"[ScreenCast] httpd stop: {e}")
-
-    # ────────────────────────────────────────
-    # 通道
-    # ────────────────────────────────────────
+        # 没有会话时 stop() 会提前返回、走不到 _teardown，这里兜底释放环回设备
+        self._release_tap()
 
     def _start(self, target: str, params: Dict, source: Dict,
                audio: Dict, video: Dict) -> Dict:
@@ -358,7 +431,23 @@ class ScreenCastManager:
             self.httpd.stop()
         except Exception as e:
             logger.warning(f"[ScreenCast] httpd stop: {e}")
+        self._release_tap()
         self._reset()
+
+    @staticmethod
+    def _release_tap():
+        """销毁自建的「HanCast 系统声音」环回设备（仅 macOS，幂等）
+
+        这台虚拟输入设备只在投屏面板开着/正在投的时候有价值，留着会让用户的
+        声音 MIDI 设置里莫名多出一个设备。销毁失败不影响停流。
+        """
+        if sys.platform != "darwin":
+            return
+        try:
+            from .macos_tap import destroy_device
+            destroy_device()
+        except Exception as e:  # noqa: BLE001
+            logger.info(f"[ScreenCast] 系统声音设备释放: {e}")
 
     def _reset(self):
         self._state.update({

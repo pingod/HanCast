@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "hancast-sidecar"
 # version synced from tauri.conf.json
-version = "2.2.20"
+version = "2.2.21"
 description = "HanCast Python Sidecar"
 readme = "README.md"
 license = "GPL-3.0"
@@ -20,6 +20,10 @@ dependencies = [
     "netifaces>=0.11.0",
     # 屏幕投屏浏览器观看：aiohttp 直接供 HLS，不再依赖 WebRTC（aiortc 已移除）
     "aiohttp>=3.9.0",
+    # Windows 系统声音：FFmpeg 没有 WASAPI 输入（ticket #9408 未合并），
+    # 用 PortAudio 的 WASAPI 环回分支把渲染设备采成 PCM。PyPI 只发 Windows
+    # wheel，所以按平台标记声明，macOS/Linux 不会被拖进构建。
+    "pyaudiowpatch>=0.2.12.9; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]

@@ -16,7 +16,7 @@ const deviceStore = useDeviceStore()
 const target = ref<'dlna' | 'browser'>('browser')
 const sourceType = ref<'screen' | 'window'>('screen')
 const screenId = ref('desktop')
-const windowTitle = ref('')
+const windowId = ref('')
 const deviceId = ref('')
 const micOn = ref(false)
 const micDevice = ref('')
@@ -50,7 +50,7 @@ watch(() => sc.sources?.audio_inputs, (devices) => {
 
 const canStart = computed(() => {
   if (!sc.ffmpegOk || sc.isRunning) return false
-  if (sourceType.value === 'window' && !windowTitle.value) return false
+  if (sourceType.value === 'window' && !selectedWindow.value) return false
   if (target.value === 'dlna' && !deviceId.value) return false
   return true
 })
@@ -65,6 +65,22 @@ const screenOptions = computed(() =>
   (sc.sources?.screens ?? []).map(s => ({ value: s.id, label: s.title }))
 )
 
+// 窗口列表来自系统枚举：id 是后端认得的标识（Windows 带标题、macOS 带窗口号），
+// 界面只负责让用户挑一个，不再让他手打标题
+const windowOptions = computed(() =>
+  sc.windows.map(w => ({ value: w.id, label: w.title }))
+)
+
+const selectedWindow = computed(() =>
+  sc.windows.find(w => w.id === windowId.value)
+)
+
+watch(() => sc.sources?.windows, (wins) => {
+  if (!wins?.length) return
+  if (wins.some(w => w.id === windowId.value)) return
+  windowId.value = wins[0].id
+})
+
 // 多屏时默认投主屏：「整个屏幕」抓的是所有显示器的并集，
 // 画面被压扁、尺寸可能大到电视解不动（现场 4000x2571）
 watch(() => sc.sources?.screens, (screens) => {
@@ -74,12 +90,38 @@ watch(() => sc.sources?.screens, (screens) => {
   screenId.value = screens.length > 1 && primary ? primary.id : 'desktop'
 }, { immediate: true })
 
+// macOS 的麦克风授权是按「负责进程的 bundle」判定的：HanCast.app 有声明、
+// 也授权了，它拉起的 sidecar/ffmpeg 才采得到声音；没授权时系统既不报错也不
+// 弹窗，ffmpeg 只会采回一串 0——设备照样在列表里，投屏照样流畅，就是没声音。
+// ffmpeg 自己不会触发那个弹窗，所以勾选麦克风时先用品客（webview）走一次
+// getUserMedia，把弹窗和 TCC 记录落在 HanCast.app 身上，再让 ffmpeg 接手。
+const micAccess = ref<'idle' | 'asking' | 'granted' | 'denied'>('idle')
+const needMicConsent = computed(
+  () => micOn.value && sc.sources?.platform === 'darwin')
+
+async function ensureMicAccess() {
+  if (sc.sources?.platform !== 'darwin') return
+  if (micAccess.value === 'granted' || micAccess.value === 'asking') return
+  micAccess.value = 'asking'
+  try {
+    // 只申请音频：这条流纯粹是为了触发授权，拿到就立刻放开，真采集交给 ffmpeg
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    stream.getTracks().forEach(tr => tr.stop())
+    micAccess.value = 'granted'
+  } catch {
+    micAccess.value = 'denied'
+  }
+}
+
+watch(micOn, (on) => { if (on) void ensureMicAccess() })
+
 async function onStart() {
+  if (micOn.value) await ensureMicAccess()
   const ok = await sc.start({
     target: target.value,
     ...(target.value === 'dlna' ? { device_id: deviceId.value } : {}),
     source: sourceType.value === 'window'
-      ? { type: 'window', id: `window:${windowTitle.value}`, title: windowTitle.value }
+      ? { type: 'window', id: selectedWindow.value!.id, title: selectedWindow.value!.title }
       : { type: 'screen', id: screenId.value },
     audio: {
       mic: micOn.value,
@@ -110,7 +152,6 @@ async function onSetFfmpeg() {
 }
 
 async function copyText(text: string) {
-  // writeText() 的 reject 不受同步 try/catch 保护，必须 await 后再逐级降级
   try {
     await writeClipboardText(text)
     return
@@ -208,12 +249,23 @@ async function copyText(text: string) {
         />
         <div class="sc-empty-hint">{{ t('screencast.screenTip') }}</div>
       </div>
-      <input
-        v-if="sourceType === 'window'"
-        v-model="windowTitle"
-        class="sc-input"
-        :placeholder="t('screencast.windowTitlePlaceholder')"
-      />
+      <div v-if="sourceType === 'window'" class="sc-field">
+        <CustomSelect
+          v-if="windowOptions.length"
+          :options="windowOptions"
+          :model-value="windowId"
+          @update:model-value="windowId = $event as string"
+        />
+        <div v-else class="sc-empty">{{ t('screencast.noWindows') }}</div>
+        <div class="sc-window-tools">
+          <button
+            class="sc-empty-btn"
+            :disabled="sc.sourcesLoading"
+            @click="sc.fetchSources()"
+          >{{ t('screencast.windowRefresh') }}</button>
+          <span class="sc-empty-hint">{{ t('screencast.windowTip') }}</span>
+        </div>
+      </div>
 
       <!-- 音频 -->
       <div class="sc-label">{{ t('screencast.audio') }}</div>
@@ -235,6 +287,13 @@ async function copyText(text: string) {
           @update:model-value="micDevice = $event as string"
         />
         <div v-else class="sc-empty">{{ t('screencast.noMic') }}</div>
+      </div>
+      <!-- macOS 的麦克风权限不给就是恒静音，而且不报错：把状态摆在明面上 -->
+      <div v-if="needMicConsent && micAccess !== 'granted'" class="sc-empty">
+        <span>{{ micAccess === 'asking' ? t('screencast.micAsking') : t('screencast.micDenied') }}</span>
+        <button v-if="micAccess === 'denied'" class="sc-empty-btn" @click="ensureMicAccess">
+          {{ t('screencast.micRetry') }}
+        </button>
       </div>
       <div v-if="systemOn" class="sc-field">
         <CustomSelect
@@ -451,6 +510,14 @@ async function copyText(text: string) {
   flex-direction: column;
   gap: 6px;
   padding: 8px 0;
+}
+
+.sc-window-tools {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  margin-top: 6px;
 }
 
 .sc-empty-hint {

@@ -506,6 +506,7 @@ dependencies = [
     { name = "aiohttp" },
     { name = "lxml" },
     { name = "netifaces" },
+    { name = "pyaudiowpatch", marker = "sys_platform == 'win32'" },
     { name = "requests" },
 ]
 
@@ -525,6 +526,7 @@ requires-dist = [
     { name = "netifaces", specifier = ">=0.11.0" },
     { name = "nuitka", marker = "extra == 'dev'", specifier = ">=2.0" },
     { name = "ordered-set", marker = "extra == 'dev'", specifier = ">=4.0" },
+    { name = "pyaudiowpatch", marker = "sys_platform == 'win32'", specifier = ">=0.2.12.9" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0" },
     { name = "requests", specifier = ">=2.28.0" },
@@ -975,6 +977,23 @@ wheels = [
     { url = "https://pypi.tuna.tsinghua.edu.cn/packages/d4/ef/8bae0a316d406644450522f2f3d44a4e19632f5f3bb60d1d0e6c53842616/propcache-0.5.4-cp315-cp315t-win_amd64.whl", hash = "sha256:02c0a34f16889cf800f10f0247a564d8ce6eeab6ffcd7c87198f769067eb8432", size = 48574, upload-time = "2026-09-16T00:17:10.077Z" },
     { url = "https://pypi.tuna.tsinghua.edu.cn/packages/57/be/bcc053f66a97355683884b448198e79580fae8e8fa4d96b9bb01614e9913/propcache-0.5.4-cp315-cp315t-win_arm64.whl", hash = "sha256:dc4242ca653c9b30ab51c5f8193323e7bc0928f897ee9103201e59a43abcb72e", size = 45625, upload-time = "2026-09-16T00:17:11.377Z" },
     { url = "https://pypi.tuna.tsinghua.edu.cn/packages/f5/cd/785c64ed382f3f04201870267b02783f63b4678c2acfddc177a3ebcc2727/propcache-0.5.4-py3-none-any.whl", hash = "sha256:62c60aec739ed00124573cce1178138fd690c7676352d67a37328c1cf51d7468", size = 16338, upload-time = "2026-09-16T00:17:13.106Z" },
+]
+
+[[package]]
+name = "pyaudiowpatch"
+version = "0.2.12.9"
+source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
+wheels = [
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/c6/7b/6b42798a26042c0c904207d759d871fd4b168a45a107465508aad90a9ffe/pyaudiowpatch-0.2.12.9-cp311-cp311-win32.whl", hash = "sha256:0cf14a1945e53ab64e2f3d89a899563c5af02a0869a4d17ea0c6f27f321788d6", size = 97669, upload-time = "2026-10-06T16:13:13.394Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/47/72/a4e7496e70bbf1c279ac571654654789a7f752a6600ee07dedb1cca69768/pyaudiowpatch-0.2.12.9-cp311-cp311-win_amd64.whl", hash = "sha256:46aacc940069157b80d5ba07159f2d86c3a560ae8c1878091802f8b223377f7a", size = 99878, upload-time = "2026-10-06T16:13:14.852Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/fa/a3/acb33103ec3bf1be0255bf423791d3ffcb4c194a1d2b66aaceb311bc8269/pyaudiowpatch-0.2.12.9-cp312-cp312-win32.whl", hash = "sha256:ac7d187b2c470bc5c76cbc9e30c8127564fc3a653fcae9c820d6b3ddf417b6e4", size = 97853, upload-time = "2026-10-06T16:13:16.214Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/4f/4a/b3040ab051c3d2ee6b123e67db7a3e980fbf8e71f9d3b822366e8b380eb2/pyaudiowpatch-0.2.12.9-cp312-cp312-win_amd64.whl", hash = "sha256:963376e94f46c84e994eda4d25ffd62b712881ad5d611a4f4433bb5aa0bf7fa4", size = 100137, upload-time = "2026-10-06T16:13:17.67Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/ca/02/542a39af9f7ee589d039ed41714539ff7db08541256deaf0c04f64c5a213/pyaudiowpatch-0.2.12.9-cp313-cp313-win32.whl", hash = "sha256:f747213885420a6b46f5d4d8dd0b441c14591893e3fcc740d2f0961bb16c2b4c", size = 97844, upload-time = "2026-10-06T16:13:18.96Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/89/d7/2cf4d426d823e0931dd8830ed0751570997fba92d2596b25c22bd842b1da/pyaudiowpatch-0.2.12.9-cp313-cp313-win_amd64.whl", hash = "sha256:aaa847f5f76e11b42242b51293d872f811ab8925146c34ca79f21c9b18bda551", size = 100127, upload-time = "2026-10-06T16:13:20.602Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/e7/5c/c45444bc928b6c40e2c36af9f2f721bb7ad3057debffe50f34e4081ab5d8/pyaudiowpatch-0.2.12.9-cp314-cp314-win32.whl", hash = "sha256:85b011276c882c6d302425a0a5d6bb3f00be45ef80a6c362d04b8d7234f5f5de", size = 99764, upload-time = "2026-10-06T16:13:22.148Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/87/4e/ce82cdfdcc37eadb7f405f278182d6b8bb8f6a7d177c83537ddfd53aee24/pyaudiowpatch-0.2.12.9-cp314-cp314-win_amd64.whl", hash = "sha256:dc3ae964530ffe70119a1e2f5b76c661b676aa1cf1b9755d8ecafe081ee85f53", size = 101621, upload-time = "2026-10-06T16:13:23.518Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/94/8e/fe6a70dac52966fe54d34aea4373deb8ac3226e27b96641a78bf0d716ae7/pyaudiowpatch-0.2.12.9-cp315-cp315-win32.whl", hash = "sha256:f76cdf7dd0a9deb74e95f0e9f04c2af0898eb055e1d3572bed0eb75a37de03dd", size = 99789, upload-time = "2026-10-06T16:13:24.806Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/06/9e/583c053cc5580b07a2a3ff4511bce40be32167c56b948893b728b5260d31/pyaudiowpatch-0.2.12.9-cp315-cp315-win_amd64.whl", hash = "sha256:81d51b5b88c9e2124c33d0f9f22bf51392b93a4328f34e135e861e0c2c953c7f", size = 101620, upload-time = "2026-10-06T16:13:26.186Z" },
 ]
 
 [[package]]

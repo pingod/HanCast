@@ -151,26 +151,31 @@ def _content_range_total(value: str) -> int | None:
 
 _SYNC = 0x47
 _TS_PACKET = 188
-_DISGUISE_SCAN = 400          # 假 PNG 头实测 61 字节，给到两个 TS 包的余量
+# 假图片头的长度按站点差得很远：icve 实测 61 字节，dyrs/低端影视是 583 字节
+# （整段 1.7MB 的分片只有开头这截是 PNG）。窗口一窄就等于没修 —— 播放器会按
+# PNG 魔数选 png_pipe 解码器，然后 mpv 报 "no audio or video data played"。
+_DISGUISE_SCAN = 2048        # 最多向后找多少个偏移当作图片头结尾
+_DISGUISE_PACKETS = 6        # 要连续 6 个包都对齐才认，防真海报图里蒙对同步字节
 _FAKE_IMAGE_MAGICS = (b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff", b"GIF87a", b"GIF89a")
 
 
 def _disguise_offset(head: bytes) -> int:
     """「披着图片皮的 TS」里图片头有多少字节；不是这种分片就返回 0
 
-    采集站把分片当图片传到免费 CDN（file.icve.com.cn 等）：前 61 字节是一段
-    合法的 1x1 PNG（IHDR+IDAT+IEND），之后才是 188 字节对齐的 TS。后缀换成
+    采集站把分片当图片传到免费 CDN（file.icve.com.cn、box.dyrs.com.de 等）：
+    开头是一段合法的 PNG 头（IHDR+IDAT），之后才是 188 字节对齐的 TS。后缀换成
     .ts 只够骗过后缀白名单 —— mpv 内的 ffmpeg 会用 analyzeduration 有限的首块
     探测，看到 PNG 魔数就判成 png 解码器然后报 "error reading packet"，
     所以代理转发时要把这段伪装头剥掉，让播放器从同步字节开始读。
     """
     if not head.startswith(_FAKE_IMAGE_MAGICS):
         return 0
-    need = 12 + 3 * _TS_PACKET
+    need = 12 + _DISGUISE_PACKETS * _TS_PACKET
     if len(head) < need:
         return 0
     for off in range(1, min(_DISGUISE_SCAN, len(head) - need + 1)):
-        if all(head[off + _TS_PACKET * i] == _SYNC for i in range(3)):
+        if all(head[off + _TS_PACKET * i] == _SYNC
+               for i in range(_DISGUISE_PACKETS)):
             return off
     return 0
 
@@ -511,11 +516,12 @@ class MediaHandler(BaseHTTPRequestHandler):
             resp.close()
 
     @staticmethod
-    def _peek_upstream(resp, want: int = 1024) -> bytes:
+    def _peek_upstream(resp, want: int = _DISGUISE_SCAN + 12 + _DISGUISE_PACKETS * _TS_PACKET) -> bytes:
         """取上游开头若干字节（只够判型），后续 iter_content 会从断点继续
 
-        分块编码下首个 chunk 可能只有几十字节，而「图片伪装头 + 188 字节对齐」
-        的判定至少要 576 字节，所以按目标长度累计而不是取一块就返回。
+        分块编码下首个 chunk 可能只有几十字节，而「图片伪装头 + 连续对齐的 TS 包」
+        的判定至少要扫到 _DISGUISE_SCAN 再留出几个包，所以按目标长度累计而不是
+        取一块就返回。
         """
         buf = b""
         for chunk in resp.iter_content(chunk_size=1024):
