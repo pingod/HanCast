@@ -22,6 +22,8 @@ from typing import Optional, Dict, List, Tuple
 from dataclasses import dataclass, asdict, field
 from lxml import etree
 
+from ..params import get as param
+
 logger = logging.getLogger("hancast.guard")
 
 # 对端设备的描述抓取属于链路内 HTTP，必须绕开系统代理（详见 ssdp._NO_PROXY：

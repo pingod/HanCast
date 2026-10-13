@@ -13,6 +13,8 @@ import logging
 from logging.handlers import RotatingFileHandler
 from typing import Optional
 
+from ..params import get as param
+
 # 默认日志目录
 if sys.platform == 'win32':
     LOG_DIR = os.path.join(os.environ.get('APPDATA', ''), 'HanCast', 'logs')
@@ -100,7 +102,9 @@ def get_logger(name: str) -> logging.Logger:
 # ── 应用内日志查看（排错用） ──
 
 # 一次最多读取的日志字节数：只看文件尾部，避免大文件把命令循环拖死
-TAIL_BYTES = 2 * 1024 * 1024
+# 大小在设置页调（params: logs.tail_mb）
+def _tail_bytes() -> int:
+    return int(float(param("logs.tail_mb")) * 1024 * 1024)
 
 _LINE_RE = re.compile(
     r"^\[(?P<ts>[^\]]+)\]\s+(?P<module>[\w.]+)\s+(?P<level>[A-Z]+):\s?(?P<msg>.*)$"
@@ -118,6 +122,7 @@ MODULE_LABELS = [
     ("hancast.guard", "投屏确认"),
     ("hancast.screencast", "屏幕投屏"),
     ("hancast.config", "配置"),
+    ("hancast.params", "参数配置"),
 ]
 
 
@@ -160,6 +165,7 @@ def read_logs(limit: int = 400, module: Optional[str] = None,
     rows = []
     matched_levels = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
     want_level = level.upper() if level and level.upper() in matched_levels else None
+    tail = _tail_bytes()
 
     for path in reversed(files):          # 旧 → 新，保证最终按时间升序
         try:
@@ -169,12 +175,12 @@ def read_logs(limit: int = 400, module: Optional[str] = None,
         if size == 0:
             continue
         with open(path, "rb") as f:
-            f.seek(max(0, size - TAIL_BYTES))
+            f.seek(max(0, size - tail))
             chunk = f.read()
         text = chunk.decode("utf-8", "replace")
         # 尾部seek可能落在半行上，丢掉第一行
         lines = text.splitlines()
-        if size > TAIL_BYTES and len(lines) > 1:
+        if size > tail and len(lines) > 1:
             lines = lines[1:]
         for line in lines:
             m = _LINE_RE.match(line)
@@ -220,7 +226,7 @@ def available_modules() -> list:
         return out
     if size:
         with open(LOG_FILE, "rb") as f:
-            f.seek(max(0, size - TAIL_BYTES))
+            f.seek(max(0, size - _tail_bytes()))
             text = f.read().decode("utf-8", "replace")
         for line in text.splitlines():
             m = _LINE_RE.match(line)

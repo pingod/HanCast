@@ -158,6 +158,8 @@ listen('cast_state_changed', (event) => { ... });
 | `parse_media_url(url)` | `commands::media::parse_media_url` | `parse_media` | 解析链接 |
 | `get_settings()` | `commands::settings::get_settings` | `get_settings` | 获取设置 |
 | `save_settings(settings)` | `commands::settings::save_settings` | `save_settings` | 保存设置 |
+| `get_params()` | `get_params` | `get_params` | 取后台可调参数登记表（`{specs:[…]}`，见 sidecar `params.py`） |
+| `save_params(values)` | `save_params` | `save_params` | 写入参数覆盖项，返回 `{ok, errors, specs}`；只存与默认值不同的项 |
 
 ### 3.5 端到端调用链示例
 

@@ -29,7 +29,10 @@ else
 fi
 
 cd /Users/pavia/githome/HanCast || exit 1
-for rel in ssdp.py commands.py security/guard.py protocol/dlna.py models/session.py screencast/manager.py \
+for rel in ssdp.py commands.py params.py security/guard.py protocol/dlna.py protocol/server.py \
+           models/session.py renderer/mpv.py screencast/manager.py screencast/capture.py \
+           screencast/httpd.py screencast/ffmpeg_manager.py screencast/www/index.html \
+           utils/logger.py utils/config.py \
            media/server.py media/share_resolver.py media/rules/__init__.py media/rules/base.py \
            media/rules/bili.py media/rules/douyin.py media/rules/declarative.py; do
   want=$(git show "$TAG:hancast-backend/hancast_sidecar/$rel" | shasum -a 256 | cut -d' ' -f1)
@@ -69,6 +72,48 @@ if grep -q 'schemas.xmlsoap.org/soap/encoding/' "$RES/protocol/dlna.py"; then
   say "PASS 控制端 SOAP 信封带 encodingStyle"
 else
   say "FAIL 控制端 SOAP 信封缺 encodingStyle（电视 SetAVTransportURI 必回 500）"; fails=$((fails+1))
+fi
+
+# 手机音量键链路：入站值必须按 SCPD 的 dataType/allowedValueRange 归一化并钳制，
+# 否则 '45.5'/'true'/200 这类写法会直接把 SetVolume 打成 HTTP 500 或把 mpv 音量设穿。
+if grep -q 'def coerce_state_value' "$RES/protocol/dlna.py"; then
+  say "PASS 入站状态值归一化（音量/静音不再 500）"
+else
+  say "FAIL 打包产物缺 coerce_state_value（音量键仍是旧行为）"; fails=$((fails+1))
+fi
+
+# 后台参数：打包进去的那张表才是设置页真正渲染的那张表
+PARAMS_JSON=$(/usr/bin/python3 - "$RES" <<'PY'
+import json, sys, importlib.util
+spec = importlib.util.spec_from_file_location("hp", sys.argv[1] + "/params.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+print(json.dumps({s["key"]: s["default"] for s in m.PARAM_SPECS}))
+PY
+) 2>/dev/null || PARAMS_JSON='{}'
+chk "参数登记表条数" "$(echo "$PARAMS_JSON" | /usr/bin/python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')" "18"
+chk "浏览器通道默认分片" "$(echo "$PARAMS_JSON" | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)["screencast.browser_segment_seconds"])')" "1"
+chk "电视通道默认分片" "$(echo "$PARAMS_JSON" | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)["screencast.dlna_segment_seconds"])')" "2"
+
+# HLS 只能在关键帧处切片：-g 必须跟着分片时长走，否则 1 秒分片是假的
+if grep -q 'fps \* segment_seconds' "$RES/screencast/capture.py"; then
+  say "PASS GOP 跟随分片时长"
+else
+  say "FAIL capture.py 的 -g 没跟着分片时长（1 秒分片落空）"; fails=$((fails+1))
+fi
+
+# 观看页的 hls.js 配置由后端注入（改参数不用重新打包前端）
+if grep -q '__PLAYER_CONFIG__' "$RES/screencast/www/index.html" \
+   && grep -q '__PLAYER_CONFIG__' "$RES/screencast/httpd.py"; then
+  say "PASS 观看页播放器配置注入"
+else
+  say "FAIL 观看页缺 __PLAYER_CONFIG__ 注入"; fails=$((fails+1))
+fi
+
+# 设置页要能读到/写回这张表
+if grep -q '"get_params":' "$RES/commands.py" && grep -q '"save_params":' "$RES/commands.py"; then
+  say "PASS get_params/save_params 已注册"
+else
+  say "FAIL 命令表缺 get_params/save_params"; fails=$((fails+1))
 fi
 
 say "--- $([ $fails -eq 0 ] && echo 'ALL PASS' || echo "$fails FAIL") ---"

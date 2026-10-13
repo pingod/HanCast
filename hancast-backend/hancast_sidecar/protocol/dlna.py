@@ -29,6 +29,19 @@ logger = logging.getLogger("hancast.dlna")
 # 代理一掉线就是「电视黑屏/设备发现不了」，日志里只剩一句超时。
 _NO_PROXY = {"http": "", "https": ""}
 
+# 控制端传进来的参数一律是字符串，且各家写法不统一（Mute 见过 '1'/'true'/'yes'）
+_TRUE_TOKENS = {'1', 'true', 'yes', 'on'}
+_FALSE_TOKENS = {'0', 'false', 'no', 'off', ''}
+
+
+class SoapFault(Exception):
+    """按 UPnP 规范回 SOAP Fault，而不是让异常冒泡成 HTTP 500"""
+
+    def __init__(self, error_code: int, error_description: str):
+        super().__init__(f"{error_code}: {error_description}")
+        self.error_code = error_code
+        self.error_description = error_description
+
 # 应用版本，由 CommandHandler 构造 DLNAProtocol 时注入（见 set_app_version）。
 # 默认值仅用于单元测试直接实例化本模块的场景。
 _APP_VERSION = "0.0.0"
@@ -591,46 +604,33 @@ class DLNAProtocol:
         service_type = Service.get(service)
         if action not in service_type.actions:
             logger.warning(f"Unknown action: {service}.{action}")
-            # 返回 SOAP Fault 而不是崩溃
-            ns = 'http://schemas.xmlsoap.org/soap/envelope/'
-            ns_upnp = 'urn:schemas-upnp-org:control-1-0'
-            root = etree.Element(etree.QName(ns, 'Envelope'), nsmap={'s': ns})
-            body = etree.SubElement(root, etree.QName(ns, 'Body'), nsmap={'s': ns})
-            fault = etree.SubElement(body, etree.QName(ns, 'Fault'))
-            etree.SubElement(fault, 'faultcode').text = 's:Client'
-            etree.SubElement(fault, 'faultstring').text = 'UPnPError'
-            detail = etree.SubElement(fault, 'detail')
-            upnp_error = etree.SubElement(detail, etree.QName(ns_upnp, 'UPnPError'))
-            etree.SubElement(upnp_error, etree.QName(ns_upnp, 'errorCode')).text = '401'
-            etree.SubElement(upnp_error, etree.QName(ns_upnp, 'errorDescription')).text = f'Invalid action: {action}'
-            return etree.tostring(root, encoding="UTF-8", xml_declaration=False)
+            return self._build_fault(401, f'Invalid action: {action}')
         if hasattr(self, method):
             data = {}
             input = service_type.actions[action].input
             for arg in input:
-                data[arg.name] = Argument(
-                    arg.name, arg.state,
-                    param[arg.name] if arg.name in param else None)
-                if arg.name in param:
-                    self.set_state(arg.state, param[arg.name])
+                raw = param.get(arg.name)
+                data[arg.name] = Argument(arg.name, arg.state, raw)
+                if raw is None:
+                    continue
+                try:
+                    value = self.coerce_state_value(arg.state, raw)
+                except SoapFault as e:
+                    # 归一化失败只退回旧行为（原样写入），不该因此拒掉一次正常控制
+                    logger.debug(f"Cannot normalize {arg.state}={raw!r}: {e}")
+                    value = raw
+                self.set_state(arg.state, value)
             try:
                 res = getattr(self, method)(data)
+            except SoapFault as e:
+                logger.warning(
+                    f"Action {method} fault {e.error_code}: {e.error_description}")
+                return self._build_fault(e.error_code, e.error_description)
             except Exception as e:
                 error_msg = str(e)
                 if "blacklisted" in error_msg or "rejected" in error_msg:
                     logger.warning(f"Action {method} rejected: {error_msg}")
-                    ns = 'http://schemas.xmlsoap.org/soap/envelope/'
-                    ns_upnp = 'urn:schemas-upnp-org:control-1-0'
-                    root = etree.Element(etree.QName(ns, 'Envelope'), nsmap={'s': ns})
-                    body = etree.SubElement(root, etree.QName(ns, 'Body'), nsmap={'s': ns})
-                    fault = etree.SubElement(body, etree.QName(ns, 'Fault'))
-                    etree.SubElement(fault, 'faultcode').text = 's:Client'
-                    etree.SubElement(fault, 'faultstring').text = 'UPnPError'
-                    detail = etree.SubElement(fault, 'detail')
-                    upnp_error = etree.SubElement(detail, etree.QName(ns_upnp, 'UPnPError'))
-                    etree.SubElement(upnp_error, etree.QName(ns_upnp, 'errorCode')).text = '701'
-                    etree.SubElement(upnp_error, etree.QName(ns_upnp, 'errorDescription')).text = error_msg
-                    return etree.tostring(root, encoding="UTF-8", xml_declaration=False)
+                    return self._build_fault(701, error_msg)
                 raise
         else:
             output = service_type.actions[action].output
@@ -653,6 +653,64 @@ class DLNAProtocol:
             prop = etree.SubElement(response, key)
             prop.text = str(res[key])
         return etree.tostring(root, encoding="UTF-8", xml_declaration=False)
+
+    def _build_fault(self, error_code: int, error_description: str) -> bytes:
+        """构造 UPnP SOAP Fault（控制端能读到 errorCode，而不是一个裸 HTTP 500）"""
+        ns = 'http://schemas.xmlsoap.org/soap/envelope/'
+        ns_upnp = 'urn:schemas-upnp-org:control-1-0'
+        root = etree.Element(etree.QName(ns, 'Envelope'), nsmap={'s': ns})
+        body = etree.SubElement(root, etree.QName(ns, 'Body'), nsmap={'s': ns})
+        fault = etree.SubElement(body, etree.QName(ns, 'Fault'))
+        etree.SubElement(fault, 'faultcode').text = 's:Client'
+        etree.SubElement(fault, 'faultstring').text = 'UPnPError'
+        detail = etree.SubElement(fault, 'detail')
+        upnp_error = etree.SubElement(detail, etree.QName(ns_upnp, 'UPnPError'))
+        etree.SubElement(upnp_error, etree.QName(ns_upnp, 'errorCode')).text = str(error_code)
+        etree.SubElement(upnp_error, etree.QName(ns_upnp, 'errorDescription')).text = error_description
+        return etree.tostring(root, encoding="UTF-8", xml_declaration=False)
+
+    def coerce_state_value(self, name: str, raw):
+        """按 SCPD 声明的 dataType + allowedValueRange 归一化入站值
+
+        XML 里 Volume 是 ui2、0-100，但控制端发的是字符串（安卓音量键会发 '45.5'
+        这种小数），原样 `int()` 会抛 ValueError 冒成 HTTP 500，原样存进 state 又
+        会让「'50' != 50」永远成立、每次控制都重发一遍 NOTIFY。
+        """
+        state = self.state_list.get(name)
+        if state is None:
+            return raw
+        if state.datatype == DataType.string:
+            return raw
+        if raw is None:
+            raise SoapFault(402, f'Missing argument: {name}')
+        if state.datatype == DataType.boolean:
+            if isinstance(raw, bool):
+                return raw
+            token = str(raw).strip().lower()
+            if token in _TRUE_TOKENS:
+                return True
+            if token in _FALSE_TOKENS:
+                return False
+            raise SoapFault(402, f'Bad boolean value for {name}: {raw!r}')
+        if isinstance(raw, bool):
+            number = int(raw)
+        elif isinstance(raw, (int, float)):
+            number = raw
+        else:
+            token = str(raw).strip()
+            if not token:
+                raise SoapFault(402, f'Empty value for {name}')
+            try:
+                number = float(token)
+            except ValueError:
+                raise SoapFault(402, f'Bad numeric value for {name}: {raw!r}')
+        # 本项目 SCPD 里的数值状态变量全是整数型（i2/ui2/i4/ui4）：取整后钳制
+        number = int(round(number))
+        if state.minimum is not None:
+            number = max(state.minimum, number)
+        if state.maximum is not None:
+            number = min(state.maximum, number)
+        return number
 
     def set_state(self, name: str, value) -> None:
         """Set DLNA state which defined by xml file"""
@@ -695,15 +753,14 @@ class DLNAProtocol:
     # The following method names are defined by the XML file
 
     def RenderingControl_SetVolume(self, data):
-        volume = int(data['DesiredVolume'].value)
+        volume = self.coerce_state_value('Volume', data['DesiredVolume'].value)
         logger.info(f"SetVolume: {volume}")
         if self._renderer:
             self._renderer.set_media_volume(volume)
         return {}
 
     def RenderingControl_SetMute(self, data):
-        mute = data['DesiredMute']
-        mute_val = mute.value == 1 or mute.value == '1'
+        mute_val = self.coerce_state_value('Mute', data['DesiredMute'].value)
         logger.info(f"SetMute: {mute_val}")
         if self._renderer:
             self._renderer.set_media_mute(mute_val)
@@ -836,11 +893,12 @@ class DLNAProtocol:
         self.set_state('TransportState', 'STOPPED')
         self.set_state('TransportStatus', 'ERROR_OCCURRED')
 
-    def set_state_mute(self, data: bool):
-        self.set_state('Mute', data)
+    def set_state_mute(self, data):
+        self.set_state('Mute', self.coerce_state_value('Mute', data))
 
-    def set_state_volume(self, data: int):
-        self.set_state('Volume', data)
+    def set_state_volume(self, data):
+        # mpv 允许 volume>100，但 DLNA 的 Volume 声明是 0-100，越界会让控制端滑条错乱
+        self.set_state('Volume', self.coerce_state_value('Volume', data))
 
     def set_state_speed(self, data: str):
         self.set_state('TransportPlaySpeed', data)

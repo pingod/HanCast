@@ -5,7 +5,7 @@
 import type { Device } from '@/types/device'
 import type { MediaInfo } from '@/types/media'
 import type { CastState, CastUrlInfo } from '@/types/cast'
-import type { AppSettings, NetworkInterfacesInfo } from '@/types/settings'
+import type { AppSettings, NetworkInterfacesInfo, ParamSpec, SaveParamsResult } from '@/types/settings'
 import type { GuardDevicesResponse, GuardSettings } from '@/types/guard'
 import type { UpdateInfo } from '@/types/update'
 import type { LogPage, LogQuery } from '@/types/logs'
@@ -92,11 +92,43 @@ const MOCK_DEVICES: Device[] = [
 const MOCK_SETTINGS: AppSettings = {
   usn: 'hancast-uuid-001',
   friendly_name: 'HanCast',
-  version: '2.2.17',
+  version: '2.2.18',
   media_port: 8080,
   default_device: null,
   network_interface: '',
   settings: {},
+}
+
+// 后台参数登记表在后端 params.py；dev 模式下只放三种控件类型各一项代表，
+// 用于设置页布局验证，不代表真实参数集。
+const mockParamOverrides: Record<string, number | boolean | string> = {}
+
+function mockParamSpecs(): ParamSpec[] {
+  const base: Omit<ParamSpec, 'value' | 'overridden'>[] = [
+    {
+      key: 'screencast.browser_segment_seconds', section: 'screencast', type: 'number',
+      default: 1, min: 1, max: 10, unit: 's',
+      label_zh: '浏览器通道分片时长', label_en: 'Browser HLS segment length',
+      help_zh: '越短延迟越低，但分片太碎会增加播放列表请求与解码压力',
+      help_en: 'Shorter = lower latency, but more playlist requests and keyframe pressure',
+    },
+    {
+      key: 'screencast.x264_preset', section: 'screencast', type: 'enum', default: 'veryfast',
+      options: ['ultrafast', 'superfast', 'veryfast', 'faster', 'fast'],
+      label_zh: '编码速度档', label_en: 'x264 preset',
+      help_zh: '越快越省 CPU 但同码率画质更差', help_en: 'Faster saves CPU but costs quality',
+    },
+    {
+      key: 'player.low_latency_mode', section: 'player', type: 'bool', default: true,
+      label_zh: 'hls.js 低延迟模式', label_en: 'hls.js low latency mode',
+      help_zh: '关闭后播放器按普通 HLS 保守缓冲', help_en: 'Off = conservative buffering',
+    },
+  ]
+  return base.map((s) => ({
+    ...s,
+    value: mockParamOverrides[s.key] ?? s.default,
+    overridden: s.key in mockParamOverrides,
+  }))
 }
 
 const MOCK_CAST_STATE: CastState = {
@@ -152,6 +184,19 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
       } as T
     case 'get_autostart':
       return false as T
+    case 'get_params':
+      return { specs: mockParamSpecs() } as T
+    case 'save_params': {
+      const values = (args?.values ?? {}) as Record<string, number | boolean | string>
+      for (const [key, value] of Object.entries(values)) {
+        if (mockParamSpecs().some((s) => s.default === value)) {
+          delete mockParamOverrides[key]
+        } else {
+          mockParamOverrides[key] = value
+        }
+      }
+      return { ok: true, errors: [], specs: mockParamSpecs() } as T
+    }
     case 'set_autostart':
       return undefined as T
     case 'parse_media_file': {
@@ -246,8 +291,8 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
     case 'check_update':
       return {
         has_update: false,
-        current: '2.2.17',
-        latest: '2.2.17',
+        current: '2.2.18',
+        latest: '2.2.18',
         url: '',
         body: '',
         source: 'github',
@@ -530,6 +575,19 @@ export async function saveSettings(settings: Partial<AppSettings>): Promise<void
 export async function listNetworkInterfaces(): Promise<NetworkInterfacesInfo> {
   const invoke = await initInvoke()
   return invoke<NetworkInterfacesInfo>('list_network_interfaces')
+}
+
+/** 后台可调参数登记表（后端 params.py 渲染设置页用） */
+export async function getParams(): Promise<ParamSpec[]> {
+  const invoke = await initInvoke()
+  const res = await invoke<{ specs: ParamSpec[] }>('get_params')
+  return res.specs ?? []
+}
+
+/** 提交参数改动，返回校验结果与最新登记表 */
+export async function saveParams(values: Record<string, number | boolean | string>): Promise<SaveParamsResult> {
+  const invoke = await initInvoke()
+  return invoke<SaveParamsResult>('save_params', { values })
 }
 
 // Autostart

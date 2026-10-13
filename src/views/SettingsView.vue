@@ -9,8 +9,8 @@ import { useUpdateStore } from '@/stores/update'
 import { useLogsStore } from '@/stores/logs'
 import GuardDeviceList from '@/components/GuardDeviceList.vue'
 import CustomSelect from '@/components/CustomSelect.vue'
-import { exportLogs, listNetworkInterfaces } from '@/api/commands'
-import type { NetworkInterface } from '@/types/settings'
+import { exportLogs, getParams, listNetworkInterfaces, saveParams as apiSaveParams } from '@/api/commands'
+import type { NetworkInterface, ParamSpec } from '@/types/settings'
 
 const router = useRouter()
 const { t, locale } = useI18n()
@@ -84,6 +84,115 @@ function toggleGuardDevices() {
   if (showGuardDevices.value) {
     guardStore.fetchDevices()
   }
+}
+
+// ── 后台可调参数（改参数不用重新编译）──
+
+const showParams = ref(false)
+const params = ref<ParamSpec[]>([])
+const paramDraft = ref<Record<string, number | boolean | string>>({})
+const paramErrors = ref<string[]>([])
+const paramsLoading = ref(false)
+const paramsSaving = ref(false)
+const paramsSaved = ref(false)
+
+const isEnglish = computed(() => locale.value !== 'zh-CN')
+
+function paramLabel(spec: ParamSpec) {
+  return isEnglish.value ? spec.label_en : spec.label_zh
+}
+
+function paramHelp(spec: ParamSpec) {
+  return isEnglish.value ? spec.help_en ?? '' : spec.help_zh ?? ''
+}
+
+const paramGroups = computed(() => {
+  const groups: { section: string; items: ParamSpec[] }[] = []
+  for (const spec of params.value) {
+    let group = groups.find((g) => g.section === spec.section)
+    if (!group) {
+      group = { section: spec.section, items: [] }
+      groups.push(group)
+    }
+    group.items.push(spec)
+  }
+  return groups
+})
+
+const paramOverriddenCount = computed(() => params.value.filter((s) => s.overridden).length)
+
+const paramPendingCount = computed(
+  () => params.value.filter((s) => paramDraft.value[s.key] !== s.value).length,
+)
+
+function paramOptions(spec: ParamSpec) {
+  return (spec.options ?? []).map((o) => ({ label: o, value: o }))
+}
+
+function draftOf(key: string) {
+  return paramDraft.value[key]
+}
+
+function enumDraft(spec: ParamSpec) {
+  const value = paramDraft.value[spec.key]
+  return value === undefined ? String(spec.default) : String(value)
+}
+
+function onParamNumberChange(key: string, e: Event) {
+  const raw = (e.target as HTMLInputElement).value
+  paramDraft.value[key] = raw === '' ? '' : Number(raw)
+}
+
+async function loadParams() {
+  paramsLoading.value = true
+  try {
+    params.value = await getParams()
+    paramDraft.value = Object.fromEntries(params.value.map((s) => [s.key, s.value]))
+    paramErrors.value = []
+  } catch {
+    paramErrors.value = [t('settings.paramsLoadFailed')]
+  } finally {
+    paramsLoading.value = false
+  }
+}
+
+function toggleParams() {
+  showParams.value = !showParams.value
+  if (showParams.value && !params.value.length) {
+    loadParams()
+  }
+}
+
+async function submitParams(values: Record<string, number | boolean | string>) {
+  if (!Object.keys(values).length) return
+  paramsSaving.value = true
+  try {
+    const res = await apiSaveParams(values)
+    params.value = res.specs ?? params.value
+    paramDraft.value = Object.fromEntries(params.value.map((s) => [s.key, s.value]))
+    paramErrors.value = res.errors ?? []
+    if (res.ok) {
+      paramsSaved.value = true
+      setTimeout(() => { paramsSaved.value = false }, 2000)
+    }
+  } catch {
+    paramErrors.value = [t('settings.paramsSaveFailed')]
+  } finally {
+    paramsSaving.value = false
+  }
+}
+
+function saveChangedParams() {
+  const values: Record<string, number | boolean | string> = {}
+  for (const spec of params.value) {
+    const next = paramDraft.value[spec.key]
+    if (next !== spec.value) values[spec.key] = next
+  }
+  submitParams(values)
+}
+
+function resetParam(spec: ParamSpec) {
+  submitParams({ [spec.key]: spec.default })
 }
 
 const checkUpdateStatus = ref<'idle' | 'checking' | 'no_update' | 'error'>('idle')
@@ -246,6 +355,111 @@ async function onCheckUpdate() {
         <Transition name="settings-expand">
           <div v-if="showGuardDevices" class="settings__guard-list">
             <GuardDeviceList />
+          </div>
+        </Transition>
+      </section>
+
+      <!-- Advanced parameters (no rebuild needed) -->
+      <section class="settings__section">
+        <h3 class="settings__section-title">{{ t('settings.params') }}</h3>
+
+        <button class="settings__item settings__item--clickable" @click="toggleParams">
+          <span class="settings__label">
+            {{ t('settings.paramsToggle') }}
+            <span v-if="paramOverriddenCount" class="settings__badge">{{ paramOverriddenCount }}</span>
+          </span>
+          <svg
+            class="settings__chevron"
+            :class="{ 'settings__chevron--open': showParams }"
+            viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"
+          >
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+        </button>
+
+        <Transition name="settings-expand-lg">
+          <div v-if="showParams" class="settings__params">
+            <p class="settings__hint">{{ t('settings.paramsHint') }}</p>
+
+            <div v-if="paramsLoading" class="settings__params-empty">{{ t('settings.paramsLoading') }}</div>
+
+            <template v-else>
+              <div v-for="group in paramGroups" :key="group.section" class="settings__params-group">
+                <h4 class="settings__params-group-title">
+                  {{ t('settings.paramsGroup.' + group.section) }}
+                </h4>
+
+                <div v-for="spec in group.items" :key="spec.key" class="settings__param">
+                  <div class="settings__param-head">
+                    <span class="settings__label">
+                      {{ paramLabel(spec) }}
+                      <span v-if="spec.overridden" class="settings__badge settings__badge--changed">
+                        {{ t('settings.paramsChangedFlag') }}
+                      </span>
+                    </span>
+
+                    <div class="settings__param-control">
+                      <input
+                        v-if="spec.type === 'number'"
+                        class="settings__input settings__input--small"
+                        type="number"
+                        :min="spec.min"
+                        :max="spec.max"
+                        :value="draftOf(spec.key)"
+                        @change="onParamNumberChange(spec.key, $event)"
+                      />
+                      <span v-if="spec.type === 'number' && spec.unit" class="settings__param-unit">{{ spec.unit }}</span>
+
+                      <CustomSelect
+                        v-else-if="spec.type === 'enum'"
+                        :model-value="enumDraft(spec)"
+                        :options="paramOptions(spec)"
+                        @update:model-value="paramDraft[spec.key] = $event as string"
+                      />
+
+                      <label v-else class="settings__toggle">
+                        <input
+                          type="checkbox"
+                          :checked="draftOf(spec.key) === true"
+                          @change="paramDraft[spec.key] = ($event.target as HTMLInputElement).checked"
+                        />
+                        <span class="settings__toggle-slider" />
+                      </label>
+
+                      <button
+                        v-if="paramDraft[spec.key] !== spec.value"
+                        class="settings__link settings__param-reset"
+                        @click="paramDraft[spec.key] = spec.default"
+                      >{{ t('settings.paramsReset') }}</button>
+                      <button
+                        v-else-if="spec.overridden"
+                        class="settings__link settings__param-reset"
+                        @click="resetParam(spec)"
+                      >{{ t('settings.paramsReset') }}</button>
+                    </div>
+                  </div>
+                  <p v-if="paramHelp(spec)" class="settings__param-help">{{ paramHelp(spec) }}</p>
+                </div>
+              </div>
+
+              <div v-if="paramErrors.length" class="settings__params-errors">
+                <div v-for="err in paramErrors" :key="err" class="settings__params-error">{{ err }}</div>
+              </div>
+
+              <div class="settings__params-actions">
+                <span class="settings__params-count">
+                  <template v-if="paramPendingCount">{{ t('settings.paramsPending', { n: paramPendingCount }) }}</template>
+                  <template v-else-if="paramsSaved">✓ {{ t('settings.paramsSaved') }}</template>
+                </span>
+                <button
+                  class="settings__params-save"
+                  :disabled="!paramPendingCount || paramsSaving"
+                  @click="saveChangedParams"
+                >
+                  {{ paramsSaving ? t('settings.paramsSaving') : t('settings.paramsSave') }}
+                </button>
+              </div>
+            </template>
           </div>
         </Transition>
       </section>
@@ -560,5 +774,126 @@ async function onCheckUpdate() {
 .settings-expand-leave-to {
   opacity: 0;
   max-height: 0;
+}
+
+/* ── Advanced parameters ── */
+.settings__params {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-md);
+}
+
+.settings-expand-lg-enter-active,
+.settings-expand-lg-leave-active {
+  transition: all var(--transition-normal);
+  max-height: 4000px;
+}
+
+.settings-expand-lg-enter-from,
+.settings-expand-lg-leave-to {
+  opacity: 0;
+  max-height: 0;
+}
+
+.settings__params-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-xs);
+}
+
+.settings__params-group-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  letter-spacing: 0.5px;
+  padding-left: var(--sp-md);
+}
+
+.settings__param {
+  padding: var(--sp-sm) var(--sp-md);
+  background: var(--bg-card);
+  border-radius: var(--r-md);
+}
+
+.settings__param-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-sm);
+}
+
+.settings__param-control {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-sm);
+}
+
+.settings__param-unit {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.settings__param-reset {
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.settings__param-help {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  line-height: 1.5;
+  margin-top: var(--sp-xs);
+}
+
+.settings__params-empty {
+  font-size: 13px;
+  color: var(--text-tertiary);
+  padding: var(--sp-sm) var(--sp-md);
+}
+
+.settings__params-errors {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--sp-sm) var(--sp-md);
+  background: rgba(239, 68, 68, 0.08);
+  border-radius: var(--r-md);
+}
+
+.settings__params-error {
+  font-size: 12px;
+  color: #EF4444;
+  line-height: 1.5;
+}
+
+.settings__params-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-sm);
+}
+
+.settings__params-count {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.settings__params-save {
+  padding: 6px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--bg-primary);
+  background: var(--primary);
+  border-radius: var(--r-sm);
+  transition: opacity var(--transition-fast);
+}
+
+.settings__params-save:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.settings__badge--changed {
+  background: var(--warning-light, var(--primary-light));
 }
 </style>

@@ -20,7 +20,14 @@ from socketserver import ThreadingMixIn
 from urllib.parse import urlparse, parse_qs
 from typing import Dict, Tuple
 
+from ..params import get as param
+
 logger = logging.getLogger("hancast.media.server")
+
+
+def _upstream_timeout() -> float:
+    """代理单次上游请求的超时（params: media.http_timeout_seconds）"""
+    return float(param("media.http_timeout_seconds"))
 
 
 # 代理允许的域名后缀白名单（匹配 *.suffix）
@@ -397,7 +404,7 @@ class MediaHandler(BaseHTTPRequestHandler):
             headers["Range"] = range_val
 
         try:
-            resp = upstream_get(remote_url, headers=headers, timeout=30, stream=True)
+            resp = upstream_get(remote_url, headers=headers, timeout=_upstream_timeout(), stream=True)
             if resp.status_code >= 400 and _needs_bare_retry(headers):
                 # 另一类站点正好相反：把「页面域的 Referer」当盗链特征拒掉
                 # （file.icve.com.cn 带 4kcz 的 Referer 回 403，裸 UA 才给量）
@@ -410,7 +417,7 @@ class MediaHandler(BaseHTTPRequestHandler):
                     # 分段请求会拿到整条资源却仍是 206 语义之外的响应
                     bare["Range"] = range_val
                 resp = upstream_get(remote_url, headers=bare,
-                                    timeout=30, stream=True)
+                                    timeout=_upstream_timeout(), stream=True)
         except Exception as e:
             logger.error(f"代理请求失败: {e}")
             self.send_error(502, f"Proxy Error: {e}")
@@ -440,7 +447,7 @@ class MediaHandler(BaseHTTPRequestHandler):
                     # bytes=0- 会被判定为非法并 302 到推广图
                     resp = upstream_get(
                         remote_url, headers={**headers, "Range": f"bytes=0-{_RANGE_FALLBACK_END}"},
-                        timeout=30, stream=True)
+                        timeout=_upstream_timeout(), stream=True)
                     ctype = resp.headers.get("Content-Type", ctype)
                     full_len = _content_range_total(resp.headers.get("Content-Range"))
                     first = self._peek_upstream(resp)

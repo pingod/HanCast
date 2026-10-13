@@ -53,12 +53,14 @@
   </div>
   <div class="status"><span class="dot" id="dot"></span><span id="statusText">连接中</span></div>
   <div class="err-text" id="errText" style="display:none"></div>
-  <div class="footer">HanCast 屏幕投屏 · 浏览器直接观看（局域网，约 3 秒延迟）</div>
+  <div class="footer">HanCast 屏幕投屏 · 浏览器直接观看（局域网，约 1-3 秒延迟）</div>
 
 <script src="/static/hls.min.js"></script>
 <script>
 (function () {
   var sessionId = "__SESSION_ID__";
+  // 延迟档由 HanCast 设置页下发（观看页响应里注入）
+  var playerCfg = __PLAYER_CONFIG__;
   // 相对同源路径：换机器、换端口、手机热点都不受影响
   var m3u8 = "/hls/" + encodeURIComponent(sessionId) + "/live.m3u8";
   var video = document.getElementById("video");
@@ -98,16 +100,13 @@
   }
 
   function startHlsJs() {
-    hls = new Hls({
-      lowLatencyMode: true,
-      liveSyncDurationCount: 1,
-      liveMaxLatencyDurationCount: 4,
+    hls = new Hls(Object.assign({
       enableWorker: true,
       manifestLoadingMaxRetry: 4,
       manifestLoadingRetryDelay: 1000,
       levelLoadingMaxRetry: 4,
       fragLoadingMaxRetry: 4,
-    });
+    }, playerCfg));
     hls.on(Hls.Events.MANIFEST_PARSED, function () {
       video.play().catch(function () {});
     });

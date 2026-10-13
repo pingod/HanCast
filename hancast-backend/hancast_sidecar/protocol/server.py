@@ -11,10 +11,11 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 from xml.sax.saxutils import escape
 
-# SOAP 请求体上限（1 MB）：防止恶意/异常的 DLNA 控制器塞超大 body 耗尽内存
-MAX_SOAP_BODY = 1024 * 1024
-
+from ..params import get as param
 from ..utils.platform_info import build_server_info
+
+# SOAP 请求体上限见 params 登记表（media.max_soap_body_kb）：防止恶意/异常的
+# DLNA 控制器塞超大 body 耗尽内存
 
 logger = logging.getLogger("hancast.dlna.server")
 
@@ -139,8 +140,10 @@ class DLNAHandler(BaseHTTPRequestHandler):
         try:
             # 读取请求体（限制大小，防止恶意超大 body）
             content_length = int(self.headers.get('Content-Length', 0))
-            if content_length > MAX_SOAP_BODY:
-                logger.warning(f"SOAP body too large: {content_length} bytes, rejecting")
+            max_body = int(float(param("media.max_soap_body_kb")) * 1024)
+            if content_length > max_body:
+                logger.warning(
+                    f"SOAP body too large: {content_length} > {max_body} bytes, rejecting")
                 self.send_error(413, "Request entity too large")
                 return
             body = self.rfile.read(content_length)

@@ -7,9 +7,11 @@
 - GET  /hls/{session_id}/{file}   HLS 播放列表与分片（浏览器 + DLNA 电视共用）
 
 播放器统一走 HLS：电视拉 /hls/<id>/live.m3u8，浏览器拉同一份分片。
-延迟约 3-6 秒，换来的是零依赖（浏览器只要支持 MSE 或原生 HLS）。
+零依赖（浏览器只要支持 MSE 或原生 HLS）。延迟下限就是分片粒度：浏览器通道默认
+1 秒分片（约 1-3 秒），电视通道默认 2 秒分片（约 3-6 秒），两者都在设置页可调。
 """
 
+import json
 import os
 import time
 import asyncio
@@ -17,6 +19,8 @@ import logging
 import threading
 from collections import defaultdict
 from typing import Dict, Optional
+
+from ..params import get as param
 
 logger = logging.getLogger("hancast.screencast.httpd")
 
@@ -30,14 +34,26 @@ DEFAULT_PORT = 8765
 # 观看页目录（本文件同级的 www/）
 WWW_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "www")
 
-# 观众判定窗口：N 秒内拉过播放列表的独立 IP 数
-VIEWER_WINDOW = 15.0
+# 观众判定窗口（N 秒内拉过播放列表的独立 IP 数）见 params 登记表
+# （screencast.viewer_window_seconds）
 
 _STATIC_TYPES = {
     ".js": "application/javascript",
     ".css": "text/css",
     ".html": "text/html",
 }
+
+
+def player_config() -> Dict:
+    """观看页 hls.js 配置，全部来自设置页（params 登记表）"""
+    sync = int(param("player.live_sync_duration_count"))
+    # hls.js 要求最大滞后期数严格大于同步期数，否则构造 Hls 直接抛错、播放页白屏
+    max_latency = max(int(param("player.live_max_latency_duration_count")), sync + 1)
+    return {
+        "lowLatencyMode": bool(param("player.low_latency_mode")),
+        "liveSyncDurationCount": sync,
+        "liveMaxLatencyDurationCount": max_latency,
+    }
 
 
 class ScreenCastHttpd:
@@ -172,7 +188,7 @@ class ScreenCastHttpd:
         seen = self._viewers.get(session_id)
         if not seen:
             return 0
-        cutoff = time.time() - VIEWER_WINDOW
+        cutoff = time.time() - param("screencast.viewer_window_seconds")
         return sum(1 for ts in seen.values() if ts >= cutoff)
 
     def _note_pull(self, session_id: str, client: str):
@@ -232,6 +248,8 @@ class ScreenCastHttpd:
         with open(index_path, "r", encoding="utf-8") as f:
             html = f.read()
         html = html.replace("__SESSION_ID__", session_id)
+        html = html.replace("__PLAYER_CONFIG__",
+                            json.dumps(player_config(), ensure_ascii=False))
         return web.Response(text=html, content_type="text/html", charset="utf-8")
 
     async def _handle_static(self, request):

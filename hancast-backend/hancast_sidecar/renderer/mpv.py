@@ -65,6 +65,10 @@ class ObserveProperty(Enum):
     sub = 8
 
 
+# mpv 自身的默认音量，也是 DLNA Volume 状态在首次连接时应对齐的值
+DEFAULT_VOLUME = 100
+
+
 class MPVRenderer(Renderer):
     """MPV 渲染器实现"""
 
@@ -88,6 +92,7 @@ class MPVRenderer(Renderer):
         self.command_lock = threading.Lock()
         self.proc_lock = threading.Lock()  # 保护 self.proc 的并发访问
         self._replacing_file = False  # loadfile replace 期间抑制 end-file 状态推送
+        self._last_volume = None  # 最近一次下发的音量，IPC 重连后按它复位而非抹成最大
         self._job_handle = None  # Windows Job Object handle
         self._stopping = False  # 停止请求标志：start_mpv 据此决定是否创建新进程
 
@@ -106,6 +111,7 @@ class MPVRenderer(Renderer):
 
     def set_media_volume(self, data):
         """ data : int, range from 0 to 100 """
+        self._last_volume = data
         self.send_command(['set_property', 'volume', data])
         self.set_media_text(f'Volume: {data}')
 
@@ -180,7 +186,11 @@ class MPVRenderer(Renderer):
             ['observe_property', ObserveProperty.sub.value, 'sub-visibility'])
 
         logger.info("observe 命令已发送")
-        self.set_media_volume(100)
+        # observe_property 只在变化时回推，不补初始值：把音量重新下发一次，
+        # DLNA 的 Volume 状态才和播放器一致（否则手机滑条读到 0）。
+        # 不能硬编码 100——mpv 重启/IPC 重连时那会把用户（或手机音量键）设过的音量抹掉。
+        self.set_media_volume(
+            self._last_volume if self._last_volume is not None else DEFAULT_VOLUME)
 
     def update_state(self, res):
         """Update player state from mpv"""
@@ -209,6 +219,8 @@ class MPVRenderer(Renderer):
                     self.pause = False
                     self.set_state_play()
             elif res['id'] == ObserveProperty.mute.value:
+                if 'data' not in res or res['data'] is None:
+                    return
                 self.set_state_mute(res['data'])
             elif res['id'] == ObserveProperty.duration.value:
                 if 'data' not in res or res['data'] is None:

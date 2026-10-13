@@ -121,7 +121,7 @@ class TestReadLogs(unittest.TestCase):
         )
         self._write(body)
         size = os.path.getsize(self.log)
-        with patch.object(logger_mod, "TAIL_BYTES", size // 2):
+        with patch.object(logger_mod, "_tail_bytes", lambda: size // 2):
             page = logger_mod.read_logs(limit=100)
         # 只读后半段：首行是残行，必须丢掉，其余完整
         self.assertTrue(all(not r["msg"].startswith("x" * 61) for r in page["lines"]))

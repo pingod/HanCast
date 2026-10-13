@@ -440,6 +440,23 @@ async fn list_network_interfaces(
         .await
 }
 
+// ── 后台可调参数（改参数不用重新编译）──
+
+#[tauri::command]
+async fn get_params(sidecar: State<'_, SidecarManager>) -> Result<serde_json::Value, String> {
+    sidecar.send_command("get_params", serde_json::json!({})).await
+}
+
+#[tauri::command]
+async fn save_params(
+    sidecar: State<'_, SidecarManager>,
+    values: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    sidecar
+        .send_command("save_params", serde_json::json!({"values": values}))
+        .await
+}
+
 // ── Update Check ──
 
 #[tauri::command]
@@ -1183,6 +1200,8 @@ pub fn run() {
             get_settings,
             save_settings,
             list_network_interfaces,
+            get_params,
+            save_params,
             check_update,
             ignore_update_version,
             respond_cast_confirm,

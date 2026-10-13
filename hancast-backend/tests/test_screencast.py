@@ -19,7 +19,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from lxml import etree
 
+from hancast_sidecar import params as app_params
 from hancast_sidecar.screencast import manager as manager_mod
+from hancast_sidecar.screencast import capture as capture_mod
 from hancast_sidecar.screencast.manager import HLS_MIME, ScreenCastManager
 from hancast_sidecar.screencast.capture import FfmpegCapture
 from hancast_sidecar.screencast.ffmpeg_manager import (
@@ -193,7 +195,7 @@ class TestFfmpegManager(unittest.TestCase):
 class TestHlsEncode(unittest.TestCase):
     """HLS 输出参数：电视/浏览器共用同一路，兼容项错了就整条通道不可用"""
 
-    def _cmd(self, video_cfg=None, audio_cfg=None):
+    def _cmd(self, video_cfg=None, audio_cfg=None, target="dlna"):
         cap = FfmpegCapture("ffmpeg")
         out_dir = tempfile.mkdtemp(prefix="hancast-hls-enc-")
         self.addCleanup(lambda: __import__("shutil").rmtree(out_dir, ignore_errors=True))
@@ -214,7 +216,7 @@ class TestHlsEncode(unittest.TestCase):
                 audio_cfg or {},
                 video_cfg or {"width": 1280, "height": 720, "fps": 15,
                               "bitrate": "2M"},
-                out_dir)
+                out_dir, target=target)
         cap.stop()
         return result, captured.get("cmd", [])
 
@@ -254,6 +256,30 @@ class TestHlsEncode(unittest.TestCase):
     def test_muxing_queue_enlarged(self):
         _, cmd = self._cmd()
         self.assertIn("-max_muxing_queue_size", cmd)
+
+    def test_browser_channel_uses_shorter_segments(self):
+        """浏览器通道 1 秒分片，电视通道保持 2 秒（电视按整分片起解）"""
+        result, cmd = self._cmd(target="browser")
+        self.assertEqual(cmd[cmd.index("-hls_time") + 1], "1")
+        self.assertEqual(result["segment_seconds"], 1)
+        _, dlna_cmd = self._cmd(target="dlna")
+        self.assertEqual(dlna_cmd[dlna_cmd.index("-hls_time") + 1], "2")
+
+    def test_gop_follows_segment_length(self):
+        """HLS 只能在关键帧处切片：-g 必须等于 帧率 × 分片秒数，否则分片降不到 1 秒"""
+        _, cmd = self._cmd(target="browser")
+        self.assertEqual(cmd[cmd.index("-g") + 1], str(15 * 1))
+        _, dlna_cmd = self._cmd(target="dlna")
+        self.assertEqual(dlna_cmd[dlna_cmd.index("-g") + 1], str(15 * 2))
+
+    def test_segment_length_is_tunable(self):
+        """分片时长来自后台参数登记表，改参数不用重新编译"""
+        with patch.object(capture_mod, "param",
+                          lambda key: 4 if key == "screencast.browser_segment_seconds"
+                          else app_params.get(key)):
+            _, cmd = self._cmd(target="browser")
+        self.assertEqual(cmd[cmd.index("-hls_time") + 1], "4")
+        self.assertEqual(cmd[cmd.index("-g") + 1], str(15 * 4))
 
     def test_cfr_cap(self):
         """avfoundation 屏幕设备时间戳不可靠，按目标帧率 CFR 封顶"""
@@ -433,7 +459,12 @@ class TestDlnaVerify(unittest.TestCase):
         self.assertIsNone(mgr._state["error"])
 
     def test_no_pull_within_window_is_reported(self):
-        with patch.object(manager_mod, "DLNA_VERIFY_SECONDS", 0.05):
+        # 确认窗口现在是后台参数（screencast.dlna_verify_seconds，下限 3 秒）：
+        # 用例只替换读取入口，不动登记表
+        def short_param(key):
+            return 0.05 if key == "screencast.dlna_verify_seconds" else app_params.get(key)
+
+        with patch.object(manager_mod, "param", short_param):
             mgr = _manager()
             mgr._verify_dlna_pull("abc", "TCL TV")
         self.assertIn("没有拉取播放列表", mgr._state["error"])

@@ -16,6 +16,8 @@ import subprocess
 from collections import deque
 from typing import Callable, Dict, List, Optional
 
+from ..params import get as param
+
 logger = logging.getLogger("hancast.screencast.capture")
 
 # stderr 尾部保留行数：FFmpeg 提前退出时用于把真实原因带给用户
@@ -41,11 +43,14 @@ class FfmpegCapture:
 
     def start_hls(self, source: Dict, audio_cfg: Dict, video_cfg: Dict,
                   out_dir: str, segment_prefix: str = "seg",
-                  on_error: Optional[Callable] = None) -> Dict:
+                  on_error: Optional[Callable] = None,
+                  target: str = "dlna") -> Dict:
         """启动 HLS 编码输出
 
         out_dir 必须是本次会话独占目录（旧内容整体删除）：复用同一目录会让
         上一轮的 live.m3u8 残留，电视拉到的是已死的分片。
+
+        target 决定分片时长（浏览器通道可以比电视更激进，见 params 登记表）。
         """
         self.stop()
 
@@ -53,6 +58,11 @@ class FfmpegCapture:
         height = int(video_cfg.get("height") or 0)
         fps = int(video_cfg.get("fps") or 15)
         bitrate = video_cfg.get("bitrate") or "2M"
+
+        segment_seconds = int(param(f"screencast.{target}_segment_seconds"))
+        playlist_size = int(param("screencast.playlist_size"))
+        muxing_queue = int(param("screencast.muxing_queue_size"))
+        preset = param("screencast.x264_preset")
 
         from .ffmpeg_manager import FfmpegManager
         vf = FfmpegManager.build_scale_filter(width, height)
@@ -69,11 +79,15 @@ class FfmpegCapture:
         if audio_input:
             cmd += audio_input
         cmd += [
-            "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
+            "-c:v", "libx264", "-preset", str(preset), "-tune", "zerolatency",
             # 电视解码器普遍只认 Main profile（High 的 8x8 变换/CABAC 变长码
             # 在老款渲染器上直接拒绝播放，表现为"换个分辨率就黑屏"）
             "-profile:v", "main", "-level", "42",
-            "-b:v", str(bitrate), "-pix_fmt", "yuv420p", "-g", str(fps * 2),
+            "-b:v", str(bitrate), "-pix_fmt", "yuv420p",
+            # GOP 必须等于「分片时长 × 帧率」：HLS 只能在关键帧处切片，
+            # 分片改成 1 秒而 GOP 还是 2 秒的话，切片点照样两秒一个，
+            # 降延迟完全落空
+            "-g", str(fps * segment_seconds),
             # 输入设备帧率失控时（macOS avfoundation 实测）按目标帧率 CFR 封顶
             "-r", str(fps),
             # scenecut=0：屏幕内容几乎每帧都是"场景切换"，默认策略会在每次
@@ -90,10 +104,10 @@ class FfmpegCapture:
         cmd += [
             # 屏幕捕获帧到达是突发的（切窗口/滚动），默认 10 帧复用队列会溢出，
             # FFmpeg 报 "Error queuing more packets" 后直接退出——表现为投屏中途断流
-            "-max_muxing_queue_size", "1024",
+            "-max_muxing_queue_size", str(muxing_queue),
             "-f", "hls",
-            "-hls_time", "2",
-            "-hls_list_size", "6",
+            "-hls_time", str(segment_seconds),
+            "-hls_list_size", str(playlist_size),
             # temp_file：先写 .tmp 再改名。否则电视/浏览器可能在半截播放列表
             # 上拿到没有 #EXTM3U 结尾的内容，判定流损坏
             "-hls_flags", "delete_segments+independent_segments+temp_file",
@@ -152,7 +166,8 @@ class FfmpegCapture:
 
         logger.info(f"[ScreenCast] HLS capture started: {m3u8_path}")
         return {"ok": True, "m3u8": m3u8_path,
-                "width": width or None, "height": height or None, "fps": fps}
+                "width": width or None, "height": height or None, "fps": fps,
+                "segment_seconds": segment_seconds}
 
     # ────────────────────────────────────────
     # 内部

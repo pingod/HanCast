@@ -22,6 +22,7 @@ from .models.device import Device
 from .models.cast import CastState
 from .models.session import DeviceCastSession
 from .utils.config import Config
+from . import params as app_params
 from .security.guard import DeviceGuard
 from .utils.mpv_manager import MpvManager
 from .utils import protocol_io
@@ -86,6 +87,8 @@ class CommandHandler:
 
     def __init__(self):
         self.config = Config()
+        # 后台可调参数：覆盖项要在任何服务读取参数之前载入
+        app_params.load_from(self.config.settings)
         self.protocol = DLNAProtocol()
         # 把真实版本号注入 DLNA 协议层（UPnP SERVER / modelNumber 用）
         dlna.set_app_version(self.config.version)
@@ -171,6 +174,10 @@ class CommandHandler:
             "get_settings": self._get_settings,
             "save_settings": self._save_settings,
             "list_network_interfaces": self._list_network_interfaces,
+
+            # 后台可调参数（改参数不用重新编译）
+            "get_params": self._get_params,
+            "save_params": self._save_params,
 
             # 更新检查
             "check_update": self._check_update,
@@ -693,6 +700,20 @@ class CommandHandler:
             threading.Thread(
                 target=self._restart_ssdp, name="SSDP_RESTART",
                 daemon=True).start()
+
+    def _get_params(self, params: dict) -> dict:
+        """后台可调参数：登记表 + 当前值（设置页据此渲染，改参数不用重新编译）"""
+        return {"specs": app_params.specs()}
+
+    def _save_params(self, params: dict) -> dict:
+        values = params.get("values") or {}
+        errors = app_params.apply(values)
+        # 只落盘与默认值不同的覆盖项：将来版本改默认值时用户能跟着走
+        self.config.settings[app_params.ADVANCED_KEY] = app_params.snapshot()
+        self.config.save()
+        logger.info(f"后台参数保存: {app_params.snapshot()}，未通过校验: {errors}")
+        return {"ok": not errors, "errors": errors,
+                "specs": app_params.specs()}
 
     def _restart_ssdp(self):
         try:

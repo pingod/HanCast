@@ -19,6 +19,7 @@ from email.utils import formatdate
 from lxml import etree
 from typing import Dict, List, Optional, Callable
 from .models.device import Device
+from .params import get as param
 
 logger = logging.getLogger("hancast.ssdp")
 
@@ -754,7 +755,8 @@ class SSDPService:
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-            sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
+            sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL,
+                            int(param("discovery.multicast_ttl")))
             for ip, mask in self.ip_list:
                 bcast = self._get_broadcast_ip(ip, mask)
                 if not bcast:
@@ -812,7 +814,7 @@ class SSDPService:
 
     def scan(self):
         # 同一时刻只允许一个扫描线程：若上一次 M-SEARCH 监听窗口
-        # （约 SSDP_MX+1 秒）尚未结束，直接复用，避免线程堆积
+        # （约 discovery.ssdp_mx + 1 秒）尚未结束，直接复用，避免线程堆积
         if not self._scan_lock.acquire(blocking=False):
             logger.debug("M-SEARCH scan already in progress, skipping")
             return
@@ -832,8 +834,10 @@ class SSDPService:
 
         sock = None
         try:
+            mx = int(param("discovery.ssdp_mx"))
+            ttl = int(param("discovery.multicast_ttl"))
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
+            sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, ttl)
             # 允许发子网广播（组播被阻断时的回退通道）
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
             # 选定接口时绑定该网卡：多接口机器（VPN/热点）不绑定会按路由表
@@ -844,14 +848,14 @@ class SSDPService:
                 except OSError as e:
                     logger.debug(
                         f"Cannot bind M-SEARCH socket to {self.preferred_ip}: {e}")
-            sock.settimeout(SSDP_MX + 1)
+            sock.settimeout(mx + 1)
 
             def _build(st: str) -> bytes:
                 return (
                     "M-SEARCH * HTTP/1.1\r\n"
                     f"HOST: {SSDP_ADDR}:{SSDP_PORT}\r\n"
                     "MAN: \"ssdp:discover\"\r\n"
-                    f"MX: {SSDP_MX}\r\n"
+                    f"MX: {mx}\r\n"
                     f"ST: {st}\r\n"
                     "\r\n"
                 ).encode()
@@ -1165,6 +1169,3 @@ class SSDPService:
 
     def get_port(self) -> int:
         return self._port
-
-
-SSDP_MX = 3

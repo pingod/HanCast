@@ -14,17 +14,18 @@ import threading
 import subprocess
 from typing import Dict, List, Optional
 
+from ..params import get as param
+
 logger = logging.getLogger("hancast.screencast.ffmpeg")
 
 # avfoundation 屏幕设备索引缓存（ffmpeg_path -> index，None 表示未找到）
 _avf_screen_cache: Dict[str, Optional[int]] = {}
 _avf_screen_lock = threading.Lock()
 
-# 默认输出上限。多屏机器的「整个屏幕」是所有显示器的并集（现场实测
-# 4000x2571），既超出电视解码能力（Main profile 到 1080p 最稳），又会被
-# 2M 码率压成马赛克；奇数高度还会让 x264 直接拒绝初始化。
-DEFAULT_MAX_WIDTH = 1920
-DEFAULT_MAX_HEIGHT = 1080
+# 未指定采集尺寸时的兜底上限（可在设置页调整，见 params 登记表
+# screencast.max_width / screencast.max_height）。多屏机器的「整个屏幕」是所有
+# 显示器的并集（现场实测 4000x2571），既超出电视解码能力（Main profile 到
+# 1080p 最稳），又会被 2M 码率压成马赛克；奇数高度还会让 x264 直接拒绝初始化。
 
 
 def _run_utf8(cmd: List[str], timeout: int) -> subprocess.CompletedProcess:
@@ -438,8 +439,8 @@ class FfmpegManager:
         也会给出 1917x1081 这类值；force_divisible_by=2 是唯一兜底，
         decrease 保证比上限小的源不被放大重编码。
         """
-        w = int(width) if int(width or 0) > 0 else DEFAULT_MAX_WIDTH
-        h = int(height) if int(height or 0) > 0 else DEFAULT_MAX_HEIGHT
+        w = int(width) if int(width or 0) > 0 else int(param("screencast.max_width"))
+        h = int(height) if int(height or 0) > 0 else int(param("screencast.max_height"))
         return (f"scale={w}:{h}:force_original_aspect_ratio=decrease"
                 ":force_divisible_by=2")
 

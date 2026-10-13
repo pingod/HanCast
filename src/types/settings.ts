@@ -20,6 +20,35 @@ export interface NetworkInterfacesInfo {
   selected: string
 }
 
+export type ParamType = 'number' | 'bool' | 'enum'
+
+export interface ParamSpec {
+  key: string
+  section: string
+  type: ParamType
+  default: number | boolean | string
+  /** number 型才有 */
+  min?: number
+  max?: number
+  unit?: string
+  /** enum 型才有 */
+  options?: string[]
+  label_zh: string
+  label_en: string
+  help_zh?: string
+  help_en?: string
+  /** 后端 specs() 附带：当前生效值 */
+  value: number | boolean | string
+  /** 是否被覆盖过（UI 用来标「已改」） */
+  overridden: boolean
+}
+
+export interface SaveParamsResult {
+  ok: boolean
+  errors: string[]
+  specs: ParamSpec[]
+}
+
 export interface DeviceLostEvent {
   id: string
 }

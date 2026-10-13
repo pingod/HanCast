@@ -24,6 +24,7 @@ import threading
 from typing import Dict, Optional
 
 from ..utils import protocol_io
+from ..params import get as param
 from ..protocol.dlna import (build_didl_item, ControlUrlUnavailable,
                              RendererUnresponsive)
 from .ffmpeg_manager import FfmpegManager
@@ -32,9 +33,9 @@ from .httpd import ScreenCastHttpd
 
 logger = logging.getLogger("hancast.screencast.manager")
 
-# DLNA 起流后等待电视拉取播放列表的窗口（秒）。多数电视 2-6 秒开始拉流，
-# 超过这个窗口还没拉，基本可以判定是网络/防火墙或地址问题而不是"还在加载"
-DLNA_VERIFY_SECONDS = 12.0
+# DLNA 起流后等待电视拉取播放列表的窗口（秒）见 params 登记表
+# （screencast.dlna_verify_seconds）。多数电视 2-6 秒开始拉流，超过窗口还没拉，
+# 基本可以判定是网络/防火墙或地址问题而不是"还在加载"
 DLNA_VERIFY_POLL = 1.0
 
 # 直播 HLS 的 MIME：既写进 DIDL 的 protocolInfo，也用作 HTTP 响应类型
@@ -206,7 +207,8 @@ class ScreenCastManager:
         capture = FfmpegCapture(self.ffmpeg.get_path())
         result = capture.start_hls(
             source, audio, video, hls_dir,
-            on_error=lambda msg: self._on_capture_error(msg))
+            on_error=lambda msg: self._on_capture_error(msg),
+            target=target)
         if not result.get("ok"):
             self.httpd.unregister_session(self._session_id)
             return {"ok": False, "error": result.get("error", "屏幕捕获失败")}
@@ -274,7 +276,7 @@ class ScreenCastManager:
         """DLNA 电视不会把"播不出来"回报给控制器：黑屏时既可能是根本没拉到
         播放列表（网段/防火墙/地址错），也可能是拉到了但解码不了（码率过高）。
         这两种情况的处置方式完全不同，只能靠本机侧的拉流证据来区分。"""
-        deadline = time.monotonic() + DLNA_VERIFY_SECONDS
+        deadline = time.monotonic() + param("screencast.dlna_verify_seconds")
         while time.monotonic() < deadline:
             time.sleep(DLNA_VERIFY_POLL)
             if self._session_id != session_id or not self._state.get("running"):
@@ -293,7 +295,7 @@ class ScreenCastManager:
                     f"({stats['pulls']} requests from {stats['clients']})")
                 return
         self._state["error"] = (
-            f"{device_name} 在 {DLNA_VERIFY_SECONDS:.0f} 秒内没有拉取播放列表："
+            f"{device_name} 在 {param('screencast.dlna_verify_seconds'):.0f} 秒内没有拉取播放列表："
             f"请确认电视与本机在同一网段、允许 HanCast 接收局域网连接，"
             f"或换较低分辨率重试")
         stats = self.httpd.pull_stats(session_id)
