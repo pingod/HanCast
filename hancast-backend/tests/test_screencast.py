@@ -120,7 +120,8 @@ class TestFfmpegManager(unittest.TestCase):
             "DirectShow video devices (some may be both video and audio devices)\n"
             "\"相机\" (video)\n"
             "DirectShow audio devices\n"
-            "\"麦克风 (Realtek(R) Audio)\"\n"), stdout="")
+            "\"麦克风 (Realtek(R) Audio)\"\n"
+            "  Alternative name \"@device_cm_abc\"\n"), stdout="")
         fm = FfmpegManager()
         fm._path = "ffmpeg"
         with patch("hancast_sidecar.screencast.loopback.loopback_devices",

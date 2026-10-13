@@ -774,6 +774,9 @@ class FfmpegManager:
                     if "DirectShow audio devices" in stripped:
                         current_kind = "audio"
                         continue
+                    # Alternative name 行也带引号，分段头格式下会伪装成设备混进来
+                    if "Alternative name" in stripped:
+                        continue
                     m = typed.search(stripped)
                     if m:
                         if m.group(2) != "audio":
@@ -787,7 +790,7 @@ class FfmpegManager:
                         name = match.group(1)
                     else:
                         continue
-                    if name.lower() == "dummy" or name.startswith("Alternative"):
+                    if name.lower() == "dummy":
                         continue
                     devices.append({"name": name,
                                     "kind": self._classify_audio_device(name)})
