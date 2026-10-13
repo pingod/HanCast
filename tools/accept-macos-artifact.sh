@@ -178,5 +178,26 @@ else
   say "FAIL dshow 解析仍只认分段头（Windows 一个麦克风都列不出）"; fails=$((fails+1))
 fi
 
+# ── v2.2.22 本轮契约 ──
+
+# dshow 列设备的兜底：没有分段头时整份输出都是设备区，但每行还带着
+# "Alternative name"（形如 @audio:{...}），把它当设备名交给 ffmpeg -f dshow
+# 必然打不开，等于麦克风列表里全是假条目。
+if grep -q 'Alternative name' "$RES/screencast/ffmpeg_manager.py"; then
+  say "PASS dshow 兜底排除 Alternative name"
+else
+  say "FAIL dshow 兜底没排除 Alternative name（麦克风列表里是设备 ID 不是设备）"; fails=$((fails+1))
+fi
+
+# 图片皮的判型窗口：v2.2.20 用固定 400 字节，扫不到 dyrs 的 583 字节 PNG 头，
+# 症状是「播放列表照转、分片全哑」（电视黑屏、mpv 报 no audio or video data）。
+# 窗口现在按上游 Content-Type 分档：自称 image/* 就给 16K，其余保持 2K 不加延迟。
+if grep -q 'def _disguise_peek_len' "$RES/media/server.py" \
+   && grep -q '_DISGUISE_SCAN_IMAGE' "$RES/media/server.py"; then
+  say "PASS 分片判型窗口按上游类型分档（image/* 给 16K）"
+else
+  say "FAIL 分片判型窗口还是固定长度（皮一长就又投哑）"; fails=$((fails+1))
+fi
+
 say "--- $([ $fails -eq 0 ] && echo 'ALL PASS' || echo "$fails FAIL") ---"
 exit $fails

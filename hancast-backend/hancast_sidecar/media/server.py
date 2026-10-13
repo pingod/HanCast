@@ -154,9 +154,20 @@ _TS_PACKET = 188
 # 假图片头的长度按站点差得很远：icve 实测 61 字节，dyrs/低端影视是 583 字节
 # （整段 1.7MB 的分片只有开头这截是 PNG）。窗口一窄就等于没修 —— 播放器会按
 # PNG 魔数选 png_pipe 解码器，然后 mpv 报 "no audio or video data played"。
-_DISGUISE_SCAN = 2048        # 最多向后找多少个偏移当作图片头结尾
+# v2.2.20 就是栽在窗口只有 400：列表照转、分片全哑，日志里却看不出破了。
+_DISGUISE_SCAN = 2048        # 上游不说自己是图片时的判型窗口
+_DISGUISE_SCAN_IMAGE = 16384  # 上游自称 image/*：这就是「皮」的确认信号，多等 16KB
 _DISGUISE_PACKETS = 6        # 要连续 6 个包都对齐才认，防真海报图里蒙对同步字节
 _FAKE_IMAGE_MAGICS = (b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff", b"GIF87a", b"GIF89a")
+
+
+def _disguise_peek_len(ctype: str) -> int:
+    """判型前要向上游取多少字节：图片皮有多长只能靠上游自己报的类型来赌窗口
+
+    窗口按 Content-Type 分档，是为了不给普通分片凭空加几 KB 的首字节延迟。
+    """
+    scan = _DISGUISE_SCAN_IMAGE if ctype.lower().startswith("image") else _DISGUISE_SCAN
+    return scan + 12 + _DISGUISE_PACKETS * _TS_PACKET
 
 
 def _disguise_offset(head: bytes) -> int:
@@ -167,13 +178,17 @@ def _disguise_offset(head: bytes) -> int:
     .ts 只够骗过后缀白名单 —— mpv 内的 ffmpeg 会用 analyzeduration 有限的首块
     探测，看到 PNG 魔数就判成 png 解码器然后报 "error reading packet"，
     所以代理转发时要把这段伪装头剥掉，让播放器从同步字节开始读。
+
+    扫描范围只看传进来的头有多长（窗口由 _disguise_peek_len 决定）：6 个包在
+    188 步长上全中同步字节的误判概率约 (1/256)^5，头部多取几 KB 也不会把真海报
+    图误认成皮。
     """
     if not head.startswith(_FAKE_IMAGE_MAGICS):
         return 0
     need = 12 + _DISGUISE_PACKETS * _TS_PACKET
     if len(head) < need:
         return 0
-    for off in range(1, min(_DISGUISE_SCAN, len(head) - need + 1)):
+    for off in range(1, len(head) - need + 1):
         if all(head[off + _TS_PACKET * i] == _SYNC
                for i in range(_DISGUISE_PACKETS)):
             return off
@@ -444,7 +459,7 @@ class MediaHandler(BaseHTTPRequestHandler):
             if not rng or rng.startswith("bytes=0-"):
                 # 只有从文件头开始的请求能判伪装头/占位图：播放器（mpv、浏览器）
                 # 几乎必然带 bytes=0-… 的 Range，不覆盖这条分支就等于永远不剥
-                first = self._peek_upstream(resp)
+                first = self._peek_upstream(resp, _disguise_peek_len(ctype))
                 if (_is_leech_placeholder(first) and not _disguised_ts(first)
                         and (not rng or rng.rstrip().endswith("-"))):
                     resp.close()
@@ -455,7 +470,7 @@ class MediaHandler(BaseHTTPRequestHandler):
                         timeout=_upstream_timeout(), stream=True)
                     ctype = resp.headers.get("Content-Type", ctype)
                     full_len = _content_range_total(resp.headers.get("Content-Range"))
-                    first = self._peek_upstream(resp)
+                    first = self._peek_upstream(resp, _disguise_peek_len(ctype))
 
             skip = _disguise_offset(first)
             if skip:
@@ -464,6 +479,13 @@ class MediaHandler(BaseHTTPRequestHandler):
                 # 类型也一并纠正：播放器会按 Content-Type 选解封装器，
                 # 留着 image/png 它就去找 PNG 解码器了
                 ctype = "video/mp2t"
+            elif _is_leech_placeholder(first):
+                # 开头是图片/HTML 魔数，可判型窗口内又找不到 TS 对齐：要么是真推广
+                # 占位图，要么皮长过了窗口。这两种播放器都会哑，而日志里必须留下
+                # 区别，否则下轮又只能人肉猜「有列表、画面全黑」到底是哪一种
+                logger.warning(
+                    f"分片以图片/HTML 魔数开头且 {_disguise_peek_len(ctype)} 字节窗口内"
+                    f"无 TS 对齐，原样透传（播放器多半报 no audio or video data）: {host}")
 
             out_status = 200 if full_len else resp.status_code
             resp_headers = {
@@ -516,12 +538,12 @@ class MediaHandler(BaseHTTPRequestHandler):
             resp.close()
 
     @staticmethod
-    def _peek_upstream(resp, want: int = _DISGUISE_SCAN + 12 + _DISGUISE_PACKETS * _TS_PACKET) -> bytes:
+    def _peek_upstream(resp, want: int = _disguise_peek_len("")) -> bytes:
         """取上游开头若干字节（只够判型），后续 iter_content 会从断点继续
 
         分块编码下首个 chunk 可能只有几十字节，而「图片伪装头 + 连续对齐的 TS 包」
-        的判定至少要扫到 _DISGUISE_SCAN 再留出几个包，所以按目标长度累计而不是
-        取一块就返回。
+        的判定至少要扫到判型窗口再留出几个包，所以按目标长度累计而不是取一块就返回。
+        窗口多深由 _disguise_peek_len 按上游 Content-Type 决定。
         """
         buf = b""
         for chunk in resp.iter_content(chunk_size=1024):

@@ -23,7 +23,8 @@ from unittest.mock import patch
 import requests
 
 from hancast_sidecar.media.server import (
-    MediaHandler, _content_range_total, _disguise_offset, _disguised_ts,
+    MediaHandler, _DISGUISE_SCAN, _DISGUISE_SCAN_IMAGE, _content_range_total,
+    _disguise_offset, _disguise_peek_len, _disguised_ts,
     _is_leech_placeholder, _needs_bare_retry, _rewrite_playlist,
     player_ext_ok, player_safe_suffix,
 )
@@ -585,6 +586,27 @@ class TestMediaProxyRewrite(unittest.TestCase):
             self.assertEqual(len(stub), skin_len)
             self.assertEqual(_disguise_offset(stub + ts), skin_len,
                              f"{skin_len} 字节的图片头要能扫出来")
+
+    def test_disguise_peek_window_follows_upstream_image_type(self):
+        """上游自称 image/* 就是「皮」的确认信号：判型窗口要跟着加深
+
+        v2.2.20 的翻车方式是窗口只有 400，583 字节的皮扫不到 → 列表照转、分片全哑。
+        窗口按 Content-Type 分档，既给皮留足空间，也不给普通分片凭空加首字节延迟。
+        """
+        pad = 12 + 6 * 188
+        self.assertEqual(_disguise_peek_len("image/png"), _DISGUISE_SCAN_IMAGE + pad)
+        self.assertEqual(_disguise_peek_len("Image/JPEG"), _DISGUISE_SCAN_IMAGE + pad)
+        self.assertEqual(_disguise_peek_len("video/mp2t"), _DISGUISE_SCAN + pad)
+        self.assertEqual(_disguise_peek_len(""), _DISGUISE_SCAN + pad)
+        # 加深的窗口不是无限：皮长到 9KB 也要能扫出来，且不許把真海报图剥穿
+        ts = b"".join(b"\x47\x40\x11\x00" + b"\x00" * 184 for _ in range(12))
+        for skin_len in (2049, 4000, 9000):
+            stub = b"\x89PNG\r\n\x1a\n" + b"\x00" * (skin_len - 8)
+            head = (stub + ts)[:_disguise_peek_len("image/png")]
+            self.assertEqual(_disguise_offset(head), skin_len,
+                             f"{skin_len} 字节的皮要在 image 窗口内扫出来")
+        poster = b"\x89PNG\r\n\x1a\n" + b"\x00" * _disguise_peek_len("image/png")
+        self.assertEqual(_disguise_offset(poster), 0)
 
     def test_peek_upstream_accumulates_small_chunks(self):
         """分块编码下首块可能只有几十字节：peek 要累计到够判型的长度"""
