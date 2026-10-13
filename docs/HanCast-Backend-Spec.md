@@ -114,6 +114,12 @@ Macast.app / Macast.exe
 - 每条 JSON 必须是单行（`\n` 分隔），不能包含换行符
 - 请求必须携带 `id`，响应回传相同 `id` 用于匹配
 - Python stderr 用于日志输出，不参与通信
+- **stdin/stdout/stderr 一律强制 UTF-8**（`main.py` 顶部用 `TextIOWrapper` 包住，
+  且在 `setup_logger` 之前完成）。父进程没给 locale 时（launchd、终端直跑、CI）
+  Python 会退回 ASCII，而登记表/设备名/错误文案全是中文，编码失败会表现为整条命令
+  `success: false`；stderr 上的中文日志行同样会被编码器吞掉。
+  验收：`tools/accept-macos-artifact.sh` 用 `env -i LC_ALL=C` 直接问打包版要
+  `get_params`，`tools/verify-sidecar-utf8-protocol.py` 在源码层做同一件事
 
 ### 3.3 事件推送 (Python → 前端)
 

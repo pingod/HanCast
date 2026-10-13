@@ -12,10 +12,20 @@ Tauri Sidecar 入口 - 通过 stdin/stdout JSON 与 Rust 通信
 
 import sys
 import os
+import io
 import json
 import logging
 import signal
 import subprocess
+
+# stdin/stdout/stderr 一律强制 UTF-8，且必须在 setup_logger 之前完成（StreamHandler
+# 会绑定当时的 sys.stderr）。原先只在 Windows 上包这一层，但父进程没给 locale 时
+# （launchd 起的 GUI、终端直跑、CI）macOS/Linux 同样退回 ASCII：所有带中文的响应
+# 都会变成 success:false，中文日志行也会被编码器吞掉。v2.2.18 用打包版实测撞到：
+#   {"id": 1, "success": false, "error": "'ascii' codec can't encode characters ..."}
+sys.stdin = io.TextIOWrapper(sys.stdin.buffer, encoding='utf-8', errors='replace')
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 # 兼容两种运行模式:
 #   1. 模块执行: python -m hancast_sidecar.main  → 相对导入
@@ -28,13 +38,6 @@ except ImportError:
     from hancast_sidecar.commands import CommandHandler
     from hancast_sidecar.utils.logger import setup_logger, get_logger
     from hancast_sidecar.utils import protocol_io
-
-# Windows 下强制 stdin/stdout/stderr 使用 UTF-8 编码
-if sys.platform == 'win32':
-    import io
-    sys.stdin = io.TextIOWrapper(sys.stdin.buffer, encoding='utf-8', errors='replace')
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 # 初始化根 logger（控制台 + 文件输出）
 setup_logger("hancast", level=logging.INFO)

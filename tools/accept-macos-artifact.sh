@@ -32,7 +32,7 @@ cd /Users/pavia/githome/HanCast || exit 1
 for rel in ssdp.py commands.py params.py security/guard.py protocol/dlna.py protocol/server.py \
            models/session.py renderer/mpv.py screencast/manager.py screencast/capture.py \
            screencast/httpd.py screencast/ffmpeg_manager.py screencast/www/index.html \
-           utils/logger.py utils/config.py \
+           utils/logger.py utils/config.py main.py \
            media/server.py media/share_resolver.py media/rules/__init__.py media/rules/base.py \
            media/rules/bili.py media/rules/douyin.py media/rules/declarative.py; do
   want=$(git show "$TAG:hancast-backend/hancast_sidecar/$rel" | shasum -a 256 | cut -d' ' -f1)
@@ -115,6 +115,21 @@ if grep -q '"get_params":' "$RES/commands.py" && grep -q '"save_params":' "$RES/
 else
   say "FAIL 命令表缺 get_params/save_params"; fails=$((fails+1))
 fi
+
+# 协议层必须在「父进程没给 locale」时也走得通：登记表/设备名/错误文案全是中文，
+# 而 stdout 就是与 Rust 的通信通道。v2.2.18 的打包版在 LC_ALL=C 下 get_params 直接
+# 回 success:false（'ascii' codec can't encode），设置页整块读不到参数。
+osascript -e 'tell application "HanCast" to quit' 2>/dev/null
+for i in $(seq 1 12); do pgrep -x hancast-sidecar >/dev/null 2>&1 || break; sleep 2; done
+PROTO_LINE=$(printf '{"id":1,"cmd":"get_params","params":{}}\n{"id":2,"cmd":"exit","params":{}}\n' \
+  | env -i PATH=/usr/bin:/bin LC_ALL=C "$APP/Contents/MacOS/hancast-sidecar" 2>/dev/null \
+  | grep -a '"id": 1' | head -1)
+if echo "$PROTO_LINE" | grep -q '"success": true' && echo "$PROTO_LINE" | grep -q 'label_zh'; then
+  say "PASS 无 locale 环境下协议仍走通（中文登记表原样回来）"
+else
+  say "FAIL LC_ALL=C 下 get_params 没走通: ${PROTO_LINE:0:160}"; fails=$((fails+1))
+fi
+open -a HanCast
 
 say "--- $([ $fails -eq 0 ] && echo 'ALL PASS' || echo "$fails FAIL") ---"
 exit $fails
