@@ -131,5 +131,10 @@ else
 fi
 open -a HanCast
 
+# sidecar 的自报版本（UPnP SERVER/modelNumber、config dump）也是版本契约点：
+# 漏改会让真机上的「版本号」不再能证明装的是哪版（v2.2.19 就漏了这一处）。
+SIDE_VER=$(grep -o 'self\.version = "[^"]*"' "$RES/utils/config.py" | head -1 | sed 's/.*"\(.*\)"/\1/')
+chk "sidecar 自报版本" "$SIDE_VER" "$VER"
+
 say "--- $([ $fails -eq 0 ] && echo 'ALL PASS' || echo "$fails FAIL") ---"
 exit $fails

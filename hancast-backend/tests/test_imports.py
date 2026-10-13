@@ -91,8 +91,19 @@ class TestImports(unittest.TestCase):
 
     def test_main(self):
         """测试主模块"""
-        from hancast_sidecar.main import main
-        self.assertIsNotNone(main)
+        # main 在 import 阶段就把 sys.std* 换成 UTF-8 wrapper（协议通道的硬要求），
+        # 在测试进程里 import 会顶掉 pytest/unittest 的捕获缓冲、wrapper 析构时
+        # 还把那条缓冲一起关掉，后续用例全变 "I/O operation on closed file"。
+        # 可导入性放到子进程里查，产品行为不受影响。
+        import subprocess
+        import sys
+
+        proc = subprocess.run(
+            [sys.executable, "-c", "import hancast_sidecar.main as m; print(callable(m.main))"],
+            capture_output=True, text=True, timeout=60,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.strip(), "True")
 
 
 if __name__ == '__main__':
