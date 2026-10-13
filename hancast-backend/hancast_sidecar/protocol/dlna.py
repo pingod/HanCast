@@ -1062,6 +1062,14 @@ class DLNAProtocol:
         envelope = etree.Element(
             "{http://schemas.xmlsoap.org/soap/envelope/}Envelope"
         )
+        # TCL 85T8G Max 只认带 SOAP 1.1 encodingStyle 的信封：同一份 URI、同一份
+        # DIDL，带上这个属性 SetAVTransportURI 稳定 200，去掉就稳定回 HTTP 500 且
+        # body 为空（2026-10-13 交替各 3 轮，12/12 干净分离）。这就是「投屏到电视
+        # 只成功过一次」的真根因——不是电视端服务退出，我们的报文它压根没接受。
+        # 主流控制点（CyberLink 等）默认都带这条，补上对已工作的渲染端无影响。
+        envelope.attrib[
+            "{http://schemas.xmlsoap.org/soap/envelope/}encodingStyle"
+        ] = "http://schemas.xmlsoap.org/soap/encoding/"
         body = etree.SubElement(
             envelope,
             "{http://schemas.xmlsoap.org/soap/envelope/}Body"

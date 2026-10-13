@@ -1,5 +1,5 @@
 #!/bin/bash
-# 用法: tools/accept-macos-artifact.sh 2.2.14
+# 用法: tools/accept-macos-artifact.sh 2.2.15
 # 验收 **CI 产物本身**：全程 CLI，不碰 UI 坐标，禁止任何手工补丁（重装/重签都不许）。
 # 每轮装完包都跑一遍；任一项 FAIL 就说明这版产物不能用，别拿本地补丁版冒充。
 VER="${1:?用法: $0 <version>}"
@@ -59,6 +59,15 @@ fi
 # 注意：屏幕投屏的 aiohttp 服务只在会话进行中监听（manager._start 里 httpd.start()），
 # 空载时不存在，不能拿它当「分享给浏览器」的判据。跨机入站的真凭据是
 # Windows 侧日志里它确实拉到了 http://<本机IP>:<port>/media/... 的字节。
+
+# 投屏到电视的开关：控制端 SOAP 信封必须带 SOAP 1.1 encodingStyle。
+# TCL 85T8G Max 对不带它的 SetAVTransportURI 稳定回 HTTP 500 空正文
+# （2026-10-13 交替 3 轮 12/12 分离），也就是「投屏到电视只成功过一次」的真根因。
+if grep -q 'schemas.xmlsoap.org/soap/encoding/' "$RES/protocol/dlna.py"; then
+  say "PASS 控制端 SOAP 信封带 encodingStyle"
+else
+  say "FAIL 控制端 SOAP 信封缺 encodingStyle（电视 SetAVTransportURI 必回 500）"; fails=$((fails+1))
+fi
 
 say "--- $([ $fails -eq 0 ] && echo 'ALL PASS' || echo "$fails FAIL") ---"
 exit $fails

@@ -161,6 +161,29 @@ def test_5xx_is_reported_as_dead_renderer(protocol, monkeypatch):
     assert "HTTP 500" in str(ei.value)
 
 
+def test_soap_envelope_carries_encoding_style(protocol, monkeypatch):
+    """控制端 SOAP 信封必须带 SOAP 1.1 encodingStyle
+
+    TCL 85T8G Max 只认带这条属性的信封：同一份 URI 和 DIDL，带上稳定 200、
+    去掉稳定 HTTP 500 空正文（2026-10-13 交替各 3 轮，12/12 干净分离）。
+    丢掉它 = 「投屏到电视只成功过一次」。
+    """
+    monkeypatch.setattr(dlna_mod.requests, "get",
+                        make_get("http://192.168.1.13:16314/", AV_DESC))
+    protocol.set_device(device(location="http://192.168.1.13:16314/"))
+
+    bodies = []
+    monkeypatch.setattr(
+        dlna_mod.requests, "post",
+        lambda url, data=None, **kw: bodies.append(data) or FakeResp("<s/>"))
+    assert protocol._send_action(dlna_mod.NS_AVTRANSPORT, "SetAVTransportURI",
+                                 {"InstanceID": 0, "CurrentURI": "http://x/y",
+                                  "CurrentURIMetaData": ""}) is not None
+    assert len(bodies) == 1
+    text = bodies[0].decode("utf-8")
+    assert 'encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"' in text
+
+
 def test_lan_http_bypasses_system_proxy(protocol, monkeypatch):
     """链路内 HTTP 不能走系统代理
 
