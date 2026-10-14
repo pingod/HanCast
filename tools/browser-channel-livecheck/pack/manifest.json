@@ -1,0 +1,7 @@
+{
+  "name": "hancast-browser-livecheck",
+  "version": "1.0.0",
+  "author": "HanCast",
+  "description": "浏览器通道验收：假站点的播放地址只由 JS 现挂，只有真渲染才嗅得到（判据看日志 LIVECHECK 行）",
+  "scripts": ["main.js"]
+}
