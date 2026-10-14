@@ -265,7 +265,8 @@ def analyze(ffmpeg: str, path: str) -> tuple:
 def grab(ffmpeg: str, title: str, seconds: float, out: str) -> tuple:
     """按生产代码同一条命令行抓窗口"""
     src = {"type": "window", "id": f"window:{title}", "title": title}
-    args = FfmpegManager.build_video_input(src, 15, ffmpeg_path=ffmpeg)
+    # build_video_input 只给输入段参数，滤镜要排在所有 -i 之后（抓屏不缩放，忽略第二项）
+    args, _vf = FfmpegManager.build_video_input(src, 15, ffmpeg_path=ffmpeg)
     cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", *args,
            "-t", f"{seconds}", "-an", out]
     print(f"  命令行: {' '.join(args)}")
