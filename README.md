@@ -289,7 +289,7 @@ HanCast/
 | [docs/分享解析规则.md](docs/分享解析规则.md) · [docs/解析插件开发指南.md](docs/解析插件开发指南.md) · [rule-packs/README.md](rule-packs/README.md) | 粘贴解析管线、写规则包、官方包发布 |
 | [docs/构建与发布.md](docs/构建与发布.md) | 版本 SSOT、三平台打包、产物验收、发布顺序 |
 | [CHANGELOG.md](CHANGELOG.md) | 每个版本改了什么 |
-| [CLAUDE.md](CLAUDE.md) | 速览与硬约束（深度内容看上面） |
+| [AGENTS.md](AGENTS.md) | 速览与硬约束（编码代理的入口；深度内容看上面。旧名 CLAUDE.md） |
 
 > `docs/Macast-Frontend-*.md` 与 `docs/HanCast-Backend-Spec.md` 是历史草案，已被上面几份取代，仅作留档。
 >

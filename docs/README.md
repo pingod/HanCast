@@ -51,7 +51,7 @@
 | [HanCast-Backend-Spec.md](HanCast-Backend-Spec.md) | 2.0 期设计草案（2026-07-05），模块名、命令表、端口假设均已被实现推翻 | [架构总览.md](架构总览.md) + [HanCast-Frontend-API.md](HanCast-Frontend-API.md) |
 | [Macast-Frontend-Spec.md](Macast-Frontend-Spec.md) | Macast 时期的前端草案 | [HanCast-Frontend-Spec.md](HanCast-Frontend-Spec.md) |
 | [Macast-Frontend-API.md](Macast-Frontend-API.md) | Macast 时期的命令表，缺屏幕投屏/解析/规则包/参数/日志等整批命令，且列了无发送方的 `cast_error` | [HanCast-Frontend-API.md](HanCast-Frontend-API.md) |
-| 顶层 `CLAUDE.md` | 仍有效，但只做速览与安全/约定条目，深度内容以本索引为准 | 本索引各专文 |
+| 顶层 `AGENTS.md`（旧名 `CLAUDE.md`，现仅存指针） | 仍有效，但只做速览与安全/约定条目，深度内容以本索引为准 | 本索引各专文 |
 
 ## 4. 文档维护约定
 

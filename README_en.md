@@ -302,7 +302,7 @@ paths and states the maintenance rules. Frequently used:
 | [docs/分享解析规则.md](docs/分享解析规则.md) · [docs/解析插件开发指南.md](docs/解析插件开发指南.md) · [rule-packs/README.md](rule-packs/README.md) | Resolve pipeline, writing rule packs, publishing official packs |
 | [docs/构建与发布.md](docs/构建与发布.md) | Version SSOT, 3-platform packaging, artifact acceptance, release order |
 | [CHANGELOG.md](CHANGELOG.md) | What changed in each version |
-| [CLAUDE.md](CLAUDE.md) | Quick reference and hard constraints (depth lives in the docs above) |
+| [AGENTS.md](AGENTS.md) | Quick reference and hard constraints for coding agents (formerly CLAUDE.md; depth lives in the docs above) |
 
 > `docs/Macast-Frontend-*.md` and `docs/HanCast-Backend-Spec.md` are superseded historical drafts, kept only for reference.
 >
