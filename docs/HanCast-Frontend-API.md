@@ -2,7 +2,7 @@
 
 > 回答一个问题：前端 `invoke()` 出去的每一条命令，究竟由壳层（Rust/Tauri）就地执行、还是转发给 Sidecar（Python 后台进程）；它的入参、返回结构、可能错误，以及 Sidecar 主动推给前端的事件分别是什么。
 >
-> 最后校对：2026-10-15，对应版本 v2.3.6（`package.json`，tag `v2.3.6`）
+> 最后校对：2026-10-15，对应版本 v2.3.9（`package.json`，tag `v2.3.9`）
 
 ---
 
@@ -455,7 +455,7 @@ async function stopCast(deviceId?: string) {
 
 要点：`stop_cast` 的「成功」只表示本地会话已释放。`control_failed` 必须一路传到 UI，否则「界面停了、电视还在播」会被当成一次成功的停止。
 
-### 4.3 媒体解析与粘贴 — `src/stores/media.ts:102-129`
+### 4.3 媒体解析与粘贴 — `src/stores/media.ts:115-182`
 
 ```ts
 async function parseUrl(input?: string, quality = '') {
@@ -482,11 +482,20 @@ async function parseUrl(input?: string, quality = '') {
     if (info.source_url) urlInput.value = info.source_url
     state.value = 'ready'
     return
-  } catch (err) { /* 降级：本地按扩展名推断 MIME 后透传原始地址 */ }
+  } catch (err) {
+    // 只有「地址本身就是媒体文件」（MEDIA_FILE_RE 白名单扩展名）才按扩展名推 MIME 透传；
+    // 网页地址透传出去电视拉不到画面，所以如实报错，并置 ledgerHint 提示台账入口
+    const fallbackUrl = extractFirstUrl(raw)
+    if (!fallbackUrl || !isMediaFileUrl(fallbackUrl)) { error.value = String(err); state.value = 'idle'; return }
+    /* ……媒体直链：按扩展名推 MIME 后透传 */
+  }
 }
 ```
 
-要点：`resolveShare` 内部已经把 `task_id` 轮询封死了，调用方看到的就是一次普通的 `await`。失败**不一定**是错误 —— 只要能从文本里抠出链接，就降级透传（`media.ts:130-160`）。
+要点：`resolveShare` 内部已经把 `task_id` 轮询封死了，调用方看到的就是一次普通的 `await`。
+解析失败的口径（v2.3.9 之后收紧，尚未随任一 tag 发布）：**抠出的地址本身是媒体文件才降级透传，网页地址一律报错**——旧实现无条件透传，
+表现为「随便粘一个 HTML 页面也能点投屏，点了却什么都没发生」（`media.ts:142-160`、白名单 `media.ts:15-19`）。
+报错时 `ledgerHint` 置真，输入框下方就地给出台账入口：设置 → 解析插件 → 解析失败台账（`MediaInput.vue:522`）。
 
 ### 4.4 屏幕投屏 — `src/components/ScreenCastPanel.vue:131-155`
 

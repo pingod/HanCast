@@ -10,6 +10,14 @@ function extractFirstUrl(text: string): string | null {
   return m[0].replace(/[),.;!?'"”]+$/, '') || null
 }
 
+/** 后端判失败后仍值得透传的地址：本身就是一个媒体文件，电视能直接拉。
+ *  网页地址透传出去只得到「按钮能点、画面不动」，还顺手把一条本该露面的解析失败吞掉了。 */
+const MEDIA_FILE_RE = /\.(mp4|m4v|mkv|webm|flv|avi|mov|ts|m2ts|mpg|mpeg|3gp|mp3|m4a|aac|flac|wav|ogg|oga|opus|m3u8|mpd)$/i
+
+function isMediaFileUrl(url: string): boolean {
+  return MEDIA_FILE_RE.test(url.split('?')[0].split('#')[0])
+}
+
 /** Infer MIME type from filename extension */
 function inferMime(name: string): string {
   const ext = name.split('.').pop()?.toLowerCase() ?? ''
@@ -29,6 +37,8 @@ export const useMediaStore = defineStore('media', () => {
   const mediaInfo = ref<MediaInfo | null>(null)
   const urlInput = ref('')
   const error = ref<string | null>(null)
+  /** 后端拿到过真实地址却解不出画面 —— 提示他台账在哪，别让他自己翻设置 */
+  const ledgerHint = ref(false)
 
   const isReady = computed(() => state.value === 'ready' && mediaInfo.value !== null)
   const isParsing = computed(() => state.value === 'parsing')
@@ -38,6 +48,7 @@ export const useMediaStore = defineStore('media', () => {
     mediaInfo.value = null
     urlInput.value = ''
     error.value = null
+    ledgerHint.value = false
     localFile.value = null
   }
 
@@ -68,6 +79,7 @@ export const useMediaStore = defineStore('media', () => {
   async function parseFile(filePathOrFile: string | File) {
     state.value = 'parsing'
     error.value = null
+    ledgerHint.value = false
     try {
       if (typeof filePathOrFile === 'string') {
         // Tauri mode: send path to backend
@@ -97,7 +109,8 @@ export const useMediaStore = defineStore('media', () => {
   /**
    * 解析粘贴内容：支持纯链接、B站/抖音/小红书分享口令文本、短链。
    * 后端 resolve_share 负责文本提取 + 短链展开 + 页面直链解析；
-   * 失败且能提取出链接时降级为透传原始地址（沿用旧行为）。
+   * 失败时只有「地址本身就是媒体文件」才透传原始地址——网页地址透传出去
+   * 电视拉不到画面，而这条失败也会被吞掉。
    */
   async function parseUrl(input?: string, quality = '') {
     const raw = (input ?? urlInput.value).trim()
@@ -105,6 +118,7 @@ export const useMediaStore = defineStore('media', () => {
 
     state.value = 'parsing'
     error.value = null
+    ledgerHint.value = false
     try {
       const info = await resolveShare(raw, quality)
       if (!info.uri) throw new Error('解析结果为空')
@@ -132,7 +146,14 @@ export const useMediaStore = defineStore('media', () => {
         state.value = 'idle'
         return
       }
-      // 后端解析失败（站点防抓取/无流媒体/无后端）：本地按扩展名推断后透传
+      // 后端拿到过真实地址却解不出画面：报错时就地点出台账入口（不用他再去翻设置）
+      if (!isMediaFileUrl(fallbackUrl)) {
+        ledgerHint.value = true
+        error.value = String(err)
+        state.value = 'idle'
+        return
+      }
+      // 后端解析失败（站点防抓取/无流媒体/无后端）：地址本身就是媒体文件才透传
       const pathParts = fallbackUrl.split('?')[0].split('/')
       const title = decodeURIComponent(pathParts[pathParts.length - 1] || '') || fallbackUrl
       const ext = title.split('.').pop()?.toLowerCase() ?? ''
@@ -172,6 +193,7 @@ export const useMediaStore = defineStore('media', () => {
     localFile,
     urlInput,
     error,
+    ledgerHint,
     isReady,
     isParsing,
     reset,

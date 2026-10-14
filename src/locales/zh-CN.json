@@ -16,6 +16,7 @@
   "media.dropHint": "支持视频、音频、图片文件或链接",
   "media.urlDragDetected": "检测到链接拖拽，请粘贴到下方输入框",
   "media.unsupportedFormat": "不支持的格式: {ext}",
+  "media.resolveLedgerHint": "这条已记入解析失败台账：设置 → 解析插件 → 解析失败台账（按域名分组），照着它给这个站点补规则包",
   "media.linkPlaceholder": "视频/图片/音乐链接，或整段分享口令文本",
   "media.paste": "粘贴",
   "media.parse": "解析 / 准备",

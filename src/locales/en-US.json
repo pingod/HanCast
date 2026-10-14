@@ -16,6 +16,7 @@
   "media.dropHint": "Supports video, audio, image files or links",
   "media.urlDragDetected": "Link drag detected — paste it in the input below",
   "media.unsupportedFormat": "Unsupported format: {ext}",
+  "media.resolveLedgerHint": "This address was recorded in the failure ledger: Settings → Parser packs → Parse failures (grouped by domain) — use it to add a rule pack for the site",
   "media.linkPlaceholder": "Video / image / audio link, or full share text",
   "media.paste": "Paste",
   "media.parse": "Parse / Prepare",

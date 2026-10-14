@@ -15,6 +15,7 @@
 于是「伪装分片走本机代理」这类结论可以直接看到播放器视角的结果。
 """
 import argparse
+import atexit
 import json
 import logging
 import os
@@ -156,6 +157,8 @@ def main():
     ap.add_argument("-q", "--quiet", action="store_true", help="只打印最终结果")
     ap.add_argument("--segment", help="跳过解析，直接把这条远程流/分片地址登记进本机代理再实解")
     ap.add_argument("--referer", help="--segment 要携带的防盗链 Referer（页面地址）")
+    ap.add_argument("--keep-ledger", action="store_true",
+                    help="让失败记录写进用户真实的解析失败台账（默认改写临时目录）")
     args = ap.parse_args()
     if not args.segment and not args.text:
         ap.error("需要粘贴内容，或 --segment <流地址> --referer <页面地址>")
@@ -176,6 +179,15 @@ def main():
     import hancast_sidecar.media.share_resolver as sr
     if args.budget != 25.0:
         sr._TOTAL_BUDGET = args.budget
+
+    if not args.keep_ledger:
+        # 解不出来时 resolve() 会往台账记一条，而那份台账是设置页给用户看的真实失败清单；
+        # 探针调试的地址默认挪到临时目录，别混进去
+        import tempfile
+        from hancast_sidecar.media import failures
+        tmp_ledger = tempfile.mkdtemp(prefix="hancast-probe-ledger-")
+        failures.SETTING_DIR = tmp_ledger
+        atexit.register(shutil.rmtree, tmp_ledger, ignore_errors=True)
 
     print(f"候选: {extract_candidates(args.text)}", file=sys.stderr)
     try:

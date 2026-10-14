@@ -2,7 +2,7 @@
 
 > 本文档回答：HanCast 桌面端（Tauri 2 + Vue 3）的界面层是怎么搭起来的——窗口壳层、路由视图、组件与 Store 全量清单、真实数据流时序、样式与国际化机制、浏览器 mock 模式，以及写代码前必须知道的约束与坑。
 >
-> 最后校对：2026-10-15，对应版本 v2.3.6（`package.json`，tag `v2.3.6`）
+> 最后校对：2026-10-15，对应版本 v2.3.9（`package.json`，tag `v2.3.9`）
 
 术语约定：**Sidecar** = Python 后台进程（`hancast-backend/`，打包为 `hancast-sidecar`）；**壳层** = Rust/Tauri 层（`src-tauri/`）；**规则包** = JS 解析插件 zip；**声明式规则** = JSON 站点规则；**屏幕投屏** = screencast（把电脑屏幕投出去）；**接收投屏** = 本机作为 DLNA 渲染端被别的设备投；**投屏确认** = Device Guard；**后台参数** = `params.py` 可调项。
 
@@ -287,7 +287,7 @@ default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src '
 
 1. 剪贴板读取走 Rust（`read_clipboard`），Web API 仅降级（`commands.ts:934-947`，原因见 §10.1）。
 2. `resolve_share` 是**异步任务**：立即返回 `task_id`，前端 400ms 轮询 `get_resolve_result`，45s 兜底超时（`commands.ts:680-705`；Sidecar 单条解析预算 25s，注释写明）。兼容「直接返回结果」的旧实现/浏览器 mock（`commands.ts:690-694`）。
-3. 后端解析失败但文本里能提出 URL 时，`media.ts:129-160` 降级：`extractFirstUrl` + 按扩展名推 MIME 后透传直链。
+3. 后端解析失败时**不再无条件透传**：只有从文本里抠出的地址本身带媒体扩展名（`media.ts:15-19` 白名单）才 `extractFirstUrl` + 按扩展名推 MIME 透传；网页地址一律如实报错（`media.ts:142-182`）。旧口径「能抠出链接就降级透传」会让随便一个 HTML 页面也能点投屏、点了却毫无动作，且失败被吞进台账之外无人看见。报错时 `ledgerHint` 置真，输入框下方直接指出「设置 → 解析插件 → 解析失败台账（按域名分组）」入口（`MediaInput.vue:522`）。
 4. 投屏目标选择优先级：选中设备（在线）→ 默认设备（在线）→ 弹设备选择 Modal（`MediaInput.vue:398-425`）。
 5. `startCast` 不等事件，**立即乐观置 playing**（`cast.ts:329` 注释「Set playing immediately — don't wait for event」），同时启动本地进度模拟与 1s 轮询；真实状态以 `cast_state_changed` 事件为权威源。
 6. Ctrl+V 直接进输入框时：纯链接保持默认粘贴（可编辑），**非纯链接的口令文本**才拦截并自动解析（`MediaInput.vue:377-384`）。

@@ -368,6 +368,15 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
           via: 'mock/hancast-bilibili',
         } as T
       }
+      // 网页地址在真后端里是「解不出可播源」而不是原样透传：mock 也必须失败，
+      // 否则 dev 模式永远看不到前端那条真实报错分支
+      if (!mimeMap[ext]) {
+        let host = url
+        try { host = new URL(url).host } catch { /* 非标准链接，按原文报出来 */ }
+        throw new Error(
+          `无法解析出可播放地址 — ${host}: 页面中未找到可播放的视频源（${host}），` +
+          '该站点可能需要登录或由脚本动态加载（可为该站点添加解析规则，或在设置页安装规则包）')
+      }
       return {
         media_type: 'url',
         uri: url,

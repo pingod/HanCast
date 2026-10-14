@@ -519,6 +519,7 @@ function onFileSelected(e: Event) {
         <p class="media-input__subhint">{{ t('media.pasteHint') }}</p>
         <p v-if="pickerError" class="media-input__error">⚠ {{ pickerError }}</p>
         <p v-if="translatedError" class="media-input__error">⚠ {{ translatedError }}</p>
+        <p v-if="mediaStore.ledgerHint" class="media-input__ledger-hint">{{ t('media.resolveLedgerHint') }}</p>
       </template>
     </div>
 
@@ -700,6 +701,11 @@ function onFileSelected(e: Event) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.media-input__ledger-hint {
+  font-size: 12px;
+  color: var(--text-tertiary);
 }
 
 .media-input__paste-hint {
