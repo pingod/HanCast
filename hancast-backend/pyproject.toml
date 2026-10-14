@@ -26,6 +26,10 @@ dependencies = [
     "pyaudiowpatch>=0.2.12.9; sys_platform == 'win32'",
     "quickjs>=1.19.4",
     "cssselect>=1.6.0",
+    # TLS/JA3 指纹伪造（utils/httpclient.py）：按 UA 用对应浏览器握手。
+    # 三端都有 wheel（macOS arm64/x86_64、Windows amd64、Linux x86_64/aarch64），
+    # 装不上时代码会退回 requests，不会让解析整条链挂掉。
+    "curl_cffi>=0.16.3",
 ]
 
 [project.optional-dependencies]

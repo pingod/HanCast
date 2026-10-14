@@ -21,6 +21,7 @@ from urllib.parse import urlparse, parse_qs
 from typing import Dict, Tuple
 
 from ..params import get as param
+from ..utils.httpclient import proxy_broken
 from ..utils.identity import desktop_ua
 
 logger = logging.getLogger("hancast.media.server")
@@ -46,9 +47,8 @@ _NO_PROXY = {"http": None, "https": None}
 
 
 def _proxy_broken(exc: Exception) -> bool:
-    """这次失败是不是本地代理造成的（macOS 上 requests 会读系统代理配置）"""
-    return (isinstance(exc, http_requests.exceptions.ProxyError)
-            or "proxy" in str(exc).lower())
+    """这次失败是不是本地代理造成的（判定与解析链路共用一份，见 utils.httpclient）"""
+    return proxy_broken(exc)
 
 
 def upstream_get(url: str, **kwargs):

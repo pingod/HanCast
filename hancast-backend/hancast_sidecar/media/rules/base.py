@@ -22,9 +22,8 @@ from html import unescape as html_unescape
 from typing import Optional
 from urllib.parse import urlparse, urljoin
 
-import requests
-
 from ...models.media import MediaInfo
+from ...utils.httpclient import HttpSession
 
 logger = logging.getLogger("hancast.media.rules")
 
@@ -64,7 +63,7 @@ class RuleContext:
     """一次解析的共享底座：会话、总预算，以及向管线借用的能力"""
 
     resolver: object
-    session: requests.Session
+    session: HttpSession        # requests 语义的会话，由 utils.httpclient 工厂给出
     deadline: float
     source_url: str = ""      # 用户粘贴的那条候选地址（交付信息里回指用）
     quality: str = ""         # 用户点名的画质档位 id（空＝按规则自己的默认，通常最高）

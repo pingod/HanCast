@@ -20,14 +20,14 @@ from urllib.parse import (parse_qs, quote, urlparse, urljoin, unquote, urlunpars
 from html import unescape as html_unescape
 
 from . import failures
-from .server import (MediaServer, player_ext_ok, player_safe_suffix,
-                     _proxy_broken)
+from .server import (MediaServer, player_ext_ok, player_safe_suffix)
 from .rules import (RuleContext, matching as rules_matching,
                     refresh_external as refresh_external_rules)
 from .rules.base import decode_body, desktop_ua, normalize_text
 from .rules.jsplugins import PluginManager
 from ..models.media import MediaInfo
 from ..utils.config import SETTING_DIR
+from ..utils.httpclient import HttpSession, make_session
 
 logger = logging.getLogger("hancast.media.share")
 
@@ -109,31 +109,6 @@ class UnplayableSource(ValueError):
     与「网络不可达」区分开：后者无法判定，电视端可能反而能播，
     此时保留原始候选直接交给设备，而不是把一次成功的解析判成失败。
     """
-
-
-class ResilientSession(requests.Session):
-    """系统代理坏了就改直连，而不是让整条解析链报错
-
-    本机这类 127.0.0.1 代理端口常只服务于浏览器，它一失效，第一个请求就是
-    ConnectionError —— 用户看到的现象是「同一个链接昨天能投今天不能」。
-    仍然先按环境配置走代理：公司网络里直连不通的用户不受影响。
-    """
-
-    def __init__(self):
-        super().__init__()
-        self._bypassed = False
-
-    def send(self, request, **kwargs):
-        try:
-            return super().send(request, **kwargs)
-        except requests.RequestException as e:
-            if self._bypassed or not _proxy_broken(e):
-                raise
-            logger.info(f"本地代理不可用（{type(e).__name__}），改用直连重试")
-            self._bypassed = True
-            self.trust_env = False
-            kwargs.pop("proxies", None)
-            return super().send(self.prepare_request(request), **kwargs)
 
 
 def _clean_url(url: str) -> str:
@@ -363,7 +338,7 @@ class ShareResolver:
         failed: list[tuple[str, str]] = []
         # 一次解析共用一个 Session：页面下发的 Cookie 要能带进
         # /api/m3u8?origin=xx&url=yy 这类「播放地址由接口再给一次」的二次请求
-        with ResilientSession() as session:
+        with make_session() as session:
             for url in candidates[:3]:
                 try:
                     hit = self._resolve_url(url, deadline, session, quality)
@@ -423,7 +398,7 @@ class ShareResolver:
         return None
 
     def _resolve_url(self, url: str, deadline: float,
-                     session: requests.Session, quality: str = "") -> dict:
+                     session: HttpSession, quality: str = "") -> dict:
         ctx = RuleContext(resolver=self, session=session, deadline=deadline,
                           source_url=url, quality=(quality or "").strip())
 
@@ -484,7 +459,7 @@ class ShareResolver:
 
     # ── 交付前检查：电视不带 Cookie/Referer 能否拉到流 ──
 
-    def _publish(self, uri: str, mime: str, session: requests.Session,
+    def _publish(self, uri: str, mime: str, session: HttpSession,
                  referer: str, deadline: float, via: str,
                  extra_headers: dict | None = None) -> tuple[str, str, str]:
         """返回 (uri, mime, via)；需要防盗链头时改走本机代理
@@ -544,7 +519,7 @@ class ShareResolver:
         headers = {"User-Agent": desktop_ua()}
         if use_range:
             headers["Range"] = "bytes=0-1023"
-        with ResilientSession() as probe:
+        with make_session() as probe:
             r = probe.get(url, timeout=min(timeout, 6.0), stream=True, headers=headers)
             try:
                 head = b""
@@ -569,7 +544,7 @@ class ShareResolver:
         return not c.startswith(("text/", "image/", "application/json"))
 
     @staticmethod
-    def _snapshot_headers(session: requests.Session, referer: str,
+    def _snapshot_headers(session: HttpSession, referer: str,
                           target: str) -> dict:
         """把页面会话里的 Cookie 固化成请求头交给代理
 
@@ -605,7 +580,7 @@ class ShareResolver:
         return min(remaining, 10.0)
 
     def _open(self, url: str, deadline: float,
-              ua: str | None = None, session: requests.Session | None = None,
+              ua: str | None = None, session: HttpSession | None = None,
               referer: str | None = None) -> tuple[str, str, str | None, bytes | None]:
         """GET（流式、正文封顶）→ (最终URL, Content-Type, Content-Length, 正文或None)
 
@@ -663,7 +638,7 @@ class ShareResolver:
     # ── 通用页面提取 ──
 
     def _resolve_page(self, page_url: str, html: str, source_url: str,
-                      deadline: float, session: requests.Session) -> dict:
+                      deadline: float, session: HttpSession) -> dict:
         declared: list[str] = []   # og:video / twitter:player:stream
         title = ""
         thumb = ""
@@ -741,7 +716,7 @@ class ShareResolver:
 
     # ── 候选地址验证 / 「接口下发地址」下钻 ──
 
-    def _follow_stream(self, url: str, session: requests.Session, referer: str,
+    def _follow_stream(self, url: str, session: HttpSession, referer: str,
                        deadline: float, _hop: int = 0) -> tuple[str, str]:
         """确认候选真的能播，并顺着主列表 / JSON 接口下钻到最终流地址
 
@@ -788,7 +763,7 @@ class ShareResolver:
                 raise last or UnplayableSource("接口下发的地址不可播")
             raise UnplayableSource(f"未识别的内容类型（{ct or '未声明'}）")
 
-    def _from_playlist(self, url: str, body: bytes, session: requests.Session,
+    def _from_playlist(self, url: str, body: bytes, session: HttpSession,
                        referer: str, deadline: float, hop: int) -> tuple[str, str]:
         text = body.decode("utf-8", errors="replace")
         variant = _master_variant_url(text, url)

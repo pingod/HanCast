@@ -152,6 +152,14 @@ PARAM_SPECS: List[Dict] = [
      "label_zh": "手机 User-Agent", "label_en": "Mobile User-Agent",
      "help_zh": "规则要求移动站点（分享页、小程序页）时用的身份",
      "help_en": "Identity used when a rule asks for the mobile page"},
+    {"key": "http.tls_impersonate", "section": "http", "type": "bool", "default": True,
+     "label_zh": "伪造 TLS 指纹（与 UA 对应）", "label_en": "Spoof TLS fingerprint",
+     "help_zh": "解析链接和规则包发请求时，按上面的 User-Agent 用对应浏览器的 TLS/JA3 "
+               "握手，避免「UA 说是 Chrome、握手暴露成 Python」这种一眼假的组合。"
+               "认不出版本的 UA 不会伪装；关掉后回到 Python 原生握手，无需重新编译",
+     "help_en": "Handshake with the TLS/JA3 fingerprint of the browser named by the "
+                "User-Agent above, so UA and TLS agree. Unrecognised UAs stay unspoofed; "
+                "turning this off falls back to Python's native handshake"},
 
     # ── 解析失败台账 ──
     {"key": "failures.enabled", "section": "failures", "type": "bool", "default": True,

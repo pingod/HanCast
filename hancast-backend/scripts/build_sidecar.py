@@ -309,6 +309,12 @@ def build(force=False):
         # cssselect 是 lxml.html.cssselect 的纯 Python 后端
         "--include-package=quickjs",
         "--include-package=cssselect",
+        # TLS/JA3 指纹伪造（utils/httpclient.py）。curl_cffi 的真身在两个二进制里：
+        # 包内的 `_wrapper.abi3.so` 和顶层的 `_cffi_backend`（它 import 时点名要，
+        # 少一个就打出一个「没有指纹可伪装」的包 —— 表现是解析照旧能跑、
+        # JA3 却还是 Python 的，只有抓握手才能发现，所以这里显式点名）。
+        "--include-package=curl_cffi",
+        "--include-module=_cffi_backend",
         "--nofollow-import-to=tkinter,unittest,test,distutils,setuptools,pip,_pytest,pytest",
         "--enable-plugin=anti-bloat",
         "--no-progress",
