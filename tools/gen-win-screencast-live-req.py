@@ -61,6 +61,16 @@ def pick(devices, idx: int, what: str) -> str:
 def pick_matching(devices, pattern: str, what: str,
                   only_loopback: bool = False) -> str:
     """按名字正则选设备：换一台机器/换一副声卡序号就变了，验收脚本不该硬背数字"""
+    if pattern == "default" and only_loopback:
+        # 「当前出声」那块：只有默认渲染端点的环回真的带着声音，
+        # 按名字硬挑（如 Realtek）在装了虚拟音效设备的机器上会挑中静音镜像，
+        # 测出「投屏没声音」的假信号
+        for d in devices:
+            if d.get("loopback") and d.get("default"):
+                print(f"    {what} ← {d['name']}（默认输出端点）")
+                return d["name"]
+        raise SystemExit(f"{what}=default 但枚举里没有标 default 的环回"
+                         f"（这版产品还没带「当前出声」标记？）")
     rx = re.compile(pattern)
     for d in devices:
         if only_loopback and not d.get("loopback"):
@@ -184,7 +194,8 @@ def main(argv) -> int:
         ap.add_argument("--mic", type=int, default=-1, help="麦克风序号")
         ap.add_argument("--sys", type=int, default=-1, help="系统声音（loopback）序号")
         ap.add_argument("--mic-match", help="按名字正则选麦克风，免得硬背序号")
-        ap.add_argument("--sys-match", help="按名字正则选 WASAPI 环回设备")
+        ap.add_argument("--sys-match",
+                        help="按名字正则选 WASAPI 环回；写 default 则自动取「当前出声」那块")
         ap.add_argument("--second", choices=["mic", "system"], action="append",
                         help="第一轮（两路组合）之后再单独跑这一路，可重复给")
         ap.add_argument("--dwell", type=int, default=1,

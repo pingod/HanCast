@@ -1,7 +1,10 @@
 #!/bin/bash
 # 用法: tools/verify-win-screencast-tone-content.sh [phase-1输出] [系统声音名字正则] [麦克风名字正则]
-#       默认在 .68 上自选：系统声音 = 'Realtek.*Loopback'，麦克风 = '麦克风 .*Realtek'；
-#       不给 phase-1 输出就自己跑一轮 list_screen_sources 枚举。
+#       默认在 .68 上自选：系统声音 = 枚举里标着「当前出声」（default）的那块环回，
+#       麦克风 = '麦克风 .*Realtek'；不给 phase-1 输出就自己跑一轮 list_screen_sources 枚举。
+#       为什么系统声音不再按名字硬挑：装了虚拟音效设备（FxSound 等）的机器上，
+#       默认渲染端点根本不是 Realtek，按 'Realtek.*Loopback' 挑中的是静音镜像，
+#       分片里只剩补出来的数字静音，会被读成「系统声音没采到」。
 #       MIC=off → 不接麦克风，只起「单独系统声音」那一路（判据最干净：分片里任何
 #       3.5kHz 能量都只能来自系统声音，不必再跟麦克风底噪争辩）。
 #       TONE=off → 静音对照，用来量同一台机器、同一副麦克风、同一路投屏的地板。
@@ -42,7 +45,7 @@ put() { "${NOPROXY[@]}" scp -q "$1" "administrator@$HOST:$2" 2>&1 |
 get() { "${NOPROXY[@]}" scp -q "administrator@$HOST:$1" "$2" 2>&1 |
         grep -v -i 'quantum\|store now\|upgraded'; }
 
-SYS_RX="${2:-Realtek.*Loopback}"
+SYS_RX="${2:-default}"
 MIC_RX="${3:-麦克风 .*Realtek}"
 MIC="${MIC:-on}"
 SYS="${SYS:-on}"
