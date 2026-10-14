@@ -40,13 +40,13 @@ async function initInvoke() {
 
 /** 浏览器 dev 的插件仓库（plugin_* 命令的内存态）
  *
- * 内置包按真实播种结果模拟：`builtin: true` 的卡片不带删除按钮，
- * 这样「内置包只能逐条停用」这条分支在 dev 里也看得见。
+ * 程序不带规则，所以这里模拟的就是「装了包」的样子：官方包与用户包同权，
+ * 都能删、都能停。dev 里看不到真实索引，检查更新用一份内存假索引。
  */
 const mockPlugins: PluginInfo[] = [
   {
     name: 'demo-site',
-    version: '2.3.2',
+    version: '1.0.0',
     author: 'example',
     description: '演示插件：页面阶段提取 m3u8',
     rules: [
@@ -56,43 +56,19 @@ const mockPlugins: PluginInfo[] = [
   },
   {
     name: 'hancast-bilibili',
-    version: '2.3.2',
+    version: '1.0.0',
     author: 'HanCast',
-    description: '内置包：B 站视频页/分享链接取播放地址',
-    builtin: true,
-    bundled_version: '2.3.2',
+    description: 'B 站解析：APP 签名多线路取流',
     rules: [
       { id: 'bilibili-playurl', name: 'B 站 playurl', hosts: ['bilibili.com', 'b23.tv'], stage: 'url', enabled: true },
     ],
   },
-  {
-    name: 'hancast-douyin',
-    version: '2.3.2',
-    author: 'HanCast',
-    description: '内置包：抖音分享页取播放地址',
-    builtin: true,
-    bundled_version: '2.3.2',
-    rules: [
-      { id: 'douyin-share', name: '抖音分享页', hosts: ['douyin.com', 'iesdouyin.com'], stage: 'page', enabled: true },
-    ],
-  },
 ]
 
-const mockBuiltinRules: BuiltinRuleInfo[] = [
-  {
-    name: 'bilibili',
-    hosts: ['bilibili.com', 'b23.tv'],
-    stage: 'url',
-    priority: 10,
-    enabled: true,
-  },
-  {
-    name: 'douyin',
-    hosts: ['douyin.com', 'iesdouyin.com'],
-    stage: 'page',
-    priority: 20,
-    enabled: true,
-  },
+/** dev 用假索引：一条可更新（hancast-bilibili）、一条本机没装（hancast-douyin） */
+const mockIndexPacks: PackIndexEntry[] = [
+  { name: 'hancast-bilibili', version: '1.1.0', url: 'https://example.invalid/hancast-bilibili-1.1.0.zip', description: 'B 站解析：APP 签名多线路取流', sha256: 'aa'.repeat(32) },
+  { name: 'hancast-douyin', version: '1.0.0', url: 'https://example.invalid/hancast-douyin-1.0.0.zip', description: '抖音分享页解析', sha256: 'bb'.repeat(32) },
 ]
 
 const mockDeclarative: DeclarativeRuleInfo[] = [
@@ -106,13 +82,12 @@ const mockDeclarative: DeclarativeRuleInfo[] = [
   },
 ]
 
-/** 清单的两个命令共用同一份内存态：切换内置开关不能把 JSON 段清空 */
+/** 清单的两个命令共用同一份内存态：包开关不能把 JSON 段清空 */
 function mockInventory(): RuleInventory {
   return {
     rules_dir: '~/Library/Application Support/HanCast/share_rules',
     script_packs: mockPlugins.map((p) => ({ ...p, rules: p.rules.map((r) => ({ ...r })) })),
     declarative: mockDeclarative.map((d) => ({ ...d })),
-    builtin: mockBuiltinRules.map((r) => ({ ...r })),
   }
 }
 
@@ -170,7 +145,7 @@ const MOCK_DEVICES: Device[] = [
 const MOCK_SETTINGS: AppSettings = {
   usn: 'hancast-uuid-001',
   friendly_name: 'HanCast',
-  version: '2.3.2',
+  version: '2.3.3',
   media_port: 8080,
   default_device: null,
   network_interface: '',
@@ -200,6 +175,13 @@ function mockParamSpecs(): ParamSpec[] {
       key: 'player.low_latency_mode', section: 'player', type: 'bool', default: true,
       label_zh: 'hls.js 低延迟模式', label_en: 'hls.js low latency mode',
       help_zh: '关闭后播放器按普通 HLS 保守缓冲', help_en: 'Off = conservative buffering',
+    },
+    {
+      key: 'rules.index_url', section: 'rules', type: 'text',
+      default: 'https://raw.githubusercontent.com/pingod/HanCast/main/rule-packs/index.json',
+      label_zh: '规则包索引地址', label_en: 'Rule pack index URL',
+      help_zh: '「检查规则包更新」读取的清单；清单里每个包的下载地址只认 https',
+      help_en: 'Index read by "check for pack updates"; listed pack URLs must be https',
     },
   ]
   return base.map((s) => ({
@@ -342,10 +324,42 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
       return { plugins: mockPlugins.map((p) => ({ ...p, rules: p.rules.map((r) => ({ ...r })) })) } as T
     case 'rule_inventory':
       return mockInventory() as T
-    case 'rule_set_builtin_enabled': {
-      const rule = mockBuiltinRules.find((r) => r.name === String(args?.rule ?? ''))
-      if (rule) rule.enabled = Boolean(args?.enabled)
-      return mockInventory() as T
+    case 'plugin_check_updates': {
+      const installed = new Map(mockPlugins.map((p) => [p.name, p.version]))
+      const cmp = (v: string) => v.split('.').map((n) => parseInt(n, 10) || 0)
+      const newer = (a: string, b: string) => {
+        const x = cmp(a), y = cmp(b)
+        for (let i = 0; i < Math.max(x.length, y.length); i++) {
+          const d = (x[i] ?? 0) - (y[i] ?? 0)
+          if (d !== 0) return d > 0
+        }
+        return false
+      }
+      const updates: PackUpdateEntry[] = []
+      const available: PackIndexEntry[] = []
+      for (const meta of mockIndexPacks) {
+        const current = installed.get(meta.name)
+        if (current === undefined) available.push(meta)
+        else if (newer(meta.version, current))
+          updates.push({ ...meta, current })
+      }
+      return {
+        index_url: 'https://example.invalid/rule-packs/index.json',
+        updates, available, installed: mockPlugins.length,
+      } as T
+    }
+    case 'plugin_pull': {
+      const name = String(args?.name ?? '')
+      const meta = mockIndexPacks.find((p) => p.name === name)
+      if (!meta) throw new Error(`mock: 索引里没有 ${name}`)
+      const existing = mockPlugins.find((p) => p.name === name)
+      if (existing) existing.version = meta.version
+      else mockPlugins.push({
+        name, version: meta.version, author: 'HanCast',
+        description: meta.description,
+        rules: [{ id: `${name}-main`, name: 'main', hosts: ['example.com'], stage: 'page', enabled: true }],
+      })
+      return { plugins: mockPlugins.map((p) => ({ ...p, rules: p.rules.map((r) => ({ ...r })) })) } as T
     }
     case 'plugin_import': {
       const name = args?.url
@@ -354,7 +368,7 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
       const existing = mockPlugins.find((p) => p.name === name)
       const plugin: PluginInfo = existing ?? {
         name,
-        version: '2.3.2',
+        version: '0.1.0',
         author: 'mock',
         description: '',
         rules: [],
@@ -425,8 +439,8 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
     case 'check_update':
       return {
         has_update: false,
-        current: '2.3.2',
-        latest: '2.3.2',
+        current: '2.3.3',
+        latest: '2.3.3',
         url: '',
         body: '',
         source: 'github',
@@ -627,17 +641,28 @@ export interface PluginInfo {
   rules: PluginRuleInfo[]
   broken?: boolean
   error?: string
-  builtin?: boolean
-  bundled_version?: string
+  update_url?: string
 }
 
-/** 内置 Python 规则（随包编译，脚本包跑通后可以在同一处关掉） */
-export interface BuiltinRuleInfo {
+/** 官方索引里的一个包条目 */
+export interface PackIndexEntry {
   name: string
-  hosts: string[]
-  stage: 'url' | 'page'
-  priority: number
-  enabled: boolean
+  version: string
+  url: string
+  description: string
+  sha256?: string
+}
+
+/** 已装包有新版本 */
+export interface PackUpdateEntry extends PackIndexEntry {
+  current: string
+}
+
+export interface PackUpdateCheck {
+  index_url: string
+  updates: PackUpdateEntry[]
+  available: PackIndexEntry[]
+  installed: number
 }
 
 /** 外置声明式 JSON 规则（<配置目录>/share_rules/*.json） */
@@ -655,7 +680,6 @@ export interface RuleInventory {
   rules_dir: string
   script_packs: PluginInfo[]
   declarative: DeclarativeRuleInfo[]
-  builtin: BuiltinRuleInfo[]
 }
 
 export async function pluginList(): Promise<PluginInfo[]> {
@@ -703,7 +727,7 @@ export async function pluginSetRuleEnabled(
 }
 
 /**
- * 规则总览：脚本包 / 声明式 JSON / 内置 Python 规则三种来源一屏列全。
+ * 规则总览：脚本包 / 声明式 JSON 两种来源一屏列全。
  */
 export async function ruleInventory(): Promise<RuleInventory> {
   const invoke = await initInvoke()
@@ -712,22 +736,34 @@ export async function ruleInventory(): Promise<RuleInventory> {
     rules_dir: resp.rules_dir ?? '',
     script_packs: resp.script_packs ?? [],
     declarative: resp.declarative ?? [],
-    builtin: resp.builtin ?? [],
   }
 }
 
-export async function ruleSetBuiltinEnabled(
-  rule: string,
-  enabled: boolean,
-): Promise<RuleInventory> {
+/** 对照官方索引：哪些包有新版本、哪些还没装（indexUrl 留空走后台参数） */
+export async function pluginCheckUpdates(
+  indexUrl = '',
+): Promise<PackUpdateCheck> {
   const invoke = await initInvoke()
-  const resp = await invoke<RuleInventory>('rule_set_builtin_enabled', { rule, enabled })
+  const resp = await invoke<PackUpdateCheck>('plugin_check_updates', {
+    indexUrl: indexUrl || null,
+  })
   return {
-    rules_dir: resp.rules_dir ?? '',
-    script_packs: resp.script_packs ?? [],
-    declarative: resp.declarative ?? [],
-    builtin: resp.builtin ?? [],
+    index_url: resp.index_url ?? '',
+    updates: resp.updates ?? [],
+    available: resp.available ?? [],
+    installed: resp.installed ?? 0,
   }
+}
+
+/** 从索引装/更新一个包；indexUrl 留空走后台参数里的官方索引。
+ * 摘要校验在后端完成：包按索引条目下载，sha256 对不上就不落盘。 */
+export async function pluginPull(name: string, indexUrl = ''): Promise<PluginInfo[]> {
+  const invoke = await initInvoke()
+  const resp = await invoke<{ plugins: PluginInfo[] }>('plugin_pull', {
+    name,
+    indexUrl: indexUrl || null,
+  })
+  return resp.plugins ?? []
 }
 
 /**

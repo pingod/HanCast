@@ -1,5 +1,5 @@
 /*
- * B 站规则包 —— 与内置 Python 实现 media/bili_resolver.py 同逻辑的脚本版
+ * B 站规则包 —— 官方包，覆盖内置 Python 实现退役后的 B 站解析
  *
  * 线路优先级 iOS APP → TV APP → Web HTML5，任一线路拿到 durl 即交付。
  * APP 签名是公开资料里的 appkey/appsec 方案：参数排序拼 query，再 md5(query + appsec)。

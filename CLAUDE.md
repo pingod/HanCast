@@ -180,7 +180,7 @@ G:\Code\Macast-Han\
 {"event": "<event_name>", "data": <object>}
 ```
 
-### Tauri 命令列表（20 个）
+### Tauri 命令列表（节选，完整清单以 `src-tauri/src/lib.rs` 的 `generate_handler!` 为准）
 
 | 类别 | 命令 | 说明 |
 |------|------|------|
@@ -193,7 +193,7 @@ G:\Code\Macast-Han\
 | 设备 | `remove_device` | 移除设备 |
 | 媒体 | `parse_media_file` | 解析媒体文件 |
 | 媒体 | `parse_media_url` | 解析媒体 URL |
-| 媒体 | `resolve_share` | 解析分享口令/短链/网页 → 可播直链（含 B站取流） |
+| 媒体 | `resolve_share` | 解析分享口令/短链/网页 → 可播直链（站点规则来自已装规则包） |
 | 媒体 | `get_resolve_result` | 轮询异步解析任务结果 |
 | 媒体 | `read_clipboard` | Rust 侧读系统剪贴板（WKWebView 无 clipboard-read 权限） |
 | 媒体 | `write_clipboard` | Rust 侧写系统剪贴板（Web API reject 不受同步 try/catch 保护） |

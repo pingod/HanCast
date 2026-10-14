@@ -58,7 +58,7 @@ class DeclarativeRule(SiteRule):
     """由 JSON 描述文件实例化的规则"""
 
     stage = "page"
-    priority = 5               # 先于内置规则命中，用户可覆盖
+    priority = 5               # 与 JS 包规则同段（包规则钳在 4-8），同值按规则名决胜
 
     def __init__(self, spec: dict, source_file: str = ""):
         self.name = str(spec.get("name") or os.path.basename(source_file))

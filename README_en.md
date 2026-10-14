@@ -205,7 +205,8 @@ HanCast/
 │       │   └── mpv.py          # MPV renderer (IPC control)
 │       ├── media/
 │       │   ├── parser.py       # Media file/URL parsing
-│       │   ├── bili_resolver.py # Bilibili video resolver
+│       │   ├── rules/          # Rule registry (JS packs + declarative JSON; no compiled-in rules)
+│       │   ├── share_resolver.py # Share text -> playable URL (rules come from installed packs)
 │       │   └── server.py       # Local file HTTP server + proxy
 │       └── xml/                # UPnP description files
 │

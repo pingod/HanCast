@@ -47,6 +47,10 @@ desktop.ini
 # ── PyInstaller / Nuitka ──
 build/
 dist/
+# 例外：rule-packs/dist 是官方规则包索引的下载地址（raw.githubusercontent 必须取到），
+# 不是构建垃圾；这里一忽略，设置页的「检查规则包更新」就永远 404
+!rule-packs/dist/
+!rule-packs/dist/*.zip
 *.spec
 src-tauri/*.dll
 src-tauri/*.pyd

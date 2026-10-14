@@ -280,23 +280,37 @@ async fn plugin_list(sidecar: State<'_, SidecarManager>) -> Result<serde_json::V
     sidecar.send_command("plugin_list", serde_json::json!({})).await
 }
 
-/// 规则总览：脚本包 + 声明式 JSON + 内置 Python 规则，一屏列全
+/// 规则总览：脚本包 + 声明式 JSON，一屏列全
 #[tauri::command]
 async fn rule_inventory(sidecar: State<'_, SidecarManager>) -> Result<serde_json::Value, String> {
     sidecar.send_command("rule_inventory", serde_json::json!({})).await
 }
 
-/// 开/关某条内置 Python 规则（它的脚本包版本跑通后，用户能关掉这份兜底）
+/// 对照官方索引看有哪些包可更新 / 可安装
 #[tauri::command]
-async fn rule_set_builtin_enabled(
+async fn plugin_check_updates(
     sidecar: State<'_, SidecarManager>,
-    rule: String,
-    enabled: bool,
+    index_url: Option<String>,
 ) -> Result<serde_json::Value, String> {
     sidecar
         .send_command(
-            "rule_set_builtin_enabled",
-            serde_json::json!({"rule": rule, "enabled": enabled}),
+            "plugin_check_updates",
+            serde_json::json!({"index_url": index_url.unwrap_or_default()}),
+        )
+        .await
+}
+
+/// 按索引装/更新一个包（sha256 校验不过不落盘）
+#[tauri::command]
+async fn plugin_pull(
+    sidecar: State<'_, SidecarManager>,
+    name: String,
+    index_url: Option<String>,
+) -> Result<serde_json::Value, String> {
+    sidecar
+        .send_command(
+            "plugin_pull",
+            serde_json::json!({"name": name, "url": index_url.unwrap_or_default()}),
         )
         .await
 }
@@ -1273,7 +1287,8 @@ pub fn run() {
             get_resolve_result,
             plugin_list,
             rule_inventory,
-            rule_set_builtin_enabled,
+            plugin_check_updates,
+            plugin_pull,
             plugin_import,
             plugin_remove,
             plugin_set_rule_enabled,

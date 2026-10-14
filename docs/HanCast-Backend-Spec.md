@@ -290,13 +290,13 @@ hancast-backend/
 │   │   ├── parser.py           # 媒体解析 (新增)
 │   │   ├── server.py           # HTTP 媒体服务 + 防盗链代理（播放列表改写、分片后缀合规、
 │   │   │                       #   图片伪装 TS 分片剥头、Referer 被拒转裸 UA、系统代理失效转直连）
-│   │   ├── bili_resolver.py    # B 站官方接口取流
 │   │   ├── share_resolver.py   # 粘贴文本 → 可播直链（规则管线，见 docs/分享解析规则.md）
-│   │   └── rules/              # 站点解析规则：内置模块 + 外置声明式 JSON
-│   │       ├── __init__.py     # 导入即注册内置规则
+│   │   └── rules/              # 站点解析规则：只有两种来源（JS 规则包 + 声明式 JSON），
+│   │       │                   #   程序里没有编译进去的站点规则
+│   │       ├── __init__.py     # 只注入外置规则加载器，不注册任何站点规则
 │   │       ├── base.py         # SiteRule / RuleContext / 注册表与重载指纹
-│   │       ├── bili.py         # url 阶段：B 站
-│   │       ├── douyin.py       # page 阶段：抖音分享页
+│   │       ├── jsplugins.py    # 规则包：<share_rules>/plugins/<name>/ + 官方索引检查更新
+│   │       ├── jsruntime.py    # QuickJS 沙箱与 registerRule 执行环境
 │   │       └── declarative.py  # share_rules/*.json 声明式规则
 │   ├── types/
 │   │   ├── __init__.py

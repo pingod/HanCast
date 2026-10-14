@@ -187,14 +187,14 @@ HanCast/
 │
 ├── src-tauri/                  # Rust Tauri 壳层
 │   ├── src/
-│   │   ├── lib.rs              # 20 个 Tauri 命令定义
+│   │   ├── lib.rs              # Tauri 命令定义（清单见 generate_handler!）
 │   │   └── sidecar.rs          # SidecarManager（Rust ↔ Python）
 │   └── Cargo.toml
 │
 ├── hancast-backend/            # Python 后端
 │   └── hancast_sidecar/
 │       ├── main.py             # Sidecar 入口（stdin/stdout JSON 循环）
-│       ├── commands.py         # 命令路由（20 个命令）
+│       ├── commands.py         # 命令路由（命令表见该文件）
 │       ├── ssdp.py             # SSDP 设备发现
 │       ├── protocol/
 │       │   ├── dlna.py         # DLNA 协议实现
@@ -203,7 +203,8 @@ HanCast/
 │       │   └── mpv.py          # MPV 渲染器（IPC 控制）
 │       ├── media/
 │       │   ├── parser.py       # 媒体文件/URL 解析
-│       │   ├── bili_resolver.py # B站视频解析
+│       │   ├── rules/          # 规则注册表（JS 包 + 声明式 JSON，无编译内置规则）
+│       │   ├── share_resolver.py # 分享文本 → 可播地址（规则来自规则包）
 │       │   └── server.py       # 本地文件 HTTP 服务 + 代理
 │       └── xml/                # UPnP 描述文件
 │
@@ -219,7 +220,7 @@ HanCast/
 | [CLAUDE.md](CLAUDE.md) | 项目指南与开发约束 |
 | [前端设计规格](docs/Macast-Frontend-Spec.md) | UI 组件、样式、路由设计 |
 | [后端设计规格](docs/HanCast-Backend-Spec.md) | Rust/Python 架构、通信协议 |
-| [前端 API 接口](docs/Macast-Frontend-API.md) | 20 个 invoke 命令速查 |
+| [前端 API 接口](docs/Macast-Frontend-API.md) | invoke 命令速查 |
 
 ---
 

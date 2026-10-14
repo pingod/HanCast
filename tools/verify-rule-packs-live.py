@@ -7,14 +7,19 @@
 
 用法:
   hancast-backend/.venv/bin/python tools/verify-rule-packs-live.py <链接或口令> …
-  … --share-rules <dir>     用指定规则目录（默认临时目录 + 随包内置规则包）
+  … --rules-dir <dir>       用指定规则目录（内含 plugins/ 与 *.json）
+  … --no-packs              不装官方包，只跑 <dir> 里已有的规则
   … --keep                  保留临时目录，方便看插件缓存/落盘文件
 
-判据看输出里的 via：`<包名>/<规则 id>` = 走了 JS 规则包；
-`bilibili`、`douyin` 这类不带斜杠的 = 回退到了内置 Python 规则（说明包没生效）。
+判据看输出里的 via：`<包名>/<规则 id>` = 走了 JS 规则包，`<规则名>` 不带斜杠 =
+走的声明式 JSON 规则。程序里没有编译进去的站点规则，所以「没装包 ⇒ 什么站点都
+解析不了」是预期行为，不是 bug——默认会把 repo 根 ``rule-packs/dist/`` 的包当
+用户导入的 zip 装进临时目录，装之前先比 index.json 里的 sha256。
 """
 
 import argparse
+import hashlib
+import json
 import os
 import shutil
 import sys
@@ -23,6 +28,10 @@ import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "hancast-backend"))
+
+PACKS_DIR = os.path.join(ROOT, "rule-packs")
+DIST_DIR = os.path.join(PACKS_DIR, "dist")
+INDEX_PATH = os.path.join(PACKS_DIR, "index.json")
 
 from hancast_sidecar.media.rules import jsplugins              # noqa: E402
 from hancast_sidecar.media.share_resolver import ShareResolver  # noqa: E402
@@ -56,11 +65,40 @@ def pull_check(remote: str, headers: dict):
         return "ERR", f"{type(e).__name__}: {e}"[:80], 0
 
 
+def install_official_packs(mgr) -> None:
+    """把 repo 根的官方包当用户导入的 zip 装进去——走的就是产品里那条路
+
+    dist/ 是 ``tools/build-rule-packs.py`` 的产物；这里先比 index.json 的 sha256，
+    摘要不符就当场失败，免得拿一份过期产物来验「包能用」。
+    """
+    if not os.path.isfile(INDEX_PATH):
+        print(f"缺少索引: {INDEX_PATH} → 先跑 python3 tools/build-rule-packs.py",
+              file=sys.stderr)
+        raise SystemExit(2)
+    index = json.load(open(INDEX_PATH))
+    for entry in index["packs"]:
+        path = os.path.join(DIST_DIR, os.path.basename(entry["url"]))
+        if not os.path.isfile(path):
+            print(f"缺少产物: {path} → 先跑 python3 tools/build-rule-packs.py",
+                  file=sys.stderr)
+            raise SystemExit(2)
+        with open(path, "rb") as f:
+            blob = f.read()
+        got = hashlib.sha256(blob).hexdigest()
+        if got != entry["sha256"]:
+            print(f"{entry['name']}: 产物摘要 {got[:12]}… ≠ 索引 {entry['sha256'][:12]}…",
+                  file=sys.stderr)
+            raise SystemExit(2)
+        mgr.import_zip_bytes(blob)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("targets", nargs="+", help="链接或分享口令文本")
-    ap.add_argument("--share-rules", default="",
-                    help="规则目录（含 plugins/）；默认临时目录并播种随包内置包")
+    ap.add_argument("--rules-dir", default="",
+                    help="规则目录（含 plugins/ 与 *.json）；默认临时目录")
+    ap.add_argument("--no-packs", action="store_true",
+                    help="不装 repo 根的官方包，只用目录里已有的规则")
     ap.add_argument("--pull", action="store_true",
                     help="对回源地址真拉 256KB，验证地址可用")
     ap.add_argument("--keep", action="store_true", help="保留临时规则目录")
@@ -74,8 +112,8 @@ def main() -> int:
                             format="%(levelname)s %(name)s: %(message)s")
 
     temp_dir = ""
-    if args.share_rules:
-        rules_dir = os.path.abspath(args.share_rules)
+    if args.rules_dir:
+        rules_dir = os.path.abspath(args.rules_dir)
     else:
         temp_dir = tempfile.mkdtemp(prefix="hancast-rulepack-")
         rules_dir = temp_dir
@@ -83,17 +121,17 @@ def main() -> int:
     try:
         resolver = ShareResolver(StubMediaServer(), rules_dir=rules_dir)
         mgr = resolver.plugin_mgr
+        if not args.no_packs:
+            install_official_packs(mgr)
         mgr.refresh()
         packs = mgr.list_info()
         print(f"规则目录: {rules_dir}")
-        print(f"随包内置目录: {mgr.bundled_dir}")
-        print("已装规则包:")
+        print("已装规则包:" if packs else "已装规则包: （空——站点规则全靠装包）")
         for info in packs:
-            state = "内置" if info.get("builtin") else "导入"
             rules = "、".join(
                 f"{r['name']}[{'开' if r['enabled'] else '关'}]" for r in info["rules"])
             err = f" 加载失败: {info['error']}" if info.get("error") else ""
-            print(f"  - {info['name']} {info['version']}（{state}）{rules}{err}")
+            print(f"  - {info['name']} {info['version']} {rules}{err}")
 
         failures = 0
         for target in args.targets:

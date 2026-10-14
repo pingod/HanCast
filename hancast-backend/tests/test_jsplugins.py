@@ -6,8 +6,13 @@
 - zip 导入：合法包安装、路径穿越/多余文件/双 manifest/坏 name 拒收
 - 规则注册表：命中、via 命名、停用开关持久化、坏脚本只损伤自己
 - 真实解析管线联动：resolve → 插件规则 → follow/publish/info
+- 全新安装零规则：程序不编译进任何站点规则，装包之前解析不了 B 站链接
+- 规则包分发：fetch_index 过滤、check_updates 分堆、pull 安装 + sha256 校验、
+  _version_key 版本序、index_url 唯一来源（后台参数 rules.index_url）
+- 规则总览：只剩 脚本包/声明式 JSON 两源，包规则 priority 钳在 4-8
 """
 
+import hashlib
 import io
 import json
 import os
@@ -26,25 +31,6 @@ from hancast_sidecar.media.rules.jsplugins import (PluginError, PluginManager,
 from hancast_sidecar.media.share_resolver import (
     ShareResolver, _EXT_MIME, _ext_of,
 )
-
-
-_bundled_patcher = None
-
-# 打补丁前先留一份真的内置包目录引用，供「随包真包必须装得上」那条用例用
-_REAL_BUNDLED_DIR = jsplugins_mod.bundled_plugins_dir
-
-
-def setUpModule():
-    """其余用例必须与仓库里随包的内置规则包隔离（播种专项另有 TestBundledSeeding）"""
-    global _bundled_patcher
-    _bundled_patcher = patch.object(jsplugins_mod, "bundled_plugins_dir",
-                                    return_value="")
-    _bundled_patcher.start()
-
-
-def tearDownModule():
-    if _bundled_patcher:
-        _bundled_patcher.stop()
 
 
 class FakeMediaServer:
@@ -93,6 +79,45 @@ class FakeSession:
     def request(self, method, url, **kw):
         self.calls.append((method, url, kw))
         return self.resp
+
+
+class FakeJsonResponse:
+    def __init__(self, doc, status=200):
+        self._doc = doc
+        self.status_code = status
+
+    def json(self):
+        return self._doc
+
+
+class FakeNet:
+    """requests.Session 替身：按 URL 派发假响应（dict→索引 JSON，bytes→zip）
+
+    fetch_index / import_url 都走 `with requests.Session() as s: s.get(...)`，
+    一个对象同时当会话与上下文管理器用。
+    """
+
+    def __init__(self, routes: dict):
+        self.routes = routes
+        self.calls: list[str] = []
+
+    def new_session(self):
+        return self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def get(self, url, **kw):
+        self.calls.append(url)
+        if url not in self.routes:
+            raise AssertionError(f"用例未桩掉该地址（保持离线）: {url}")
+        doc = self.routes[url]
+        if isinstance(doc, dict):
+            return FakeJsonResponse(doc)
+        return FakeResponse(body=doc)
 
 
 DEMO_JS = """
@@ -337,125 +362,187 @@ class TestRegistryAndPipeline(unittest.TestCase):
             self._resolve(html)      # 规则停用 → 走不到插件 → 通用提取失败
 
 
-class TestBundledSeeding(unittest.TestCase):
-    """内置规则包随包出货 → 启动播种进插件目录，与用户包同一套清单和开关"""
-
-    def _dirs(self):
-        base = _isolated_rules_dir(self)
-        bundled = os.path.join(base, "bundled")
-        os.makedirs(bundled)
-        return os.path.join(base, "plugins"), bundled
-
-    def _pack(self, bundled, name, version, rule_name="r"):
-        d = os.path.join(bundled, name)
-        os.makedirs(d, exist_ok=True)
-        with open(os.path.join(d, "manifest.json"), "w", encoding="utf-8") as f:
-            json.dump({"name": name, "version": version,
-                       "author": "HanCast", "scripts": ["main.js"]}, f)
-        with open(os.path.join(d, "main.js"), "w", encoding="utf-8") as f:
-            f.write("registerRule({name:'%s',hosts:['s.example'],stage:'page',"
-                    "resolve:function(c){return {url:'https://s.example/a.mp4'};}});"
-                    % rule_name)
-        return d
-
-    def test_seed_installs_and_marks_builtin(self):
-        root, bundled = self._dirs()
-        self._pack(bundled, "pack_a", "1.0.0")
-        mgr = PluginManager(root, bundled)
-        rules = mgr.refresh()
-        self.assertEqual([r.plugin_name for r in rules], ["pack_a"])
-        info = mgr.list_info()[0]
-        self.assertTrue(info["builtin"])
-        self.assertEqual(info["bundled_version"], "1.0.0")
-        self.assertTrue(os.path.isfile(
-            os.path.join(root, "pack_a", jsplugins_mod.BUILTIN_MARKER)))
-
-    def test_upgrade_only_when_bundled_version_higher(self):
-        root, bundled = self._dirs()
-        pack = self._pack(bundled, "pack_a", "1.0.0", rule_name="old")
-        PluginManager(root, bundled).refresh()
-
-        # 同版本重启：不得覆盖（用户就地改过的脚本要留住）
-        edited = os.path.join(root, "pack_a", "main.js")
-        with open(edited, "w", encoding="utf-8") as f:
-            f.write("// 用户就地改动\n")
-        PluginManager(root, bundled)
-        self.assertIn("用户就地改动", open(edited, encoding="utf-8").read())
-
-        # 随包版本更高：覆盖并推进标记
-        with open(os.path.join(pack, "manifest.json"), "w", encoding="utf-8") as f:
-            json.dump({"name": "pack_a", "version": "1.2.0", "scripts": ["main.js"]}, f)
-        self._pack(bundled, "pack_a", "1.2.0", rule_name="new")
-        mgr = PluginManager(root, bundled)
-        self.assertEqual([r.name for r in mgr.refresh()], ["new"])
-        self.assertEqual(mgr.get("pack_a").bundled_version, "1.2.0")
-
-    def test_user_pack_with_same_name_survives(self):
-        root, bundled = self._dirs()
-        self._pack(bundled, "pack_a", "1.0.0")
-        mgr = PluginManager(root, "")                      # 先不播种，造用户包
-        mgr.import_zip_bytes(make_zip(name="pack_a", js=(
-            "registerRule({name:'mine',hosts:['u.example'],stage:'page',"
-            "resolve:function(c){return null}});")))
-        mgr2 = PluginManager(root, bundled)                # 再播种
-        self.assertFalse(mgr2.get("pack_a").builtin)
-        self.assertEqual([r.name for r in mgr2.refresh()], ["mine"])
-
-    def test_builtin_cannot_be_removed_or_imported_over(self):
-        root, bundled = self._dirs()
-        self._pack(bundled, "pack_a", "1.0.0")
-        mgr = PluginManager(root, bundled)
-        with self.assertRaises(PluginError) as cm:
-            mgr.remove("pack_a")
-        self.assertIn("内置", str(cm.exception))
-        with self.assertRaises(PluginError):
-            mgr.import_zip_bytes(make_zip(name="pack_a"))
-        self.assertTrue(os.path.isdir(os.path.join(root, "pack_a")))
-
-    def test_state_survives_upgrade(self):
-        root, bundled = self._dirs()
-        self._pack(bundled, "pack_a", "1.0.0")
-        mgr = PluginManager(root, bundled)
-        mgr.refresh()
-        mgr.set_rule_enabled("pack_a", "r", False)
-        self._pack(bundled, "pack_a", "2.0.0")
-        mgr2 = PluginManager(root, bundled)
-        self.assertEqual(mgr2.refresh(), [])               # 停用清单没被升级冲掉
-        self.assertFalse(mgr2.rule_enabled("pack_a", "r"))
-
-    def test_all_shipped_packs_load(self):
-        """仓库里随包的每个规则包都必须能装、能注册出规则——防手滑写坏 JS"""
-        bundled = _REAL_BUNDLED_DIR()
-        self.assertTrue(os.path.isdir(bundled), f"内置包目录不存在: {bundled}")
-        shipped = sorted(n for n in os.listdir(bundled)
-                         if os.path.isfile(os.path.join(bundled, n, "manifest.json")))
-        self.assertTrue(shipped, "随包规则包为空")
-        root = os.path.join(_isolated_rules_dir(self), "plugins")
-        mgr = PluginManager(root, bundled)
-        infos = {p["name"]: p for p in mgr.list_info()}
-        self.assertEqual(sorted(infos), shipped)
-        for name, info in infos.items():
-            self.assertFalse(info["error"], f"{name} 加载失败: {info['error']}")
-            self.assertTrue(info["rules"], f"{name} 一条规则都没注册出来")
-            self.assertTrue(info["builtin"])
-        # 模板包只匹配保留 TLD，绝不能抢真实站点的解析
-        tpl = [r for r in mgr.refresh() if r.plugin_name == "hancast-template"]
-        self.assertTrue(tpl)
-        for rule in tpl:
-            self.assertEqual(rule.hosts, ("hancast-template.invalid",))
-        self.assertTrue(any(r.plugin_name == "hancast-douyin" for r in mgr.refresh()))
-
-
-class TestUnifiedRuleManagement(unittest.TestCase):
-    """规则总览：脚本包 / 声明式 JSON / 内置 Python 规则一屏列全，开关共用一份状态"""
+class TestFreshInstallRegistersNothing(unittest.TestCase):
+    """程序不编译进任何站点规则：装包之前，注册表必须是空的（这是产品行为，不是缺陷）"""
 
     def setUp(self):
-        rules_base.set_builtin_disabled(set())
         self.rules_dir = _isolated_rules_dir(self)
         self.resolver = ShareResolver(FakeMediaServer(), rules_dir=self.rules_dir)
 
-    def tearDown(self):
-        rules_base.set_builtin_disabled(set())
+    def test_empty_dirs_register_zero_rules(self):
+        # rule_inventory 会触发两源整体重载，顺带清掉本文件其它用例留下的全局注册
+        inv = self.resolver.rule_inventory()
+        self.assertEqual(inv["script_packs"], [])
+        self.assertEqual(inv["declarative"], [])
+        self.assertEqual(rules_base.registered(), [])
+        for url in ("https://www.bilibili.com/video/BV1xx411c7mD",
+                    "https://v.douyin.com/abc123/",
+                    "https://www.douyin.com/video/74123456789"):
+            for stage in ("url", "page"):
+                self.assertEqual(rules_base.matching(url, stage), [])
+
+    def test_bilibili_link_fails_without_any_pack(self):
+        html = "<html><body>no streams here</body></html>"
+        with patch.object(ShareResolver, "_open",
+                          side_effect=lambda u, d, session=None, **kw:
+                              (u, "text/html; charset=utf-8", None, html.encode())):
+            with self.assertRaises(ValueError) as cm:
+                self.resolver.resolve("看看 https://b23.tv/AbCdEf 这个视频")
+        self.assertIn("无法解析出可播放地址", str(cm.exception))
+
+
+INDEX_URL = "https://rules.example/index.json"
+ZIP_URL = "https://dl.example/demo.zip"
+
+
+def _entry(name, version, url, **kw) -> dict:
+    return {"name": name, "version": version, "url": url, "description": "d", **kw}
+
+
+class TestPackDistribution(unittest.TestCase):
+    """规则包分发：官方索引 → 检查更新 → 一键安装，全程假会话离线"""
+
+    def _manager(self) -> PluginManager:
+        root = os.path.join(_isolated_rules_dir(self), "plugins")
+        return PluginManager(root)
+
+    def test_fetch_index_filters_bad_entries(self):
+        # 索引是「下载下来就要执行里面 JS」的入口：坏名字与明文地址一律丢掉，
+        # 但只丢这一条，不能让一个坏条目拖垮整页检查更新
+        net = FakeNet({INDEX_URL: {"packs": [
+            _entry("good", "1.0.0", ZIP_URL),
+            _entry("bad name", "1.0.0", ZIP_URL),
+            _entry("sub/evil", "1.0.0", ZIP_URL),
+            _entry("cleartext", "1.0.0", "http://dl.example/c.zip"),
+            "不是对象",
+        ]}})
+        with patch.object(jsplugins_mod.requests, "Session", net.new_session):
+            idx = self._manager().fetch_index(INDEX_URL)
+        self.assertEqual(idx["url"], INDEX_URL)
+        self.assertEqual(sorted(idx["packs"]), ["good"])
+        self.assertEqual(idx["packs"]["good"]["url"], ZIP_URL)
+
+    def test_fetch_index_requires_index_url(self):
+        with patch.object(jsplugins_mod, "index_url", return_value=""):
+            with self.assertRaises(PluginError) as cm:
+                self._manager().fetch_index()
+        self.assertIn("索引地址", str(cm.exception))
+
+    def test_index_url_reads_background_param(self):
+        """索引地址唯一来源是后台参数 rules.index_url（两处各写一遍早晚对不上）"""
+        from hancast_sidecar import params
+        with patch.object(params, "get",
+                          lambda k: "https://mirror.example/index.json"
+                          if k == "rules.index_url" else None):
+            self.assertEqual(jsplugins_mod.index_url(),
+                             "https://mirror.example/index.json")
+        net = FakeNet({"https://mirror.example/index.json": {"packs": []}})
+        with patch.object(params, "get",
+                          lambda k: "https://mirror.example/index.json"
+                          if k == "rules.index_url" else None), \
+             patch.object(jsplugins_mod.requests, "Session", net.new_session):
+            idx = self._manager().fetch_index()      # 不传 url，也必须落到参数配的地址
+        self.assertEqual(net.calls, ["https://mirror.example/index.json"])
+        self.assertEqual(idx["packs"], {})
+
+    def test_check_updates_buckets(self):
+        mgr = self._manager()
+        mgr.import_zip_bytes(make_zip(name="aged"))      # 本地 1.0.0
+        mgr.import_zip_bytes(make_zip(name="uptodate"))  # 本地 1.0.0
+        net = FakeNet({INDEX_URL: {"packs": [
+            _entry("uptodate", "1.0.0", ZIP_URL),        # 同版本：两边都不出现
+            _entry("aged", "1.10.0", ZIP_URL),           # 版本比较必须按数字段
+            _entry("untried", "0.9.0", ZIP_URL),         # 官方有、本机没装 → available
+        ]}})
+        with patch.object(jsplugins_mod.requests, "Session", net.new_session):
+            res = mgr.check_updates(INDEX_URL)
+        self.assertEqual(res["index_url"], INDEX_URL)
+        self.assertEqual(res["installed"], 2)
+        self.assertEqual([(u["name"], u["version"], u["current"])
+                          for u in res["updates"]], [("aged", "1.10.0", "1.0.0")])
+        self.assertEqual([a["name"] for a in res["available"]], ["untried"])
+
+    def test_pull_installs_from_index(self):
+        mgr = self._manager()
+        blob = make_zip(name="demo")
+        net = FakeNet({INDEX_URL: {"packs": [
+            _entry("demo", "1.0.0", ZIP_URL,
+                   sha256=hashlib.sha256(blob).hexdigest())]},
+            ZIP_URL: blob})
+        with patch.object(jsplugins_mod.requests, "Session", net.new_session):
+            info = mgr.pull("demo", url=INDEX_URL)
+        self.assertEqual(info["name"], "demo")
+        self.assertEqual(mgr.get("demo").version, "1.0.0")
+        self.assertEqual(net.calls, [INDEX_URL, ZIP_URL])
+
+    def test_pull_command_wraps_full_pack_list(self):
+        """命令层必须回 {"plugins": 全量清单}：前端拿它整块刷新列表，
+        回单个包 info 会让已装的包在界面上全消失（v2.3.3 就是踩在这里）"""
+        from types import SimpleNamespace
+        from hancast_sidecar.commands import CommandHandler
+        mgr = self._manager()
+        blob = make_zip(name="demo")
+        net = FakeNet({INDEX_URL: {"packs": [
+            _entry("demo", "1.0.0", ZIP_URL,
+                   sha256=hashlib.sha256(blob).hexdigest())]},
+            ZIP_URL: blob})
+        fake = SimpleNamespace(share_resolver=SimpleNamespace(plugin_mgr=mgr))
+        with patch.object(jsplugins_mod.requests, "Session", net.new_session):
+            res = CommandHandler._plugin_pull(fake, {"name": "demo", "url": INDEX_URL})
+        self.assertEqual([p["name"] for p in res["plugins"]], ["demo"])
+        with self.assertRaises(ValueError):
+            CommandHandler._plugin_pull(fake, {"name": ""})
+
+    def test_pull_rejects_sha256_mismatch(self):
+        """摘要对不上就不装：这是「下载下来就执行」的入口，不能只信传输层"""
+        mgr = self._manager()
+        net = FakeNet({INDEX_URL: {"packs": [
+            _entry("demo", "1.0.0", ZIP_URL, sha256="0" * 64)]},
+            ZIP_URL: make_zip(name="demo")})
+        with patch.object(jsplugins_mod.requests, "Session", net.new_session):
+            with self.assertRaises(PluginError) as cm:
+                mgr.pull("demo", url=INDEX_URL)
+        self.assertIn("sha256", str(cm.exception))
+        self.assertEqual(mgr.list_info(), [])
+        self.assertFalse(os.path.exists(os.path.join(mgr.root, "demo")))
+
+    def test_pull_falls_back_to_pack_update_url(self):
+        """官方索引拉不动时，退回包自己声明的 update_url（作者自托管的更新路）"""
+        mgr = self._manager()
+        mgr.import_zip_bytes(make_zip(name="solo", manifest={
+            "name": "solo", "version": "1.0.0", "scripts": ["site.js"],
+            "update_url": ZIP_URL}))
+        net = FakeNet({ZIP_URL: make_zip(name="solo", manifest={
+            "name": "solo", "version": "1.0.1", "scripts": ["site.js"]})})
+        with patch.object(jsplugins_mod, "index_url", return_value=""), \
+             patch.object(jsplugins_mod.requests, "Session", net.new_session):
+            mgr.pull("solo")
+        self.assertEqual(mgr.get("solo").version, "1.0.1")
+        self.assertEqual(net.calls, [ZIP_URL])
+
+    def test_remove_accepts_any_pack(self):
+        """「内置包不许删」的特殊身份已废除：装进来的包都能删"""
+        mgr = self._manager()
+        mgr.import_zip_bytes(make_zip(name="demo"))
+        mgr.remove("demo")
+        self.assertEqual(mgr.list_info(), [])
+
+    def test_version_key_orders_numerically(self):
+        vk = jsplugins_mod._version_key
+        versions = ["1.10.0", "1.9.9", "2.0.0", "1.2"]
+        self.assertEqual(sorted(versions, key=vk),
+                         ["1.2", "1.9.9", "1.10.0", "2.0.0"])
+        self.assertEqual(vk(""), (0,))
+        self.assertEqual(vk("1.x.3"), (1, 0, 3))       # 非数字段按 0
+        self.assertEqual(vk("1_2-3.4"), (1, 2, 3, 4))  # 分隔符 . _ - 通吃
+
+
+class TestRuleInventory(unittest.TestCase):
+    """规则总览：脚本包 / 声明式 JSON —— 「内置 Python 规则」这一源已废除"""
+
+    def setUp(self):
+        self.rules_dir = _isolated_rules_dir(self)
+        self.resolver = ShareResolver(FakeMediaServer(), rules_dir=self.rules_dir)
 
     def _write_json_rule(self, name="maccms-box", hosts=("demo.example",),
                          enabled=True):
@@ -467,50 +554,47 @@ class TestUnifiedRuleManagement(unittest.TestCase):
                   encoding="utf-8") as f:
             json.dump(spec, f)
 
-    def test_inventory_lists_all_three_sources(self):
+    def test_inventory_lists_both_sources(self):
         self.resolver.plugin_mgr.import_zip_bytes(make_zip())
         self._write_json_rule()
         with open(os.path.join(self.rules_dir, "broken.json"), "w",
                   encoding="utf-8") as f:
             f.write("{not json")
         inv = self.resolver.rule_inventory()
+        # 来源只剩两路：再冒出第三个 key 就说明「内置规则」被偷偷加了回来
+        self.assertEqual(set(inv), {"rules_dir", "script_packs", "declarative"})
         self.assertEqual(inv["rules_dir"], self.rules_dir)
         self.assertIn("demo", [p["name"] for p in inv["script_packs"]])
         listed = {d["name"]: d for d in inv["declarative"]}
         self.assertEqual(listed["maccms-box"]["hosts"], ["demo.example"])
         # 写坏的那条也要露面，否则用户只能靠猜
         self.assertTrue(listed["broken.json"]["error"])
-        builtin = {b["name"]: b for b in inv["builtin"]}
-        self.assertIn("douyin", builtin)
-        self.assertTrue(builtin["douyin"]["enabled"])
-        # 内置清单里不能再混进包规则/JSON 规则
-        self.assertNotIn("demo", builtin)
 
-    def test_disabling_builtin_rule_takes_effect(self):
-        html = '<html><body>plain</body></html>'
-        with patch.object(ShareResolver, "_open",
-                          side_effect=lambda u, d, session=None, **kw:
-                              (u, "text/html; charset=utf-8", None, html.encode())):
-            # 关掉内置抖音规则后，page 阶段就不该再命中它
-            self.resolver.plugin_mgr.set_builtin_enabled("douyin", False)
-            self.assertEqual([r.name for r in rules_base.matching(
-                "https://www.douyin.com/video/1", "page")], [])
-            self.resolver.plugin_mgr.set_builtin_enabled("douyin", True)
-            self.assertIn("douyin", [r.name for r in rules_base.matching(
-                "https://www.douyin.com/video/1", "page")])
+    def test_pack_info_has_no_builtin_identity(self):
+        info = self.resolver.plugin_mgr.import_zip_bytes(make_zip())
+        self.assertNotIn("builtin", info)
+        self.assertNotIn("bundled_version", info)
+        self.assertIn("update_url", info)
+        fresh = {p["name"]: p for p in self.resolver.plugin_mgr.list_info()}
+        self.assertNotIn("builtin", fresh["demo"])
 
-    def test_builtin_switch_persists_and_reloads(self):
-        self.resolver.plugin_mgr.set_builtin_enabled("bilibili", False)
-        reloaded = PluginManager(self.resolver.plugin_mgr.root)
-        self.assertEqual(reloaded._state["disabled_builtin"], ["bilibili"])
-        self.assertFalse(reloaded.builtin_enabled("bilibili"))
-        self.assertTrue(reloaded.builtin_enabled("douyin"))
-
-    def test_inventory_shows_disabled_builtin_state(self):
-        self.resolver.plugin_mgr.set_builtin_enabled("douyin", False)
-        builtin = {b["name"]: b for b in self.resolver.rule_inventory()["builtin"]}
-        self.assertFalse(builtin["douyin"]["enabled"])
-        self.assertTrue(builtin["bilibili"]["enabled"])
+    def test_pack_rule_priority_clamped(self):
+        """包规则 priority 被钳在 4-8：坏心/笔误的规则既插不了队也垫不到底"""
+        mgr = self.resolver.plugin_mgr
+        mgr.import_zip_bytes(make_zip(
+            name="greedy", js="registerRule({name:'g',hosts:['g.example'],"
+                              "stage:'page',priority:99,"
+                              "resolve:function(c){return null}});"))
+        mgr.import_zip_bytes(make_zip(
+            name="humble", js="registerRule({name:'h',hosts:['h.example'],"
+                              "stage:'page',priority:0,"
+                              "resolve:function(c){return null}});"))
+        self.assertEqual(mgr.get("greedy").build_rules()[0].priority, 8)
+        self.assertEqual(mgr.get("humble").build_rules()[0].priority, 4)
+        # 声明式规则固定 5：与包规则同段，同值按规则名决胜
+        self._write_json_rule()
+        ext = rules_base.refresh_external(self.rules_dir)
+        self.assertEqual([r.priority for r in ext], [5])
 
 
 if __name__ == "__main__":

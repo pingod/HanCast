@@ -106,7 +106,7 @@ class CommandHandler:
         # 否则多网卡/VPN 机器上电视拿到的是默认路由 IP，拉不到流
         self.media_server = MediaServer(
             lan_ip=self.config.network_interface or None)
-        # 分享文本/任意页面 → 可播直链解析器（共享 BiliResolver 的 Cookie 缓存）
+        # 分享文本/任意页面 → 可播直链解析器（规则全部来自安装的规则包）
         self.share_resolver = ShareResolver(self.media_server, config=self.config)
         # 异步解析任务表 {task_id: {status: pending|done|error, result?, error?, ts}}
         self._resolve_tasks: Dict[str, dict] = {}
@@ -177,10 +177,11 @@ class CommandHandler:
             "plugin_remove": self._plugin_remove,
             "plugin_set_rule_enabled": self._plugin_set_rule_enabled,
             "plugin_test": self._plugin_test,
+            "plugin_check_updates": self._plugin_check_updates,
+            "plugin_pull": self._plugin_pull,
 
-            # 规则总览（脚本包 + 声明式 JSON + 内置 Python，三处一屏）
+            # 规则总览（脚本包 + 声明式 JSON，两处一屏）
             "rule_inventory": self._rule_inventory,
-            "rule_set_builtin_enabled": self._rule_set_builtin_enabled,
 
             # 设置
             "get_settings": self._get_settings,
@@ -679,16 +680,26 @@ class CommandHandler:
         return {"plugins": mgr.list_info()}
 
     def _rule_inventory(self, params: dict) -> dict:
-        """三种来源的规则一处列全（脚本包 / 声明式 JSON / 内置 Python）"""
+        """两种来源的规则一处列全（脚本包 / 声明式 JSON）"""
         return self.share_resolver.rule_inventory()
 
-    def _rule_set_builtin_enabled(self, params: dict) -> dict:
-        name = str(params.get("rule") or "")
+    def _plugin_check_updates(self, params: dict) -> dict:
+        """对照官方索引看哪些包有新版本，顺带列出索引里还没装的包"""
+        mgr = self.share_resolver.plugin_mgr
+        mgr.refresh()
+        return mgr.check_updates(str(params.get("index_url") or ""))
+
+    def _plugin_pull(self, params: dict) -> dict:
+        """按索引（或包自带 update_url）下载安装一个包，sha256 校验不过不落盘
+
+        回 {"plugins": 全量清单}，与 import/remove 一致——前端拿它直接刷新列表。
+        """
+        mgr = self.share_resolver.plugin_mgr
+        name = str(params.get("name") or "")
         if not name:
-            raise ValueError("缺少规则名")
-        self.share_resolver.plugin_mgr.set_builtin_enabled(
-            name, bool(params.get("enabled")))
-        return self.share_resolver.rule_inventory()
+            raise ValueError("缺少包名")
+        mgr.pull(name, str(params.get("url") or ""))
+        return {"plugins": mgr.list_info()}
 
     def _plugin_import(self, params: dict) -> dict:
         """导入插件包。来源三选一：path（本机 zip）/ data_base64（拖拽）/ url"""

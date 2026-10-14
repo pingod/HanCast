@@ -144,6 +144,10 @@ function onParamNumberChange(key: string, e: Event) {
   paramDraft.value[key] = raw === '' ? '' : Number(raw)
 }
 
+function onParamTextChange(key: string, e: Event) {
+  paramDraft.value[key] = (e.target as HTMLInputElement).value.trim()
+}
+
 async function loadParams() {
   paramsLoading.value = true
   try {
@@ -422,7 +426,16 @@ async function onCheckUpdate() {
 
                     <div class="settings__param-control">
                       <input
-                        v-if="spec.type === 'number'"
+                        v-if="spec.type === 'text'"
+                        class="settings__input settings__input--text"
+                        type="text"
+                        spellcheck="false"
+                        :value="draftOf(spec.key)"
+                        @change="onParamTextChange(spec.key, $event)"
+                      />
+
+                      <input
+                        v-else-if="spec.type === 'number'"
                         class="settings__input settings__input--small"
                         type="number"
                         :min="spec.min"
@@ -433,13 +446,13 @@ async function onCheckUpdate() {
                       <span v-if="spec.type === 'number' && spec.unit" class="settings__param-unit">{{ spec.unit }}</span>
 
                       <CustomSelect
-                        v-else-if="spec.type === 'enum'"
+                        v-if="spec.type === 'enum'"
                         :model-value="enumDraft(spec)"
                         :options="paramOptions(spec)"
                         @update:model-value="paramDraft[spec.key] = $event as string"
                       />
 
-                      <label v-else class="settings__toggle">
+                      <label v-if="spec.type === 'bool'" class="settings__toggle">
                         <input
                           type="checkbox"
                           :checked="draftOf(spec.key) === true"
@@ -688,6 +701,14 @@ async function onCheckUpdate() {
 
 .settings__input--small {
   width: 80px;
+}
+
+/* 地址类参数：整行铺满并允许折行显示，否则长 URL 只能看到尾巴 */
+.settings__input--text {
+  width: 100%;
+  min-width: 0;
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 .settings__input:focus {

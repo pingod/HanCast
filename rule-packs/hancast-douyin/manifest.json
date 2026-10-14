@@ -1,0 +1,7 @@
+{
+  "name": "hancast-douyin",
+  "version": "1.0.0",
+  "author": "HanCast",
+  "description": "抖音分享页解析：分享页内嵌 JSON 取 play_addr，比通用正文提取可靠。",
+  "scripts": ["main.js"]
+}

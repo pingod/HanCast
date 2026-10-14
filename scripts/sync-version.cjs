@@ -68,9 +68,12 @@ const targets = [
   {
     file: 'src/api/commands.ts',
     replace: (content) => {
-      // MOCK_SETTINGS 的 version
+      // 只改 MOCK_SETTINGS 的 version（那是 dev 模式下应用自报的版本）。
+      // 这里曾经用全局 /version:\s*'x\.y\.z'/g，每次发布把同一文件里的「规则包版本」
+      // （假索引项、mock 插件）一起刷成应用版本——假索引两条都变成同版本，
+      // 设置页的「一条可更新」当场失效，包版本成了没人看的垃圾数据。
       content = content.replace(
-        /(version:\s*')[\d.]+(')/g,
+        /(const MOCK_SETTINGS: AppSettings = \{[\s\S]*?version:\s*')[\d.]+(')/,
         `$1${newVersion}$2`
       )
       // mock check_update 的 current/latest
@@ -84,6 +87,10 @@ const targets = [
       )
       return content
     },
+    // 契约点：漏了就是漏了，别用「已是最新」蒙过去
+    expect: (content) =>
+      /const MOCK_SETTINGS: AppSettings = \{[\s\S]*?version:\s*'[\d.]+(')/.test(content)
+      && /current:\s*'[\d.]+(',)/.test(content),
   },
   {
     file: 'src/stores/settings.ts',
@@ -95,6 +102,7 @@ const targets = [
 ]
 
 let changed = 0
+let missed = 0
 
 for (const target of targets) {
   const filePath = path.join(ROOT, target.file)
@@ -113,6 +121,18 @@ for (const target of targets) {
   } else {
     console.log(`⏭️  ${target.file}（已是最新）`)
   }
+
+  // 替换后仍不含目标形状 ⇒ 这一处根本没被脚本覆盖到（改名/挪位置），
+  // 静默漏改会让真机上的「版本号」不再能证明装的是哪版。
+  if (target.expect && !target.expect(fs.readFileSync(filePath, 'utf-8'))) {
+    console.error(`❌ ${target.file}: 找不到应被刷新的版本字段，脚本正则已失效`)
+    missed++
+  }
+}
+
+if (missed) {
+  console.error(`\n💥 ${missed} 个版本契约点没匹配上，未更新任何后续流程`)
+  process.exit(1)
 }
 
 console.log(`\n🎉 版本同步完成: ${newVersion}，更新了 ${changed} 个文件`)

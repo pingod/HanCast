@@ -16,7 +16,12 @@ logger = logging.getLogger("hancast.params")
 
 ADVANCED_KEY = "advanced"
 
-# type: number（配 min/max/unit）| bool | enum（配 options）
+# 官方规则包索引的唯一一份地址：jsplugins 经 params.get("rules.index_url") 读它，
+# 两处各写一遍早晚会对不上。
+DEFAULT_RULES_INDEX = ("https://raw.githubusercontent.com/pingod/HanCast"
+                       "/main/rule-packs/index.json")
+
+# type: number（配 min/max/unit）| bool | enum（配 options）| text（配 placeholder）
 # section 仅用于设置页分组
 PARAM_SPECS: List[Dict] = [
     # ── 屏幕投屏 / HLS ──
@@ -120,6 +125,21 @@ PARAM_SPECS: List[Dict] = [
      "label_zh": "日志读取尾部大小", "label_en": "Log tail size",
      "help_zh": "应用内「查看详细日志」一次最多读取的文件尾部字节数",
      "help_en": "How much of the log file the in-app viewer reads per request"},
+
+    # ── 解析规则 ──
+    # 规则包索引是「下载下来就要执行里面 JS」的入口，地址必须能在设置里换：
+    # 官方地址在墙内常拉不动，不给出镜像位就等于没有更新功能。
+    {"key": "rules.index_url", "section": "rules",
+     "type": "text", "default": DEFAULT_RULES_INDEX,
+     "label_zh": "规则包索引地址", "label_en": "Rule pack index URL",
+     # 索引本身允许 http（内网镜像是正当用法）；被强制 https 的是清单里每个包的下载
+     # 地址——那才是要执行 JS 的入口。help 笼统写「只认 https」会把用户吓走。
+     "help_zh": "「检查规则包更新」读取的清单；清单里每个包的下载地址只认 https。"
+               "网络不通时填自己的镜像，镜像必须照抄官方条目里的 sha256，"
+               "否则装包会因摘要不符被拦下",
+     "help_en": "Index read by 'check for pack updates'; every pack URL it lists must "
+                "be https. Point it at a mirror if raw.githubusercontent.com is "
+                "unreachable; keep the sha256s"},
 ]
 
 _SPECS_BY_KEY = {s["key"]: s for s in PARAM_SPECS}
@@ -225,6 +245,15 @@ def _coerce(spec: Dict, value):
         text = str(value)
         if text not in spec["options"]:
             raise ValueError(f"只能取 {'/'.join(spec['options'])}")
+        return text
+    if kind == "text":
+        text = str(value).strip()
+        if not text:
+            raise ValueError("不能为空，要改回默认请点「恢复默认」")
+        if len(text) > 512:
+            raise ValueError("地址过长（上限 512 字符）")
+        if not text.lower().startswith(("http://", "https://")):
+            raise ValueError("需要 http(s) 地址")
         return text
     # number
     try:

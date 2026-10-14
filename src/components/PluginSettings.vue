@@ -3,20 +3,23 @@ import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   ruleInventory,
-  ruleSetBuiltinEnabled,
+  pluginCheckUpdates,
+  pluginPull,
   pluginImportFile,
   pluginImportData,
   pluginImportUrl,
   pluginRemove,
   pluginSetRuleEnabled,
   pluginTest,
+  type PackIndexEntry,
+  type PackUpdateEntry,
   type PluginInfo,
   type RuleInventory,
 } from '@/api/commands'
 
 const { t } = useI18n()
 
-const inv = ref<RuleInventory>({ rules_dir: '', script_packs: [], declarative: [], builtin: [] })
+const inv = ref<RuleInventory>({ rules_dir: '', script_packs: [], declarative: [] })
 const plugins = computed(() => inv.value.script_packs)
 const loading = ref(false)
 const importing = ref(false)
@@ -111,13 +114,49 @@ async function onToggleRule(plugin: string, rule: string, e: Event) {
   }
 }
 
-async function onToggleBuiltin(rule: string, e: Event) {
-  const enabled = (e.target as HTMLInputElement).checked
+// ── 检查规则包更新（官方索引 → 可更新 / 可安装两堆）──
+
+const checking = ref(false)
+const checked = ref(false)
+const packUpdates = ref<PackUpdateEntry[]>([])
+const packAvailable = ref<PackIndexEntry[]>([])
+const indexUrl = ref('')
+const pulling = ref('')
+const pulled = ref('')
+
+async function onCheckUpdates() {
+  if (checking.value) return
+  checking.value = true
+  pulled.value = ''
   try {
-    inv.value = await ruleSetBuiltinEnabled(rule, enabled)
+    const r = await pluginCheckUpdates()
+    packUpdates.value = r.updates
+    packAvailable.value = r.available
+    indexUrl.value = r.index_url
+    checked.value = true
+    actionError.value = ''
   } catch (err: any) {
     actionError.value = String(err?.message ?? err)
-    await reload()
+    packUpdates.value = []
+    packAvailable.value = []
+  } finally {
+    checking.value = false
+  }
+}
+
+async function onPull(entry: PackIndexEntry) {
+  if (pulling.value) return
+  pulling.value = entry.name
+  try {
+    inv.value = { ...inv.value, script_packs: await pluginPull(entry.name) }
+    packUpdates.value = packUpdates.value.filter((u) => u.name !== entry.name)
+    packAvailable.value = packAvailable.value.filter((a) => a.name !== entry.name)
+    pulled.value = t('settings.pluginPulled', { name: entry.name, version: entry.version })
+    actionError.value = ''
+  } catch (err: any) {
+    actionError.value = String(err?.message ?? err)
+  } finally {
+    pulling.value = ''
   }
 }
 
@@ -171,14 +210,9 @@ async function runTest(p: PluginInfo) {
           <div class="plugins__title">
             <span class="plugins__name">{{ p.name }}</span>
             <span v-if="p.version" class="plugins__ver">v{{ p.version }}</span>
-            <span v-if="p.builtin" class="plugins__tag plugins__tag--builtin"
-                  :title="t('settings.pluginBuiltinRemove')">
-              {{ t('settings.pluginBuiltinTag') }}
-            </span>
             <span v-if="p.broken" class="plugins__broken">{{ t('settings.pluginBroken') }}</span>
           </div>
           <button
-            v-if="!p.builtin"
             class="plugins__remove"
             :class="{ 'plugins__remove--confirm': confirmRemove[p.name] }"
             @click="onRemove(p.name)"
@@ -229,32 +263,9 @@ async function runTest(p: PluginInfo) {
         <pre v-if="testResult[p.name]?.text" class="plugins__result" :class="{ 'plugins__result--error': !testResult[p.name]?.ok }">{{ testResult[p.name].text }}</pre>
       </div>
 
-      <div v-if="!plugins.length" class="plugins__empty">{{ t('settings.pluginsEmpty') }}</div>
-
-      <!-- 内置 Python 规则：与上面的规则包是同一件事的两份实现，这里能关掉兜底 -->
-      <template v-if="inv.builtin.length">
-        <h4 class="plugins__section">{{ t('settings.rulesSectionBuiltin') }}</h4>
-        <p class="plugins__hint">{{ t('settings.rulesBuiltinHint') }}</p>
-        <div class="plugins__card">
-          <div v-for="b in inv.builtin" :key="b.name" class="plugins__rule">
-            <div class="plugins__rule-info">
-              <span class="plugins__rule-name">{{ b.name }}</span>
-              <span class="plugins__rule-meta">
-                {{ b.stage }} · {{ t('settings.rulesPriority') }} {{ b.priority }}
-                <template v-if="b.hosts.length"> · {{ b.hosts.join(' ') }}</template>
-              </span>
-            </div>
-            <label class="plugins__toggle">
-              <input
-                type="checkbox"
-                :checked="b.enabled"
-                @change="onToggleBuiltin(b.name, $event)"
-              />
-              <span class="plugins__toggle-slider" />
-            </label>
-          </div>
-        </div>
-      </template>
+      <div v-if="!plugins.length" class="plugins__empty">
+        {{ t('settings.pluginsEmpty') }}
+      </div>
 
       <!-- 声明式 JSON 规则：改文件即生效，写坏的那条也要露面 -->
       <h4 class="plugins__section">{{ t('settings.rulesSectionJson') }}</h4>
@@ -305,6 +316,52 @@ async function runTest(p: PluginInfo) {
 
     <div v-if="actionError" class="plugins__error">{{ actionError }}</div>
 
+    <!-- 规则包更新：官方索引 → 可更新 / 可安装 -->
+    <h4 class="plugins__section">{{ t('settings.rulesSectionUpdates') }}</h4>
+    <p class="plugins__hint">{{ t('settings.rulesUpdatesHint') }}</p>
+    <button class="plugins__btn" :disabled="checking" @click="onCheckUpdates">
+      {{ checking ? t('settings.rulesChecking') : t('settings.rulesCheckUpdates') }}
+    </button>
+    <p v-if="indexUrl" class="plugins__hint">
+      {{ t('settings.rulesIndexUsed') }} <code class="plugins__dir">{{ indexUrl }}</code>
+    </p>
+    <p v-if="pulled" class="plugins__pulled">{{ pulled }}</p>
+
+    <div v-if="packUpdates.length" class="plugins__card">
+      <div v-for="u in packUpdates" :key="u.name" class="plugins__pack-row">
+        <div class="plugins__rule-info">
+          <span class="plugins__rule-name">{{ u.name }}</span>
+          <span class="plugins__rule-meta">
+            {{ t('settings.rulesUpdateFrom', { from: u.current, to: u.version }) }}
+            <template v-if="u.description"> · {{ u.description }}</template>
+          </span>
+        </div>
+        <button class="plugins__btn" :disabled="pulling === u.name" @click="onPull(u)">
+          {{ pulling === u.name ? t('settings.rulesPulling') : t('settings.rulesUpdate') }}
+        </button>
+      </div>
+    </div>
+
+    <div v-if="packAvailable.length" class="plugins__card">
+      <div class="plugins__pack-title">{{ t('settings.rulesAvailableTitle') }}</div>
+      <div v-for="a in packAvailable" :key="a.name" class="plugins__pack-row">
+        <div class="plugins__rule-info">
+          <span class="plugins__rule-name">{{ a.name }}</span>
+          <span class="plugins__rule-meta">
+            v{{ a.version }}<template v-if="a.description"> · {{ a.description }}</template>
+          </span>
+        </div>
+        <button class="plugins__btn" :disabled="pulling === a.name" @click="onPull(a)">
+          {{ pulling === a.name ? t('settings.rulesPulling') : t('settings.rulesInstall') }}
+        </button>
+      </div>
+    </div>
+
+    <div
+      v-if="!checking && checked && !packUpdates.length && !packAvailable.length"
+      class="plugins__empty"
+    >{{ t('settings.rulesNoUpdates') }}</div>
+
     <input ref="fileInput" type="file" accept=".zip" hidden @change="onFileSelected" />
   </div>
 </template>
@@ -347,10 +404,25 @@ async function runTest(p: PluginInfo) {
   flex-shrink: 0;
 }
 
-.plugins__tag--builtin {
-  color: var(--primary);
-  background: rgba(59, 130, 246, 0.1);
-  border-color: transparent;
+.plugins__pack-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.plugins__pack-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-sm);
+  padding: var(--sp-xs) 0;
+  border-top: 1px solid var(--border);
+}
+
+.plugins__pulled {
+  font-size: 12px;
+  color: #22C55E;
+  margin: 0;
 }
 
 .plugins__dir {

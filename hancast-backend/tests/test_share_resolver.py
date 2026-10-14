@@ -8,16 +8,19 @@
 - 主列表下钻（BANDWIDTH 最优）、播放列表粘贴路由
 - 电视视角可播性判定（TS/HTML/PNG 魔数）与 Cookie 快照
 - 代理侧播放列表改写、防盗链占位图识别、Content-Range 总量
-- 站点规则：内置抖音/B站规则、外置声明式 JSON（page 与 url 阶段、失效回退）
-- B站路由 → 本地代理注册
+- 站点规则：外置声明式 JSON 与装进来的 JS 脚本包（page 与 url 阶段、失效回退）；
+  程序不编译进任何站点规则，空目录全新安装注册出零条规则
+- 规则命中防盗链站 / 电视裸拉不动 → 本地代理注册（Referer 随代理头带上）
 """
 
+import io
 import os
 import json
 import shutil
 import tempfile
 import time
 import unittest
+import zipfile
 from unittest.mock import patch
 
 import requests
@@ -28,6 +31,7 @@ from hancast_sidecar.media.server import (
     _is_leech_placeholder, _needs_bare_retry, _rewrite_playlist,
     player_ext_ok, player_safe_suffix,
 )
+from hancast_sidecar.media.rules import base as rules_base
 from hancast_sidecar.media.share_resolver import (
     ShareResolver, extract_candidates, _EXT_MIME, _ascii_url, _ext_of,
     _master_variant_url, _nested_media_urls, _stream_candidates_from_text,
@@ -40,10 +44,12 @@ class FakeMediaServer:
 
     def __init__(self):
         self.proxies: list[str] = []
+        self.proxy_headers: list[dict] = []
 
     def register_proxy(self, remote_url: str, headers: dict = None,
                        suffix: str = "") -> str:
         self.proxies.append(remote_url)
+        self.proxy_headers.append(headers or {})
         return f"http://127.0.0.1:9/proxy/{len(self.proxies)}{suffix}"
 
 
@@ -62,6 +68,17 @@ def _isolated_rules_dir(test) -> str:
     d = tempfile.mkdtemp(prefix="hancast-rules-")
     test.addCleanup(shutil.rmtree, d, True)
     return d
+
+
+def _make_pack(name: str, js: str) -> bytes:
+    """最小 JS 规则包 zip（与仓库根 rule-packs/ 的出货形态同构）：
+    站点规则只能这样装进来，程序本身不带"""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("manifest.json", json.dumps(
+            {"name": name, "version": "1.0.0", "scripts": ["site.js"]}))
+        zf.writestr("site.js", js)
+    return buf.getvalue()
 
 
 class TestExtractCandidates(unittest.TestCase):
@@ -207,25 +224,38 @@ class TestResolveRouting(unittest.TestCase):
     def setUp(self):
         self.server = FakeMediaServer()
         self.resolver = ShareResolver(self.server, rules_dir=_isolated_rules_dir(self))
-        self._offline = [
-            patch.object(ShareResolver, "_follow_stream", side_effect=_no_follow),
-            patch.object(ShareResolver, "_publish", side_effect=_no_publish),
-        ]
-        for p in self._offline:
+        self._follow_p = patch.object(ShareResolver, "_follow_stream",
+                                      side_effect=_no_follow)
+        self._publish_p = patch.object(ShareResolver, "_publish",
+                                       side_effect=_no_publish)
+        for p in (self._follow_p, self._publish_p):
             p.start()
             self.addCleanup(p.stop)
 
-    def test_bilibili_routes_to_proxy(self):
-        fake = {"title": "B站视频", "video_url": "https://xy.bilivideo.com/v.m4s",
-                "audio_url": None, "cover_url": "https://i.hdslb.com/cover.jpg",
-                "bvid": "BV1xx411c7mD", "author": "up", "duration": 100}
-        with patch.object(self.resolver.bili, "belongs_to", return_value=True), \
-             patch.object(self.resolver.bili, "resolve", return_value=fake):
-            info = self.resolver.resolve("看看 https://b23.tv/AbCdEf 这个视频")
-        self.assertEqual(info["via"], "bilibili")
+    def test_pack_rule_referer_reaches_proxy(self):
+        """带防盗链头的站点（B 站形态）：电视裸拉不动 → 代理注册，
+        规则给的 Referer 必须进代理请求头，否则代理照样拉不到"""
+        # 这条要跑真的 _publish；patcher 只能 stop 一次，收尾先把它挂回去
+        self._publish_p.stop()
+        self.addCleanup(self._publish_p.start)
+        js = ("registerRule({id:'bili', name:'bili-page', hosts:['bili.example'],"
+              "stage:'page', resolve:function(c){"
+              "  var m=/\"playUrl\":\"([^\"]+)\"/.exec(c.body);"
+              "  if(!m) throw new Error('no playUrl');"
+              "  return {url:m[1], headers:{Referer:c.url}};}});")
+        self.resolver.plugin_mgr.import_zip_bytes(_make_pack("bili-pack", js))
+        html = '<script>{"playUrl":"https://xy.bili.example/v.m4s?sign=1"}</script>'
+        with patch.object(ShareResolver, "_open",
+                          return_value=("https://bili.example/video/BV1xx",
+                                        "text/html", None, html.encode())), \
+             patch.object(ShareResolver, "_tv_can_fetch", return_value=False):
+            info = self.resolver.resolve("https://bili.example/video/BV1xx")
+        self.assertTrue(info["via"].endswith("+proxy"))
+        self.assertEqual(self.server.proxies,
+                         ["https://xy.bili.example/v.m4s?sign=1"])
         self.assertTrue(info["uri"].startswith("http://127.0.0.1:9/proxy/"))
-        self.assertEqual(len(self.server.proxies), 2)  # 视频 + 封面
-        self.assertEqual(info["source_url"], "https://b23.tv/AbCdEf")
+        self.assertEqual(self.server.proxy_headers[0]["Referer"],
+                         "https://bili.example/video/BV1xx")
 
     def test_page_extraction_priority_and_absolutize(self):
         with patch.object(ShareResolver, "_open",
@@ -293,7 +323,15 @@ class TestResolveRouting(unittest.TestCase):
         self.assertEqual(info["via"], "playlist")
         self.assertEqual(info["uri"], "https://streams.example/x/hi.m3u8")
 
-    def test_douyin_share_json(self):
+    def test_douyin_share_page_via_js_pack(self):
+        """抖音分享页 JSON 提取：Python 规则已废除，同一管线改由装进来的脚本包走通"""
+        js = ("registerRule({id:'dy', name:'dy-play', hosts:['douyin.com'],"
+              "stage:'page', resolve:function(c){"
+              "  var m=/\"url_list\":\\[\"([^\"]+)\"/.exec(c.body);"
+              "  if(!m) throw new Error('no url_list');"
+              "  var d=/\"desc\":\"([^\"]*)\"/.exec(c.body);"
+              "  return {url:m[1].replace('playwm','play'), title:d?d[1]:''};}});")
+        self.resolver.plugin_mgr.import_zip_bytes(_make_pack("dy-pack", js))
         dy_html = (
             '{"video":{"play_addr":{"url_list":['
             '"https:\\u002F\\u002Fwww.douyin.com\\u002Faweme\\u002Fv1\\u002Fplaywm\\u002F?video_id=v0200f'
@@ -303,7 +341,7 @@ class TestResolveRouting(unittest.TestCase):
                           return_value=("https://www.douyin.com/video/7412345678901234567",
                                         "text/html", None, dy_html)):
             info = self.resolver.resolve("8.88 打开抖音 https://v.douyin.com/abc123/ 看视频")
-        self.assertEqual(info["via"], "douyin")
+        self.assertEqual(info["via"], "dy-pack/dy-play")
         self.assertIn("https://www.douyin.com/aweme/v1/play/", info["uri"])
         self.assertNotIn("playwm", info["uri"])
         self.assertNotIn("u002F", info["uri"])
@@ -325,7 +363,7 @@ COLLECT_HTML = ('<html><head><title>采集站·第1集</title></head><body>'
 
 
 class TestSiteRules(unittest.TestCase):
-    """站点规则：内置模块 + 外置声明式 JSON（share_rules/*.json），全程离线"""
+    """站点规则：外置声明式 JSON（share_rules/*.json）+ JS 脚本包，全程离线"""
 
     def setUp(self):
         from hancast_sidecar.media.rules.base import refresh_external
@@ -348,10 +386,18 @@ class TestSiteRules(unittest.TestCase):
                   encoding="utf-8") as f:
             json.dump(spec, f, ensure_ascii=False)
 
-    def test_builtin_rules_are_registered(self):
-        from hancast_sidecar.media.rules.base import registered
-        names = {r.name for r in registered()}
-        self.assertTrue({"bilibili", "douyin"} <= names)
+    def test_fresh_install_registers_no_site_rules(self):
+        """空目录全新安装：注册表必须一条规则都没有（B 站/抖音链接解析不了是预期）"""
+        # rule_inventory 触发两源整体重载，顺带清掉其它用例留在全局注册表里的规则
+        inv = self.resolver.rule_inventory()
+        self.assertEqual(set(inv), {"rules_dir", "script_packs", "declarative"})
+        self.assertEqual(inv["script_packs"], [])
+        self.assertEqual(inv["declarative"], [])
+        self.assertEqual(rules_base.registered(), [])
+        for url in ("https://www.bilibili.com/video/BV1xx411c7mD",
+                    "https://v.douyin.com/abc123/"):
+            self.assertEqual(rules_base.matching(url, "url"), [])
+            self.assertEqual(rules_base.matching(url, "page"), [])
 
     def test_external_page_rule_resolves_collect_site(self):
         """采集站「正文里那坨 player_aaaa」由一条 JSON 规则描述，不用改代码"""
@@ -383,15 +429,19 @@ class TestSiteRules(unittest.TestCase):
         self.assertEqual(info["via"], "scan")
         self.assertEqual(info["uri"], "https://cdn.scan.example/a.m3u8&t=1")
 
-    def test_external_page_rule_overrides_builtin(self):
-        """外置规则 priority 更低：同一站点先按用户的取法，失败才回退内置"""
-        self._write({"name": "dy-custom", "hosts": ["douyin.com"],
+    def test_pack_and_declarative_same_host_both_tried(self):
+        """同一站点被脚本包与 JSON 规则同时声明：一条不适用只让路，不拖累另一条
+        （「外置压内置」已无从谈起——没有内置，两源同段按注册序逐条试）"""
+        bad_js = ("registerRule({name:'dy-pack-rule', hosts:['douyin.com'],"
+                  "stage:'page', resolve:function(c){ throw new Error('改版'); }});")
+        self.resolver.plugin_mgr.import_zip_bytes(_make_pack("dy-pack", bad_js))
+        self._write({"name": "dy-json", "hosts": ["douyin.com"],
                      "output": "https://custom.example/v.mp4"})
         with patch.object(ShareResolver, "_open",
                           return_value=("https://www.douyin.com/video/74123456789",
                                         "text/html", None, b"<html></html>")):
             info = self.resolver.resolve("https://v.douyin.com/abc/")
-        self.assertEqual(info["via"], "dy-custom")
+        self.assertEqual(info["via"], "dy-json")
         self.assertEqual(info["uri"], "https://custom.example/v.mp4")
 
     def test_url_stage_rule_runs_without_fetching_page(self):

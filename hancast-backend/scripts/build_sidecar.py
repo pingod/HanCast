@@ -243,8 +243,10 @@ def build(force=False):
         ├── hancast-sidecar-{triple}.exe   ← 入口（externalBin）
         ├── *.dll / *.pyd / *.so           ← Python 扩展模块等依赖
         └── hancast_sidecar/
-            ├── xml/                        ← 运行时数据（UPnP 描述文件）
-            └── rule_plugins/               ← 随包内置 JS 解析规则包（首次运行播种到用户目录）
+            └── xml/                        ← 运行时数据（UPnP 描述文件）
+
+    产物里没有任何解析规则：站点规则全部由用户在设置页安装规则包
+    （repo 根 ``rule-packs/`` 是官方包的源码与索引来源）。
 
     注意：Nuitka standalone 会把几乎所有依赖静态并入可执行文件，
     产出目录里通常【没有】certifi/ lxml/ charset_normalizer/ 这类独立目录。
@@ -260,9 +262,6 @@ def build(force=False):
     output_name = f"hancast-sidecar-{target_triple}"
     entry_point = os.path.join(project_dir, "hancast_sidecar", "main.py")
     xml_dir = os.path.join(project_dir, "hancast_sidecar", "xml")
-    # 随包 JS 解析规则包（jsplugins.bundled_plugins_dir() 按
-    # <pkg>/media/rules/../../rule_plugins 定位，故资源必须落在同名相对位置）
-    rule_plugins_dir = os.path.join(project_dir, "hancast_sidecar", "rule_plugins")
 
     ext = ".exe" if sys.platform == "win32" else ""
     output_exe = os.path.join(output_dir, f"{output_name}{ext}")
@@ -303,7 +302,6 @@ def build(force=False):
         f"--output-filename={output_name}",
         f"--output-dir={nuitka_build_dir}",
         f"--include-data-dir={xml_dir}=hancast_sidecar/xml",
-        f"--include-data-dir={rule_plugins_dir}=hancast_sidecar/rule_plugins",
         "--include-package=hancast_sidecar",
         "--include-package=lxml",
         "--include-package=netifaces",

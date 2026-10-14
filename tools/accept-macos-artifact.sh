@@ -34,14 +34,23 @@ for rel in ssdp.py commands.py params.py security/guard.py protocol/dlna.py prot
            screencast/httpd.py screencast/ffmpeg_manager.py screencast/www/index.html \
            screencast/macos_tap.py utils/logger.py utils/config.py main.py \
            media/server.py media/share_resolver.py media/rules/__init__.py media/rules/base.py \
-           media/rules/bili.py media/rules/douyin.py media/rules/declarative.py \
-           media/rules/jsplugins.py media/rules/jsruntime.py \
-           rule_plugins/hancast-template/manifest.json rule_plugins/hancast-template/main.js \
-           rule_plugins/hancast-douyin/manifest.json rule_plugins/hancast-douyin/main.js \
-           rule_plugins/hancast-bilibili/manifest.json rule_plugins/hancast-bilibili/main.js; do
+           media/rules/declarative.py media/rules/jsplugins.py media/rules/jsruntime.py; do
   want=$(git show "$TAG:hancast-backend/hancast_sidecar/$rel" | shasum -a 256 | cut -d' ' -f1)
   got=$(shasum -a 256 "$RES/$rel" 2>/dev/null | cut -d' ' -f1)
   chk "sha256 $rel" "${got:0:12}" "${want:0:12}"
+done
+
+# v2.3.3 契约：程序里没有任何编译进去的站点规则，也没有随包播种的规则目录。
+# 这几样任何一样还在，就说明「内置规则」这条退役没退干净。
+for gone in media/rules/bili.py media/rules/douyin.py media/bili_resolver.py rule_plugins; do
+  if [ -e "$RES/$gone" ]; then
+    say "FAIL 产物里还有已退役的东西: $gone"; fails=$((fails+1))
+  else
+    say "PASS 产物里无 $gone"
+  fi
+  if git cat-file -e "$TAG:hancast-backend/hancast_sidecar/$gone" 2>/dev/null; then
+    say "FAIL $TAG 的 git 树里还有 $gone（提交漏了删除）"; fails=$((fails+1))
+  fi
 done
 
 # 只看新装这份跑出来的日志：旧进程写的是同一个文件
@@ -125,7 +134,7 @@ fi
 # 回 success:false（'ascii' codec can't encode），设置页整块读不到参数。
 osascript -e 'tell application "HanCast" to quit' 2>/dev/null
 for i in $(seq 1 12); do pgrep -x hancast-sidecar >/dev/null 2>&1 || break; sleep 2; done
-PROTO_OUT=$(printf '{"id":1,"cmd":"get_params","params":{}}\n{"id":2,"cmd":"plugin_list","params":{}}\n{"id":3,"cmd":"exit","params":{}}\n' \
+PROTO_OUT=$(printf '{"id":1,"cmd":"get_params","params":{}}\n{"id":2,"cmd":"plugin_list","params":{}}\n{"id":3,"cmd":"rule_inventory","params":{}}\n{"id":4,"cmd":"exit","params":{}}\n' \
   | env -i PATH=/usr/bin:/bin LC_ALL=C "$APP/Contents/MacOS/hancast-sidecar" 2>/dev/null)
 PROTO_LINE=$(echo "$PROTO_OUT" | grep -a '"id": 1' | head -1)
 if echo "$PROTO_LINE" | grep -q '"success": true' && echo "$PROTO_LINE" | grep -q 'label_zh'; then
@@ -143,18 +152,30 @@ if echo "$PLUGIN_LINE" | grep -q '"success": true'; then
 else
   say "FAIL plugin_list 没成功，产物里 JS 插件宿主多半起不来: ${PLUGIN_LINE:0:200}"; fails=$((fails+1))
 fi
-# 随包内置规则包必须真在冻结产物里被播种出来：源码树跑测试永远绿，
-# Nuitka 少一行 --include-data-dir 的话 bundled_plugins_dir() 指到空目录，
-# 用户界面上就一个内置包都看不见。
-SEED_OK=1
-for pack in hancast-template hancast-douyin hancast-bilibili; do
-  echo "$PLUGIN_LINE" | grep -q "\"name\": \"$pack\"" || SEED_OK=0
-done
-if [ "$SEED_OK" = 1 ] && echo "$PLUGIN_LINE" | grep -q '"builtin": true'; then
-  say "PASS 内置规则包已随包播种（3 个，标为内置）"
+# v2.3.3 契约：规则只有两种来源（JS 包 / 声明式 JSON），「内置」这个概念已经删除。
+# 冻结产物里若还认得 rule_set_builtin_enabled，说明命令表来自旧代码；而 rule_inventory
+# 的 script_packs 里若出现 "builtin" 字段，说明 info() 还在给包发内置身份。
+INV_LINE=$(echo "$PROTO_OUT" | grep -a '"id": 3' | head -1)
+if echo "$INV_LINE" | grep -q '"success": true' \
+   && echo "$INV_LINE" | grep -q '"script_packs"' \
+   && echo "$INV_LINE" | grep -q '"declarative"' \
+   && ! echo "$INV_LINE" | grep -q '"builtin"'; then
+  say "PASS rule_inventory 只报两种来源，产物里已无「内置」身份"
 else
-  say "FAIL 打包产物没播种出内置规则包（查 --include-data-dir=rule_plugins）: ${PLUGIN_LINE:0:200}"; fails=$((fails+1))
+  say "FAIL rule_inventory 仍带内置概念或没答上来: ${INV_LINE:0:200}"; fails=$((fails+1))
 fi
+if grep -q 'rule_set_builtin_enabled' "$RES/commands.py"; then
+  say "FAIL 冻结产物仍注册 rule_set_builtin_enabled（内置规则概念未删）"; fails=$((fails+1))
+else
+  say "PASS 命令表已无 rule_set_builtin_enabled"
+fi
+for cmd in plugin_check_updates plugin_pull; do
+  if grep -q "\"$cmd\":" "$RES/commands.py"; then
+    say "PASS $cmd 已注册"
+  else
+    say "FAIL 命令表缺 $cmd（设置页的「检查规则包更新」必挂）"; fails=$((fails+1))
+  fi
+done
 open -a HanCast
 
 # sidecar 的自报版本（UPnP SERVER/modelNumber、config dump）也是版本契约点：

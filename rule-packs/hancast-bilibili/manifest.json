@@ -1,0 +1,7 @@
+{
+  "name": "hancast-bilibili",
+  "version": "1.0.0",
+  "author": "HanCast",
+  "description": "B 站解析：APP 签名多线路取流 iOS → TV → Web HTML5，反爬 Cookie 落盘复用。",
+  "scripts": ["main.js"]
+}

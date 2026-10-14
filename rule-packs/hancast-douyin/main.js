@@ -1,5 +1,5 @@
 /*
- * 抖音规则包 —— 与内置 Python 规则 media/rules/douyin.py 同逻辑的脚本版
+ * 抖音规则包 —— 官方包，分享页内嵌 JSON 提取
  *
  * 抖音分享链接（v.douyin.com/xxx 跳转后）的播放地址藏在
  * www.iesdouyin.com/share/video/<aweme_id>/ 的分享页内嵌 JSON 里，

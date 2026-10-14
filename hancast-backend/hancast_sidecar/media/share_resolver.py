@@ -19,7 +19,6 @@ import requests
 from urllib.parse import (parse_qs, quote, urlparse, urljoin, unquote, urlunparse)
 from html import unescape as html_unescape
 
-from .bili_resolver import BiliResolver
 from .server import (MediaServer, player_ext_ok, player_safe_suffix,
                      _proxy_broken)
 from .rules import (RuleContext, matching as rules_matching,
@@ -336,11 +335,8 @@ class ShareResolver:
     """分享文本 → 可播放 MediaInfo"""
 
     def __init__(self, media_server: MediaServer,
-                 bili_resolver: BiliResolver | None = None,
                  rules_dir: str | None = None, config=None):
         self.media_server = media_server
-        # 共享 BiliResolver 实例：反爬 Cookie 缓存跨调用复用
-        self.bili = bili_resolver or BiliResolver()
         self.rules_dir = rules_dir or getattr(config, "share_rules_dir",
                                               None) or DEFAULT_RULES_DIR
         # JS 脚本插件根：<share_rules>/plugins/；导入/启停/测试命令经它操作
@@ -373,55 +369,22 @@ class ShareResolver:
                     logger.warning(f"候选地址解析失败 {url}: {e}")
                     errors.append(f"{urlparse(url).netloc}: {e}")
         raise ValueError("无法解析出可播放地址 — " + "；".join(errors) +
-                         f"（可为该站点在 {self.rules_dir} 添加解析规则，无需重装）")
-
-    def resolve_bilibili_media_info(self, url: str) -> dict:
-        """B站链接 → 本地代理可播信息（原 resolve_bilibili 命令的实现）"""
-        if not self.bili.belongs_to(url):
-            raise ValueError(f"不是B站链接: {url}")
-
-        result = self.bili.resolve(url)
-
-        # 将视频直链注册为本地代理 (附加 Referer 头)
-        proxy_url = self.media_server.register_proxy(result["video_url"])
-
-        # 将封面图也注册为本地代理 (B站 CDN 有防盗链)
-        cover_url = result.get("cover_url", "")
-        cover_proxy = self.media_server.register_proxy(cover_url) if cover_url else None
-
-        media_info = MediaInfo(
-            media_type="url",
-            uri=proxy_url,
-            title=result["title"],
-            mime_type="video/mp4",
-            file_size=None,
-            thumbnail=cover_proxy or cover_url,
-        )
-        return {
-            **media_info.to_dict(),
-            "author": result.get("author", ""),
-            "bvid": result.get("bvid", ""),
-            "cover_url": result.get("cover_url", ""),
-            "source_url": url,
-            "via": "bilibili",
-        }
+                         f"（可为该站点在 {self.rules_dir} 添加解析规则，或在设置页安装规则包）")
 
     # ── 路由 ──
 
     def rule_inventory(self) -> dict:
-        """三种来源的规则一处列全：脚本包 / 声明式 JSON / 随包编译的 Python 规则
+        """规则的全部来源一处列全：JS 脚本包 / 声明式 JSON
 
         设置页靠它把「这台机器现在到底认哪些站」摊开给用户看，
         顺带告诉他规则目录在哪（改 JSON 不用重启、不用重新打包）。
         """
         self._load_external_rules()
-        from .rules.base import builtin_rules_info
         from .rules.declarative import declarative_inventory
         return {
             "rules_dir": self.rules_dir,
             "script_packs": self.plugin_mgr.list_info(),
             "declarative": declarative_inventory(self.rules_dir),
-            "builtin": builtin_rules_info(),
         }
 
     def _load_external_rules(self) -> None:

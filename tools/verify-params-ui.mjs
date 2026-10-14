@@ -154,9 +154,9 @@ async function main() {
   pass('渲染出参数行', `${count} 项`)
   chk('分组标题按 section 出现', await s.evaluate(
     `[...document.querySelectorAll('.settings__params-group-title')].map(h=>h.textContent.trim()).join(',')`),
-    '屏幕投屏,浏览器播放器')
+    '屏幕投屏,浏览器播放器,解析规则')
 
-  // 3. 三类控件都在
+  // 3. 四类控件都在（text 是 v2.3.3 加的：规则包索引地址要在设置里能改）
   chk('number 控件', await s.evaluate(
     `!!document.querySelector('.settings__param input[type=number]')`), true)
   chk('enum 控件（编码速度档）', await s.evaluate(
@@ -164,6 +164,9 @@ async function main() {
       .some(el => el.textContent.includes('编码速度档'))`), true)
   chk('bool 控件', await s.evaluate(
     `!!document.querySelector('.settings__param .settings__toggle input[type=checkbox]')`), true)
+  chk('text 控件带上屏地址', await s.evaluate(
+    `[...document.querySelectorAll('.settings__param input[type=text]')]
+      .some(i => i.value.includes('rule-packs/index.json'))`), true)
   chk('1 秒默认值上屏', await s.evaluate(
     `[...document.querySelectorAll('.settings__param input[type=number]')].some(i => i.value === '1')`), true)
 
