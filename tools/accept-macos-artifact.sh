@@ -365,11 +365,19 @@ fi
 # v2.3.7 契约①：TLS 指纹伪造的两个包必须真的冻进产物。
 # 漏了 _cffi_backend 时产物是「能跑，但 JA3 仍是 Python」——顶层 curl_cffi 一 import
 # 就要它，代码里又有降级，肉眼与日志都看不出来，只能按 bundle 里的文件判。
+# v2.3.7 首发产物实测踩过：Nuitka 产出了 curl_cffi/，但 bundle.resources 没列这个
+# 目录（`*.so` 只抓顶层），于是 curl_cffi/_wrapper.abi3.so 整个被丢掉，打包版一直
+# 走 requests。所以目录、包内二进制、顶层 _cffi_backend 三样都要单独判。
 RROOT="$APP/Contents/Resources"
 if [ -d "$RROOT/curl_cffi" ]; then
   say "PASS 产物含 curl_cffi"
 else
   say "FAIL 产物缺 curl_cffi（指纹伪造在打包版里静默降级）"; fails=$((fails+1))
+fi
+if ls "$RROOT"/curl_cffi/_wrapper*.so >/dev/null 2>&1; then
+  say "PASS curl_cffi 带 _wrapper 二进制"
+else
+  say "FAIL curl_cffi/ 里没有 _wrapper*.so（curl 的真身在缺失的目录里，指纹无从发出）"; fails=$((fails+1))
 fi
 if ls "$RROOT"/_cffi_backend*.so >/dev/null 2>&1; then
   say "PASS 产物含 _cffi_backend"

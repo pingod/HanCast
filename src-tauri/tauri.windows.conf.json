@@ -9,7 +9,8 @@
       "hancast_sidecar/**/*",
       "certifi/**/*",
       "lxml/**/*",
-      "charset_normalizer/**/*"
+      "charset_normalizer/**/*",
+      "curl_cffi/**/*"
     ]
   }
 }

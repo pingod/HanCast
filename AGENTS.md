@@ -506,10 +506,22 @@ app 打出来没有 mpv，反倒把 44 MB 的 `mpv.tar.gz` 打进 bundle。
 这样它们才能被上面的 `*.dll` / `*.pyd` / `*.so` glob 捕获。
 可执行文件本身留在 `hancast-sidecar/` 里供 `externalBin` 使用，不做重复。
 
-**历史遗留**：`certifi/**/*`、`lxml/**/*`、`charset_normalizer/**/*` 曾长期躺在
-`bundle.resources` 里，但那是 **PyInstaller onedir** 的目录布局，本项目早已迁移到 Nuitka。
-Nuitka standalone 会把依赖静态并入可执行文件（37–57MB 的单体二进制即证据），
-产出目录里没有这些独立目录，所以它们已在全部配置中移除。**不要凭猜测重新加回去。**
+**历史遗留 → 已被 v2.3.7 产物证伪**：`certifi/**/*`、`lxml/**/*`、`charset_normalizer/**/*`
+曾被认为是 **PyInstaller onedir** 的残留、「Nuitka 产出目录里没有这些独立目录」，
+但 v2.3.7 的 `Contents/Resources/` 里实打实躺着这三个目录——Nuitka standalone 会把
+**含数据文件或扩展模块**的包保留成顶层目录（`certifi/cacert.pem`、`lxml/etree.so`、
+`charset_normalizer` 的 mypyc `.so`），它们只能靠目录级 glob 进 bundle。
+
+这条错误认知是有代价的：#71 加 curl_cffi 时按「Nuitka 全静态并入」推断，只往
+`build_sidecar.py` 加了 `--include-package=curl_cffi`，没动 `bundle.resources`，
+于是 Nuitka 产出的 `curl_cffi/`（里面是 `_wrapper.abi3.so`，顶层 `*.so` 抓不到）
+被整目录丢弃 → 打包版 `import curl_cffi` 失败 → 按设计降级回 requests，
+表现是「解析一切正常，只是 JA3 还是 Python 的」，不翻 bundle 永远发现不了。
+
+**规则**：`build_sidecar.py` 每加一个 `--include-package`，就要检查该包在 Nuitka 产出里
+是否以**目录**形态存在；是目录就**三个平台 conf 各加一条 `<pkg>/**/*`**（数组整体替换，不增量合并）。
+`check-resources.cjs` 现在会自动抓这件事：它从 `build_sidecar.py` 读 `--include-package=`
+清单，产出里有该目录而 `bundle.resources` 没列，就直接失败并点名，不再依赖人记得来改文档。
 
 **新增 glob 后必须验证**（CI 与本地都跑）：
 

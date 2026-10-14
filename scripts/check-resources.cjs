@@ -120,6 +120,51 @@ function dump(label, entries) {
   if (entries.length > 50) console.error(`  ... and ${entries.length - 50} more`);
 }
 
+/**
+ * 从 build_sidecar.py 读出 Nuitka 点名打包的 Python 包（--include-package=X）。
+ *
+ * 为什么要在资源校验里管这个：bundle.resources 是三端手写的白名单，
+ * Nuitka 把依赖「提升」到 src-tauri/ 根之后，只有列进白名单的目录才会进 .app。
+ * v2.3.7 就栽在这：curl_cffi 的指纹二进制 `_wrapper.abi3.so` 在 curl_cffi/ 目录里，
+ * 顶层 `*.so` 抓不到它，于是产物里只剩 `_cffi_backend.so`——import 失败、
+ * 代码按设计降级回 requests，表现是「解析一切正常，但 JA3 还是 Python 的」，
+ * 不看 bundle 里的文件永远发现不了。所以这里把「产出里有这个目录」和
+ * 「白名单里有这个目录」强制对上，不让再加一个二进制包时漏改某个平台。
+ */
+function includePackages() {
+  const py = path.resolve(__dirname, '..', 'hancast-backend', 'scripts', 'build_sidecar.py');
+  if (!fs.existsSync(py)) return [];
+  const src = fs.readFileSync(py, 'utf8');
+  const found = new Set();
+  for (const m of src.matchAll(/--include-package=([A-Za-z0-9_.-]+)/g)) found.add(m[1]);
+  return [...found].sort();
+}
+
+function checkBinaryPackages(resources) {
+  const listed = new Set(
+    resources
+      .filter((p) => p.endsWith('/**/*'))
+      .map((p) => p.split('/')[0])
+  );
+  let failed = 0;
+  for (const pkg of includePackages()) {
+    const { files } = match(`${pkg}/**/*`);
+    if (files.length === 0) {
+      // 目录形态不存在：纯 Python 会被编进可执行文件，只有顶层 .so/.pyd 的靠 *.so / *.pyd 收
+      console.log(`  ok       ${pkg}  -> 产出无独立目录`);
+      continue;
+    }
+    if (!listed.has(pkg)) {
+      failed += 1;
+      console.error(`  MISSING  ${pkg}/**/*  -> 产出里有 ${files.length} 个文件，但 bundle.resources 没列它`);
+      console.error(`           这些文件不会进安装包，运行时 import 失败后代码会静默降级。`);
+      continue;
+    }
+    console.log(`  ok       ${pkg}  -> ${files.length} file(s) 已列入 resources`);
+  }
+  return failed;
+}
+
 function main() {
   const { resources, source } = resolveResources();
   console.log(`platform        : ${PLATFORM}`);
@@ -169,14 +214,19 @@ function main() {
 
   console.log(`\ntotal files that will be bundled: ${bundled}`);
 
-  if (failed > 0) {
-    console.error(`\n${failed} resource glob(s) matched no file. tauri build WILL fail.`);
+  // 白名单之外还要管「二进制包目录有没有被列进白名单」——见 checkBinaryPackages 的注释
+  const pkgFailed = checkBinaryPackages(resources);
+
+  if (failed > 0 || pkgFailed > 0) {
+    console.error(
+      `\n${failed + pkgFailed} resource check(s) failed. tauri build WILL fail (or silently drop a dependency).`
+    );
     dump('src-tauri/ top level:', fs.readdirSync(TAURI_DIR).sort());
     dump('Nuitka dist (src-tauri/hancast-sidecar/):', isDir(path.join(TAURI_DIR, 'hancast-sidecar')) ? fs.readdirSync(path.join(TAURI_DIR, 'hancast-sidecar')).sort() : []);
     process.exit(1);
   }
 
-  console.log('\nAll resource globs matched at least one file.');
+  console.log('\nAll resource globs matched at least one file, and every binary package dir is listed.');
   if (warned > 0) {
     console.warn(`${warned} glob(s) matched directories that tauri will silently drop.`);
   }
