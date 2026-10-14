@@ -9,10 +9,10 @@
     },
     {
       "name": "hancast-douyin",
-      "version": "1.0.0",
-      "url": "https://raw.githubusercontent.com/pingod/HanCast/main/rule-packs/dist/hancast-douyin-1.0.0.zip",
-      "sha256": "617d44a1b74d5cb92a04bbba3d05f82649c4ce27f92ac402c6980340b989302c",
-      "description": "抖音分享页解析：分享页内嵌 JSON 取 play_addr，比通用正文提取可靠。"
+      "version": "1.1.0",
+      "url": "https://raw.githubusercontent.com/pingod/HanCast/main/rule-packs/dist/hancast-douyin-1.1.0.zip",
+      "sha256": "896b8204afd6132c638a106ff5fe7ff60708d2921b0474803873f52daadaff72",
+      "description": "抖音分享页解析：先领 ttwid 再取分享页内嵌 JSON 的 play_addr，并对抖音抽风重试。"
     },
     {
       "name": "hancast-template",

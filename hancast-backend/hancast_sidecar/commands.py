@@ -34,42 +34,6 @@ import requests
 logger = logging.getLogger("hancast.commands")
 
 
-def find_mpv_path() -> str:
-    """查找 MPV 可执行文件路径"""
-    # 1. 检查环境变量
-    mpv_path = os.environ.get("MPV_PATH")
-    if mpv_path and os.path.exists(mpv_path):
-        return mpv_path
-
-    # 2. 确定基础路径
-    if getattr(sys, 'frozen', False):
-        # 打包后：sidecar 的 current_dir 已设为资源根目录
-        base_path = os.getcwd()
-    else:
-        # 开发环境：向上 4 级到项目根
-        base_path = os.path.dirname(
-            os.path.dirname(
-                os.path.dirname(
-                    os.path.dirname(os.path.abspath(__file__))
-                )
-            )
-        )
-
-    # Windows
-    if os.name == 'nt':
-        project_mpv = os.path.join(base_path, 'mpv', 'mpv.exe')
-        if os.path.exists(project_mpv):
-            return os.path.abspath(project_mpv)
-    else:
-        # macOS / Linux
-        project_mpv = os.path.join(base_path, 'mpv', 'mpv')
-        if os.path.exists(project_mpv):
-            return os.path.abspath(project_mpv)
-
-    # 3. 默认使用系统 PATH 中的 mpv
-    return "mpv"
-
-
 class CommandHandler:
     def _get_local_ip(self) -> str:
         """获取本机 IP（优先使用用户选定的网络接口）"""
@@ -223,6 +187,7 @@ class CommandHandler:
         # 设置回调
         self.ssdp.set_callbacks(
             on_device_found=self._on_device_found,
+            on_device_lost=self._on_device_lost,
             should_ignore_device=self._should_ignore_device
         )
 
@@ -313,6 +278,10 @@ class CommandHandler:
     def _should_ignore_device(self, device_udn: str) -> bool:
         """检查设备是否应该被忽略（隐藏）"""
         return self.config.is_device_hidden(device_udn)
+
+    def _on_device_lost(self, device_udn: str):
+        """设备下线（byebye 或探活无应答）：前端按 id 把它从列表里摘掉"""
+        protocol_io.emit_event("device_lost", {"id": device_udn})
 
     def _emit_event(self, event_name: str, data: dict):
         """推送事件到前端"""

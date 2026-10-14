@@ -623,5 +623,86 @@ class TestRuleInventory(unittest.TestCase):
         self.assertEqual([r.priority for r in ext], [5])
 
 
+class TestShippedDouyinPack(unittest.TestCase):
+    """官方抖音包对着「假抖音」跑：没领券就只有验证码中间页
+
+    现场取证（2026-10-14）：分享页只对带 ttwid 的请求回吐内嵌 JSON，
+    没有这张券时 6/6 全是中间页；先 GET iesdouyin 根路径领券再取分享页则 6/6 命中。
+    """
+
+    CAPTCHA = ("<html><title>验证码中间页</title>"
+               "<script src=\"https://.../captcha/index.js\"></script></html>")
+    SHARE_JSON = (
+        '{"video":{"play_addr":{"url_list":['
+        '"https:\\u002F\\u002Fwww.douyin.com\\u002Faweme\\u002Fv1\\u002Fplaywm'
+        '\\u002F?video_id=v0200f\\u0026ratio=1080p"}]},"desc":"抖音标题"}')
+
+    class Net:
+        def __init__(self, give_captcha_first=False):
+            self.seeded = False
+            self.shares = 0
+            self.captcha_first = give_captcha_first
+            self.calls = []
+
+        def request(self, method, url, **kw):
+            self.calls.append(url)
+            if url.rstrip("/").endswith("iesdouyin.com"):
+                self.seeded = True          # 根路径下发 ttwid
+                return FakeResponse(url=url, body=b"<html>home</html>")
+            if "/share/video/" in url:
+                self.shares += 1
+                if not self.seeded or (self.captcha_first and self.shares == 1):
+                    return FakeResponse(url=url, body=TestShippedDouyinPack.CAPTCHA.encode())
+                return FakeResponse(url=url,
+                                    body=TestShippedDouyinPack.SHARE_JSON.encode())
+            raise AssertionError(f"用例未桩掉该地址（保持离线）: {url}")
+
+    def _resolve(self, net):
+        pack_js = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               "..", "..", "rule-packs", "hancast-douyin", "main.js")
+        with open(pack_js, encoding="utf-8") as f:
+            js = f.read()
+        rt = jsruntime_mod.JsRuntime(
+            "hancast-douyin", [js], prefs={},
+            on_prefs_change=lambda: None, cache_dir=_isolated_rules_dir(self))
+        return rt.call_rule(
+            0, {"url": "https://www.iesdouyin.com/share/video/7696270412111416585/",
+                "body": "", "base": "https://www.iesdouyin.com/"},
+            time.monotonic() + 30, net)
+
+    def test_seeds_ttwid_before_share_page(self):
+        net = self.Net()
+        net.seeded = True                 # 券已经在会话里 → 首发的 body 也带券
+        out = self._resolve(net)
+        self.assertEqual(net.calls[0], "https://www.iesdouyin.com/")
+        self.assertEqual(out["url"],
+                         "https://www.douyin.com/aweme/v1/play/?video_id=v0200f&ratio=1080p")
+        self.assertEqual(out["title"], "抖音标题")
+
+    def test_retries_until_share_page_has_payload(self):
+        """抖音按请求抽风：第一发给了中间页，重试就该拿到正文"""
+        net = self.Net(give_captcha_first=True)
+        out = self._resolve(net)
+        self.assertEqual(net.shares, 2)
+        self.assertIn("/aweme/v1/play/", out["url"])
+
+    def test_persistent_captcha_reports_verification(self):
+        """一直只给中间页时如实说「要人机验证」，不再谎报「未找到播放地址」"""
+        class NoCookieNet(self.Net):
+            def request(self, method, url, **kw):
+                self.calls.append(url)
+                if "/share/video/" in url:
+                    self.shares += 1
+                    return FakeResponse(url=url,
+                                        body=TestShippedDouyinPack.CAPTCHA.encode())
+                return FakeResponse(url=url, body=b"<html>home</html>")
+
+        net = NoCookieNet()
+        with self.assertRaises(Exception) as ctx:
+            self._resolve(net)
+        self.assertIn("人机验证", str(ctx.exception))
+        self.assertEqual(net.shares, 3)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -30,7 +30,7 @@ fi
 
 cd /Users/pavia/githome/HanCast || exit 1
 for rel in ssdp.py commands.py params.py security/guard.py protocol/dlna.py protocol/server.py \
-           models/session.py renderer/mpv.py screencast/manager.py screencast/capture.py \
+           models/session.py models/media.py renderer/mpv.py screencast/manager.py screencast/capture.py \
            screencast/httpd.py screencast/ffmpeg_manager.py screencast/www/index.html \
            screencast/macos_tap.py utils/logger.py utils/config.py main.py \
            media/server.py media/share_resolver.py media/rules/__init__.py media/rules/base.py \
@@ -323,6 +323,42 @@ if grep -q '环回 feeder 停止' "$RES/screencast/capture.py" \
   say "PASS 环回 feeder 停止带异常与 ffmpeg 状态"
 else
   say "FAIL 环回 feeder 停止仍只报「FFmpeg stdin 已关闭」"; fails=$((fails+1))
+fi
+
+# ── v2.3.5 本轮契约：代理不再挖字节 / 封面走 https / 下线设备要消失 ──
+
+# 判型窗口多读的字节必须原样交给响应体：B 站 mp4 的 moov 在文件尾，
+# 中间少 908 字节 mpv 直接 "Errors when loading file"（解析成功、投屏黑屏）。
+if grep -q 'return buf\[:want\]' "$RES/media/server.py"; then
+  say "FAIL _peek_upstream 仍把多读的字节裁掉（又会挖空投屏流）"; fails=$((fails+1))
+else
+  say "PASS 代理转发的字节数与上游一致（不再截断判型窗口）"
+fi
+
+# 封面图：打包版页面是安全上下文，http 图片会被按混合内容直接拦掉
+# （B 站 data.pic 下发的就是 http://，表现为投屏卡片图片挂了）。
+if grep -q 'def secure_thumbnail' "$RES/models/media.py" \
+   && grep -q 'secure_thumbnail(self.thumbnail)' "$RES/models/media.py"; then
+  say "PASS 封面统一升级 https"
+else
+  say "FAIL 冻结产物没做封面 https 归一"; fails=$((fails+1))
+fi
+
+# 下线设备：byebye 立刻摘 + 静默的要探活两次才摘，并如实推 device_lost。
+# 只删不推事件的话，前端那张卡片会一直挂着。
+if grep -q 'def _handle_byebye' "$RES/ssdp.py" \
+   && grep -q 'def _sweep_stale_devices' "$RES/ssdp.py" \
+   && grep -q 'on_device_lost=self._on_device_lost' "$RES/commands.py" \
+   && grep -q 'emit_event("device_lost"' "$RES/commands.py"; then
+  say "PASS 设备下线链路完整（byebye + 探活 + device_lost 事件）"
+else
+  say "FAIL 设备下线链路缺失（下线了还挂在列表里）"; fails=$((fails+1))
+fi
+if echo "$PARAMS_JSON" | /usr/bin/python3 -c \
+     'import json,sys; sys.exit(0 if "discovery.device_stale_s" in json.load(sys.stdin) else 1)'; then
+  say "PASS discovery.device_stale_s 已在参数登记表"
+else
+  say "FAIL 参数表缺 discovery.device_stale_s（下线判定没法调）"; fails=$((fails+1))
 fi
 
 say "--- $([ $fails -eq 0 ] && echo 'ALL PASS' || echo "$fails FAIL") ---"

@@ -106,6 +106,13 @@ PARAM_SPECS: List[Dict] = [
      "label_zh": "单播确认超时", "label_en": "Unicast probe timeout",
      "help_zh": "设备确认（Device Guard）单播探测某台设备的应答等待时间",
      "help_en": "Unicast probe reply timeout used by Device Guard"},
+    {"key": "discovery.device_stale_s", "section": "discovery",
+     "type": "number", "default": 90, "min": 30, "max": 600, "unit": "s",
+     "label_zh": "设备下线判定的静默时长", "label_en": "Device silence threshold",
+     "help_zh": "设备这么久没再通告就主动探一次它的描述地址；连探两次都不应答就按离线从列表移除。"
+                "调大 = 更不易误删偶尔不心跳的电视，调小 = 关掉的设备消失得更快",
+     "help_en": "Silent devices are re-probed after this; two failed probes drop them. "
+                "Raise for TVs that skip heartbeats, lower to evict powered-off gear faster"},
 
     # ── 媒体服务 ──
     {"key": "media.http_timeout_seconds", "section": "media",

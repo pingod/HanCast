@@ -277,3 +277,100 @@ def test_foreign_announce_still_fetched(service, monkeypatch):
                             "usn": "uuid:win"}, ("192.168.1.68", 1900))
     time.sleep(0.3)
     assert calls == [(LOC, "192.168.1.68")]
+
+
+# ── 设备下线：byebye 立刻摘除，静默的要探活两次才摘 ──────────────────
+
+UDN = "uuid:9d2b1c00-1111-2222-3333-444455556666"
+
+
+class _InlineThread:
+    """把探活线程变成同步执行，用例才有确定性"""
+
+    def __init__(self, target=None, args=(), **kw):
+        self._target, self._args = target, args
+
+    def start(self):
+        self._target(*self._args)
+
+
+def _registered(service):
+    dev = Device(id=UDN, name="WIN-PC HanCast", device_type="tv",
+                 ip="192.168.1.68", port=8080, status="online", location=LOC)
+    service._register_found_device(dev, "NOTIFY")
+    service._fetched_locations[LOC] = time.time()
+    return dev
+
+
+def test_byebye_evicts_device_at_once(service):
+    _registered(service)
+    lost = []
+    service._on_device_lost = lost.append
+
+    service._handle_notify({"nts": "ssdp:byebye", "nt": "upnp:rootdevice",
+                            "usn": f"{UDN}::urn:schemas-upnp-org:device:MediaRenderer:1"},
+                           ("192.168.1.68", 1900))
+
+    assert service.get_devices() == []
+    assert lost == [UDN], "前端 device_lost 只认 id"
+    assert LOC not in service._fetched_locations, "重开机后下一轮 alive 要能重抓描述"
+
+
+def test_byebye_without_uuid_falls_back_to_ip(service):
+    """有些实现告别时只发 NT: upnp:rootdevice，没有 uuid 也要认得出是谁"""
+    _registered(service)
+    lost = []
+    service._on_device_lost = lost.append
+
+    service._handle_notify({"nts": "ssdp:byebye", "nt": "upnp:rootdevice"},
+                           ("192.168.1.68", 1900))
+
+    assert lost == [UDN]
+
+
+def test_stale_device_needs_two_failed_probes_to_evict(service, monkeypatch):
+    """瞬断/一次组播丢失不能把还在的电视摘掉：连败两次才动手"""
+    dev = _registered(service)
+    lost = []
+    service._on_device_lost = lost.append
+    service._last_seen[dev.id] = time.monotonic() - 120
+    monkeypatch.setattr("hancast_sidecar.ssdp.requests.get",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            requests.ConnectionError("connection refused")))
+    monkeypatch.setattr("hancast_sidecar.ssdp.threading.Thread", _InlineThread)
+
+    service._sweep_stale_devices()
+    assert service.get_devices() != [], "第一次无应答只警告"
+    assert lost == []
+
+    service._last_seen[dev.id] = time.monotonic() - 120
+    service._sweep_stale_devices()
+    assert service.get_devices() == []
+    assert lost == [UDN]
+
+
+def test_stale_device_answering_probe_stays(service, monkeypatch):
+    """只在开机时通告一次的电视：探活有应答就续命，不能因为没心跳被摘"""
+    dev = _registered(service)
+    service._last_seen[dev.id] = time.monotonic() - 120
+    monkeypatch.setattr("hancast_sidecar.ssdp.requests.get",
+                        lambda *a, **k: _Resp())
+    monkeypatch.setattr("hancast_sidecar.ssdp.threading.Thread", _InlineThread)
+
+    service._sweep_stale_devices()
+
+    assert service.get_device(UDN) is not None
+    assert time.monotonic() - service._last_seen[UDN] < 1
+
+
+def test_alive_refreshes_seen_even_when_fetch_deduped(service, monkeypatch):
+    """去重窗口内不重抓描述，但 alive 本身就是「它还在线」的证据"""
+    dev = _registered(service)
+    monkeypatch.setattr(service, "_fetch_device_from_notify",
+                        lambda loc, ip: pytest.fail("去重窗口内不该重抓"))
+    service._last_seen[dev.id] = time.monotonic() - 120
+
+    service._handle_notify({"nts": "ssdp:alive", "location": LOC, "usn": UDN},
+                           ("192.168.1.68", 1900))
+
+    assert time.monotonic() - service._last_seen[UDN] < 1

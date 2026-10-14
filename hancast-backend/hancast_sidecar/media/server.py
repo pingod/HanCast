@@ -539,18 +539,23 @@ class MediaHandler(BaseHTTPRequestHandler):
 
     @staticmethod
     def _peek_upstream(resp, want: int = _disguise_peek_len("")) -> bytes:
-        """取上游开头若干字节（只够判型），后续 iter_content 会从断点继续
+        """取上游开头若干字节（至少够判型），返回的就是「已经从流里读走的」全部字节
 
         分块编码下首个 chunk 可能只有几十字节，而「图片伪装头 + 连续对齐的 TS 包」
         的判定至少要扫到判型窗口再留出几个包，所以按目标长度累计而不是取一块就返回。
         窗口多深由 _disguise_peek_len 按上游 Content-Type 决定。
+
+        **不许截断成 want 字节**：调用方把返回值当作响应体的开头写回客户端，
+        多读的那点（chunk 对齐产生的 ≤1KB）一裁就从流中间挖掉一段。B 站 mp4 的
+        moov 在文件尾，中间少 908 字节 mpv 直接 "Errors when loading file"，
+        表现为「解析成功、投屏黑屏」。
         """
         buf = b""
         for chunk in resp.iter_content(chunk_size=1024):
             buf += chunk
             if len(buf) >= want:
                 break
-        return buf[:want]
+        return buf
 
     def _send_rewritten_playlist(self, resp, headers: dict):
         text = resp.content.decode("utf-8", errors="replace")

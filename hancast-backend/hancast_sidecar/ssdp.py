@@ -176,6 +176,10 @@ class SSDPService:
         # location → 连续抓取失败次数：失败要重试（否则一次瞬断就把设备
         # 藏住 30s 以上），但告警只打第一次，避免每轮刷屏
         self._fetch_failures: Dict[str, int] = {}
+        # udn → 最近一次「确认它还在」的时刻（alive / M-SEARCH 回包 / 探活成功）
+        self._last_seen: Dict[str, float] = {}
+        # udn → 连续探活失败次数：连败两次才判离线，给瞬断留一次余地
+        self._probe_failures: Dict[str, int] = {}
 
         # 同一时刻只允许一个 M-SEARCH 扫描线程（避免用户连续点刷新时线程堆积）
         self._scan_lock = threading.Lock()
@@ -595,6 +599,11 @@ class SSDPService:
         (host, port) = host_port
         nts = headers.get('nts', '')
 
+        # 设备主动告别（关机/断网时多数实现会发一条）
+        if nts == 'ssdp:byebye':
+            self._handle_byebye(headers, host)
+            return
+
         # 只处理 ssdp:alive 通知（设备上线）
         if nts != 'ssdp:alive':
             return
@@ -606,6 +615,9 @@ class SSDPService:
         if self._is_own_location(location):
             logger.debug('Ignoring self-announce NOTIFY for %s' % location)
             return
+
+        # 听到 alive 本身就是「它还在线」的证据，即便这次不重新抓描述
+        self._touch_by_location(location)
 
         # 去重：同一 location 在去重窗口内不重复抓取
         with self._fetched_locations_lock:
@@ -664,6 +676,7 @@ class SSDPService:
         if self._should_ignore_device and self._should_ignore_device(device.id):
             logger.debug(f"Ignoring hidden device: {device.name} ({device.id})")
             return
+        self._mark_seen(device.id)
         with self._lock:
             old = self._devices.get(device.id)
             if old is None:
@@ -678,12 +691,91 @@ class SSDPService:
                     device.custom_name = old.custom_name
                 self._devices[device.id] = device
 
+    def _mark_seen(self, udn: str) -> None:
+        """记下「刚刚还确认它存在」，下线判定以它为基准"""
+        self._last_seen[udn] = time.monotonic()
+        self._probe_failures.pop(udn, None)
+
+    def _touch_by_location(self, location: str) -> None:
+        """收到某台设备任意一条 alive 就刷新其存活时间（含被去重跳过的那些）"""
+        with self._lock:
+            for device in self._devices.values():
+                if device.location == location:
+                    self._mark_seen(device.id)
+                    return
+
+    def _forget_device(self, device: Device, reason: str) -> None:
+        """从设备表摘掉一台设备并通知前端（前端在 device_lost 上只做过滤）"""
+        with self._lock:
+            self._devices.pop(device.id, None)
+        self._last_seen.pop(device.id, None)
+        self._probe_failures.pop(device.id, None)
+        if device.location:
+            # 清掉抓取记录：关机后马上重开的设备，下一轮 alive 就得重新抓描述
+            with self._fetched_locations_lock:
+                self._fetched_locations.pop(device.location, None)
+                self._fetch_failures.pop(device.location, None)
+        logger.info(f"设备已下线（{reason}）: {device.name} ({device.ip}:{device.port})")
+        if self._on_device_lost:
+            self._on_device_lost(device.id)
+
+    def _handle_byebye(self, headers, host: str) -> None:
+        """ssdp:byebye：设备主动告别，立刻摘除，不必再等探活
+
+        USN 形如 ``uuid:xxx::urn:schemas-upnp-org:device:MediaRenderer:1``，
+        但有些实现只发 ``NT: upnp:rootdevice``（不带 uuid）——那就按 IP 认。
+        """
+        usn = (headers.get('usn') or headers.get('nt') or '').strip()
+        udn = usn.split('::')[0].strip() if usn.startswith('uuid:') else ''
+        with self._lock:
+            hit = self._devices.get(udn) if udn else None
+            if hit is None:
+                hit = next((d for d in self._devices.values() if d.ip == host), None)
+        if hit is not None:
+            self._forget_device(hit, "收到 byebye")
+
+    def _sweep_stale_devices(self) -> None:
+        """静默超时的设备先问一次，别把「不心跳」的电视误删
+
+        不少渲染器只在开机时通告一次（CACHE-AGE 能写到几小时），之后
+        NOTIFY 也可能被交换机/组播吞掉。「没再听到」因此只是嫌疑，
+        真正的判定依据是它自己的描述地址：连问两次都不应答才摘除。
+        """
+        stale_s = float(param("discovery.device_stale_s"))
+        now = time.monotonic()
+        with self._lock:
+            candidates = [d for d in self._devices.values()
+                          if now - self._last_seen.get(d.id, now) >= stale_s]
+        if candidates:
+            threading.Thread(target=self._probe_stale_devices,
+                             args=(candidates,), daemon=True).start()
+
+    def _probe_stale_devices(self, candidates: List[Device]) -> None:
+        for device in candidates:
+            url = device.location or f"http://{device.ip}:{device.port}/description.xml"
+            try:
+                # 有任何 HTTP 应答就说明那台机器还在；404 也算活着 ——
+                # 手工添加的设备未必知道描述的确切路径
+                requests.get(url, timeout=5, proxies=_NO_PROXY)
+            except Exception as e:
+                logger.debug(f"探活无应答 {device.name} {url}: {e}")
+                fails = self._probe_failures.get(device.id, 0) + 1
+                self._probe_failures[device.id] = fails
+                if fails >= 2:
+                    self._forget_device(device, f"连续 {fails} 次探活无应答")
+                else:
+                    logger.info(f"设备 {device.name} 已静默且探活无应答，"
+                                f"下轮仍无应答就移除（第 {fails} 次）")
+                continue
+            self._mark_seen(device.id)
+
     def _notify_loop(self):
         """每 30 秒发送 NOTIFY 广播（UPnP 规范允许最大 255 秒间隔）"""
         round_no = 0
         while self._running:
             try:
                 self._do_notify()
+                self._sweep_stale_devices()
                 round_no += 1
                 if round_no == 1 or round_no % 20 == 0:
                     # 心跳：排查「对端发现不到本机」时，这是 alive 到底有没有
@@ -1090,6 +1182,7 @@ class SSDPService:
             raise ValueError(f"设备 {device.display_name} 已被隐藏，请先取消隐藏")
 
         new_device = False
+        self._mark_seen(device.id)
         with self._lock:
             old = self._devices.get(device.id)
             if old is None:

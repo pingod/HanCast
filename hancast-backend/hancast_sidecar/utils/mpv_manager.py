@@ -107,6 +107,12 @@ class MpvManager:
             项目根/
             ├── mpv/mpv.exe
             └── hancast-backend/hancast_sidecar/utils/mpv_manager.py
+
+        macOS 打包版是 ``HanCast.app/Contents/Resources/mpv/mpv.app``
+        （Rust 把 current_dir 设成 resource_dir），Windows/Linux 是 ``mpv/mpv.exe``
+        或 ``mpv/mpv``。以前这里只探 ``mpv/mpv.exe``，于是 macOS 上永远命中不了，
+        退到「向上 4 级」算出的 ``Contents/``，随包的 mpv 就在隔壁 Resources 里
+        却看不见 —— 装了 Homebrew mpv 的机器被 PATH 兜住，干净的机器直接没播放器。
         """
         # 尝试多个可能的路径
         candidates = [
@@ -115,9 +121,7 @@ class MpvManager:
         ]
 
         for path in candidates:
-            mpv_path = os.path.join(path, "mpv", "mpv.exe")
-            logger.info(f"[MPV Manager] Checking: {mpv_path}")
-            if os.path.isfile(mpv_path):
+            if self._has_bundled_mpv(path):
                 logger.info(f"[MPV Manager] Found mpv at: {path}")
                 return path
 
@@ -131,6 +135,14 @@ class MpvManager:
         )
         logger.info(f"[MPV Manager] Using dev_path: {dev_path}")
         return dev_path
+
+    def _has_bundled_mpv(self, base: str) -> bool:
+        """这一层目录下是否带着 mpv（含 macOS 的 mpv.app 这种 bundle 形态）"""
+        d = os.path.join(base, "mpv")
+        names = ("mpv.exe", "mpv") if os.name == "nt" else ("mpv",)
+        if any(os.path.isfile(os.path.join(d, n)) for n in names):
+            return True
+        return os.path.isdir(os.path.join(d, "mpv.app"))
 
     def _find_in_program_dir(self) -> Optional[str]:
         """在程序目录 mpv/ 中查找 mpv 可执行文件"""

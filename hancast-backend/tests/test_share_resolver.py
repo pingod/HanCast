@@ -347,6 +347,22 @@ class TestResolveRouting(unittest.TestCase):
         self.assertNotIn("u002F", info["uri"])
         self.assertEqual(info["title"], "抖音标题")
 
+    def test_pack_rule_http_thumbnail_upgraded(self):
+        """B 站 data.pic 下发的是 http:// 封面：打包版界面是安全上下文，
+        http 图片会被按混合内容拦掉（投屏卡片图片挂了），交付前统一升 https"""
+        js = ("registerRule({id:'bl', name:'bl-play', hosts:['bili.example'],"
+              "stage:'page', resolve:function(c){"
+              "  var m=/\"playUrl\":\"([^\"]+)\"/.exec(c.body);"
+              "  if(!m) throw new Error('no playUrl');"
+              "  return {url:m[1], thumbnail:'http://i2.bili.example/x.jpg'};}});")
+        self.resolver.plugin_mgr.import_zip_bytes(_make_pack("bl-pack", js))
+        html = '<script>{"playUrl":"https://xy.bili.example/v.m4s?sign=1"}</script>'
+        with patch.object(ShareResolver, "_open",
+                          return_value=("https://bili.example/video/BV1xx",
+                                        "text/html", None, html.encode())):
+            info = self.resolver.resolve("https://bili.example/video/BV1xx")
+        self.assertEqual(info["thumbnail"], "https://i2.bili.example/x.jpg")
+
     def test_empty_text_raises(self):
         with self.assertRaises(ValueError):
             self.resolver.resolve("   ")
@@ -669,6 +685,10 @@ class TestMediaProxyRewrite(unittest.TestCase):
 
         head = MediaHandler._peek_upstream(Resp())
         self.assertGreaterEqual(len(head), 1024)
+        # 只多不少：peek 的返回值就是「已经从流里读走的」全部字节，
+        # 裁成窗口长度等于在响应体中间挖洞
+        self.assertEqual(head, b"".join(
+            b"\x47\x40\x11\x00" + b"\x00" * 184 for _ in range(8))[:len(head)])
 
     def test_proxy_bare_retry_predicate(self):
         """页面域头可能就是被拒的原因，4xx 时该用裸 UA 再试一次"""
@@ -704,21 +724,42 @@ class TestMediaProxyRewrite(unittest.TestCase):
         self.assertEqual(body, self._DISGUISED_TS)
         self.assertEqual(hdrs["Content-Type"], "image/png")
 
-    def _drive_proxy(self, range_header):
+    def test_proxy_forwards_every_byte_across_peek_window(self):
+        """判型窗口落在 chunk 中间时，多读进来的字节一个都不许丢
+
+        v2.3.4 的 B 站投屏「解析成功、播放器报 Errors when loading file」就是这个：
+        peek 按 1024 累计到 6144 才够 5236 的窗口，却把返回值裁成 5236，
+        于是流中间凭空少 908 字节。mp4 的 moov 在文件尾，少这一段整条流就废了，
+        而 TS 分片丢了 908 字节只是花一下——所以这个洞只在 mp4 上暴露出来。
+        """
+        body = b"".join(bytes([i % 251]) * 1024 for i in range(12))   # 12288 字节，无伪装头
+        status, hdrs, got = self._drive_proxy(None, data=body,
+                                              chunk=1024, ctype="video/mp4")
+        self.assertEqual(status, 200)
+        self.assertEqual(got, body)
+        self.assertEqual(hdrs["Content-Length"], str(len(body)))
+
+    def _drive_proxy(self, range_header, data=None, chunk=None, ctype="image/png"):
         from io import BytesIO
         from hancast_sidecar.media import server as srv
+
+        body = self._DISGUISED_TS if data is None else data
+        # chunk 不为空时按真实分块编码喂：peek 会多读一整个 chunk，
+        # 少一个字节都说明代理在流的中间挖了洞
+        parts = ([body[i:i + chunk] for i in range(0, len(body), chunk)]
+                 if chunk else [body])
 
         class Resp:
             url = "https://file.icve.com.cn/rc/a.png"
 
             def __init__(self, data):
                 self.status_code = 206 if range_header else 200
-                self.headers = {"Content-Type": "image/png",
+                self.headers = {"Content-Type": ctype,
                                 "Content-Length": str(len(data))}
                 if range_header:
                     self.headers["Content-Range"] = f"bytes 0-{len(data) - 1}/{len(data)}"
                     self.headers["Accept-Ranges"] = "bytes"
-                self._parts = [data]
+                self._parts = list(parts)
 
             def iter_content(self, chunk_size=1024):
                 # 与真实流一致：peek 读过的字节不会在后续转发里重复出现
@@ -741,7 +782,7 @@ class TestMediaProxyRewrite(unittest.TestCase):
         h.send_error = lambda code, msg=None: sent.__setitem__("status", code)
 
         with patch.object(srv, "upstream_get",
-                          return_value=Resp(self._DISGUISED_TS)):
+                          return_value=Resp(body)):
             h._handle_proxy()
         return sent["status"], sent.get("headers", {}), h.wfile.getvalue()
 
