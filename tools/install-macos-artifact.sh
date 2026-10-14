@@ -4,7 +4,11 @@
 #
 # 装的是 CI 产物本身，不做任何补丁（重签/替换文件都不许）——装完直接跑
 # tools/accept-macos-artifact.sh 验收。
-# 本机 sudo 要密码，所以整个提权过程打包成一条 osascript，只弹一次授权框。
+#
+# 全程不提权：/Applications 属 root:admin 且组可写，当前用户在 admin 组就能直接装。
+# （2026-10-14 之前这里走 osascript 弹管理员授权框，根因是最早的手搓脚本多写了一行
+#   `chown -R root:wheel`，把包做成只有 root 能动，于是每轮装包、每轮清理都要弹框。
+#   那行已删，遗留归属也已一次性 chown 回当前用户。）
 set -euo pipefail
 
 VER="${1:?用法: $0 <version> <dmg>}"
@@ -37,21 +41,18 @@ fi
 OLD_VER=$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist" 2>/dev/null || echo none)
 ASIDE="/tmp/HanCast_pre_${OLD_VER//./}_$(date +%H%M%S).app"
 
-SCRIPT="/tmp/hancast-install-$$.sh"
-cat >"$SCRIPT" <<EOF
-set -e
+if [ -e "$APP" ] && [ ! -w "$APP" ]; then
+  echo "FAIL $APP 当前用户不可写（root:wheel 遗留）。一次性修好后再来：sudo chown -R $(id -un) \"$APP\""
+  exit 1
+fi
+
 [ ! -d "$APP" ] || mv "$APP" "$ASIDE"
 ditto "$SRC" "$APP"
-chown -R root:wheel "$APP"
-plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist"
-EOF
-chmod +x "$SCRIPT"
-# 空脚本也会「授权成功」，装完还是旧版——必须在弹框前就挡住
-grep -q ditto "$SCRIPT" || { echo "FAIL 生成的提权脚本不完整: $SCRIPT"; exit 1; }
 
-OUT=$(osascript -e "do shell script \"/bin/bash $SCRIPT\" with administrator privileges with prompt \"安装 HanCast $VER\"" | tr -d '\r')
-rm -f "$SCRIPT"
-
-echo "已安装: $OUT（原 $OLD_VER 移到 $ASIDE）"
+OUT=$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")
+OWNER=$(stat -f '%Su:%Sg' "$APP")
+# 滚动包在 /tmp，系统会自行清扫，别把它当长期备份
+echo "已安装: $OUT（原 $OLD_VER 移到 $ASIDE，归属 $OWNER）"
 [ "$OUT" = "$VER" ] || { echo "FAIL 安装后版本不符"; exit 1; }
+[ "$OWNER" = "$(id -un):staff" ] || echo "WARN 归属不是 $(id -un):staff，下次装包会要管理员授权"
 codesign -dvvv "$APP" 2>&1 | grep -E '^Identifier=|linker-signed' | head -2
