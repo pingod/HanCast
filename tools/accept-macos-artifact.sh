@@ -96,14 +96,27 @@ else
 fi
 
 # 后台参数：打包进去的那张表才是设置页真正渲染的那张表
-PARAMS_JSON=$(/usr/bin/python3 - "$RES" <<'PY'
+load_params() {  # $1 = params.py 路径
+  /usr/bin/python3 - "$1" <<'PY'
 import json, sys, importlib.util
-spec = importlib.util.spec_from_file_location("hp", sys.argv[1] + "/params.py")
+spec = importlib.util.spec_from_file_location("hp", sys.argv[1])
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-print(json.dumps({s["key"]: s["default"] for s in m.PARAM_SPECS}))
+print(json.dumps({s["key"]: s["default"] for s in m.PARAM_SPECS}, sort_keys=True))
 PY
-) 2>/dev/null || PARAMS_JSON='{}'
-chk "参数登记表条数" "$(echo "$PARAMS_JSON" | /usr/bin/python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')" "18"
+}
+PARAMS_JSON=$(load_params "$RES/params.py" 2>/dev/null) || PARAMS_JSON='{}'
+# 基准从被测 tag 的源码现读，不写死条数：写死过 "18"，加一个参数就得同步改脚本，
+# FAIL 只能证明脚本过期，证明不了产物有问题。逐键逐默认值比，能同时抓住多带/漏带/带旧值。
+TAG_DIR=$(mktemp -d)
+# 文件名必须以 .py 结尾：importlib 按后缀选 loader，无后缀的 mktemp 临时文件会静默读不出表
+git show "${TAG}:hancast-backend/hancast_sidecar/params.py" > "$TAG_DIR/params.py" 2>/dev/null
+SRC_PARAMS_JSON=$(load_params "$TAG_DIR/params.py" 2>/dev/null)
+rm -rf "$TAG_DIR"
+if [ -z "$SRC_PARAMS_JSON" ]; then
+  say "FAIL 取不到 $TAG 的参数表基准（tag 没 fetch 到？）"; fails=$((fails+1))
+else
+  chk "参数登记表与 $TAG 源码逐键一致" "$PARAMS_JSON" "$SRC_PARAMS_JSON"
+fi
 chk "浏览器通道默认分片" "$(echo "$PARAMS_JSON" | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)["screencast.browser_segment_seconds"])')" "1"
 chk "电视通道默认分片" "$(echo "$PARAMS_JSON" | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)["screencast.dlna_segment_seconds"])')" "2"
 
