@@ -55,6 +55,18 @@ const targets = [
     ),
   },
   {
+    // Cargo.lock 里本地包 HanCast 的 version 必须与 Cargo.toml 一致：cargo 会校验，
+    // 但 CI 没带 --locked，不一致时它只是悄悄重写 lock，仓库里就留下一份滞后的 lock。
+    // v2.3.8 首发提交就是靠人肉补这行，历史三轮（v2.3.5/6/7）同理，索性收进契约点。
+    file: 'src-tauri/Cargo.lock',
+    read: (c) => c.match(/name = "HanCast"\nversion = "([\d.]+)"/)?.[1],
+    replace: (content) => content.replace(
+      /(name = "HanCast"\nversion = ")[\d.]+(")/,
+      `$1${newVersion}$2`
+    ),
+    expect: (content) => /name = "HanCast"\nversion = "[\d.]+"/.test(content),
+  },
+  {
     file: 'hancast-backend/pyproject.toml',
     read: (c) => c.match(/^version\s*=\s*"([\d.]+)"/m)?.[1],
     replace: (content) => content.replace(

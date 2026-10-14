@@ -12,7 +12,7 @@
 
 - **项目名**: HanCast
 - **作者**: lanzeweie@foxmail.com
-- **版本**: 2.3.6（版本 SSOT 是 `package.json` 的 `version`，`scripts/sync-version.cjs:4`；改版本只走 `npm run version:set`，见「版本管理」）
+- **版本**: 2.3.8（版本 SSOT 是 `package.json` 的 `version`，`scripts/sync-version.cjs:4`；改版本只走 `npm run version:set`，见「版本管理」）
 - **性质**: 二次开发（非原项目官方更新）
 - **原始代码**: [xfangfang/Macast](https://github.com/xfangfang/Macast)（原作者 xfangfang，最后更新 2022-01）。仓库里**不含** `Macast-main/`、`Macast-plugins-main/` 这些本地目录，1.x 源码只作为移植参考，见「原始代码复用情况」
 - **目标架构**: Tauri 2.0 前端 + Rust 桥接 + Python Sidecar（+ MPV 接收端播放、FFmpeg 屏幕抓取）
@@ -557,6 +557,7 @@ scripts/sync-version.cjs
       │
       ├──▶ src-tauri/tauri.conf.json
       ├──▶ src-tauri/Cargo.toml
+      ├──▶ src-tauri/Cargo.lock (本地包 HanCast 那条)
       ├──▶ hancast-backend/pyproject.toml
       ├──▶ hancast-backend/hancast_sidecar/utils/config.py
       ├──▶ src/api/commands.ts (mock 数据)
@@ -568,14 +569,14 @@ scripts/sync-version.cjs
 # 查看当前版本（只打印 package.json 的 version）
 npm run version
 
-# 设置新版本并刷进 6 处契约点
+# 设置新版本并刷进 7 处契约点
 npm run version:set -- 2.3.7
 
 # 无参数同步（prebuild 钩子 + tauri 的 beforeBuildCommand 走的就是这条）
 npm run version:sync
 ```
 
-无参数模式带 **SSOT 滞后闸门**（`sync-version.cjs:111-141`）：任何契约点比 `package.json` 新就 exit 1——
+无参数模式带 **SSOT 滞后闸门**（`sync-version.cjs:123-153`）：任何契约点比 `package.json` 新就 exit 1——
 v2.3.3 发布漏 bump `package.json`，钩子把旧版本忠实地刷回全部契约点，产物自报 2.3.2，
 Windows 安装包文件名都露馅。闸门让它在毫秒级炸掉，而不是安静发出一版错误号的产品。
 

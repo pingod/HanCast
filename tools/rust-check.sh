@@ -45,7 +45,7 @@ stub "mpv/portable_config/mpv.conf"
 stub "ffmpeg/ffmpeg"
 stub "libdummy.so"
 stub "libdummy.dylib"
-for pkg in certifi lxml charset_normalizer hancast_sidecar; do
+for pkg in certifi lxml charset_normalizer curl_cffi hancast_sidecar; do
   stub "$pkg/__init__.py"
 done
 

@@ -1,15 +1,30 @@
 # Changelog
 
-> 最后校对：2026-10-15，对应版本 v2.3.6（`package.json:4`，tag `v2.3.6`）
+> 最后校对：2026-10-15，对应版本 v2.3.8（`package.json:4`）
 
 本文件记录 HanCast 的版本历史。口径说明：
 
 - **一个版本一笔发布提交**，提交信息自带该轮的完整契约说明；版本号与 tag 同名（`v2.3.6` ↔ 提交里的 `（v2.3.6）`）。
-- 版本号唯一来源是 **`package.json` 的 `version`**（`scripts/sync-version.cjs:4,17`），`npm run version:set <x.y.z>` 把它刷进 6 处契约点：`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`hancast-backend/pyproject.toml`、`hancast_sidecar/utils/config.py:39`、`src/api/commands.ts`（mock）、`src/stores/settings.ts`。`scripts/check-version.cjs` 自称以 `tauri.conf.json` 为源（口径相反），但全仓无人调用，是未接线的孤儿脚本——判定以 `sync-version.cjs` 为准。详见 [docs/构建与发布.md](docs/构建与发布.md) §1。
+- 版本号唯一来源是 **`package.json` 的 `version`**（`scripts/sync-version.cjs:4,17`），`npm run version:set <x.y.z>` 把它刷进 7 处契约点：`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`（本地包那条，v2.3.8 起收进来——此前每版都靠人肉补）、`hancast-backend/pyproject.toml`、`hancast_sidecar/utils/config.py:39`、`src/api/commands.ts`（mock）、`src/stores/settings.ts`。`scripts/check-version.cjs` 自称以 `tauri.conf.json` 为源（口径相反），但全仓无人调用，是未接线的孤儿脚本——判定以 `sync-version.cjs` 为准。详见 [docs/构建与发布.md](docs/构建与发布.md) §1。
 - 下表「提交」列即 `git tag <版本>` 指向的提交；细节以 `git show <提交>` 为准，本文只留用户可感知的变化。
 - 新加版本时**同一次提交**里补这里，并按 [docs/README.md](docs/README.md) §4 的约定同步对应文档。
 
 ---
+
+## v2.3.8 — 2026-10-15（`9e3f9c9`）
+
+修 v2.3.7 的一个**产物级**缺陷：源码里的 TLS/JA3 指纹伪造在打包版里根本没生效。
+
+- **根因**：`bundle.resources` 是白名单，v2.3.7 只加了 `--include-package=curl_cffi`，没往三份平台 conf 里加 `curl_cffi/**/*`，于是 Nuitka 冻结出的 `curl_cffi/` 目录在打包时被整体丢弃，`make_session()` 的 `import curl_cffi` 当场失败并静默回落到 `requests`——指纹照样是 python-requests，且日志里一句错都不报。
+- **修法**：三端 conf 各补 `curl_cffi/**/*`（`_cffi_backend*.so/.pyd` 由既有的 `*.so`/`*.pyd` 顶层 glob 接住）；`scripts/check-resources.cjs` 新增预检，把 `build_sidecar.py` 里每条 `--include-package` 与 resources 白名单逐条对齐，产出有该目录而白名单没列就 exit 1；`uv.lock` 补齐 curl-cffi 0.16.3 / cffi 2.1.1 / pycparser 3.11。
+- **契约**：`src-tauri/Cargo.lock` 收进版本契约点（第 7 处），`version:set`、无参数同步、`check-version.cjs` 三处同时覆盖；`tools/rust-check.sh` 的桩列表补 `curl_cffi`，本地 `cargo check` 不会因新 glob 落空而失败。
+- **验收判据**：`tools/accept-macos-artifact.sh` / `tools/verify-windows-artifact.sh` 按 tag 探测 `curl_cffi` 与 `browser.rs`，产物里缺二进制即 FAIL。
+
+## v2.3.7 — 2026-10-15（`2a93873`）
+
+- **浏览器通道**：规则包可借宿主 WebView 真渲染一次（macOS WKWebView / Windows WebView2），离屏加载播放页、静音起播、嗅探 `master.m3u8` 一类流地址，并把含 HttpOnly 的 Cookie 一起搬回给规则包。串行一把锁、90s 熔断，渲染失败规则包照旧走自己的路。
+- **TLS/JA3 指纹伪造**（源码级）：`utils/httpclient.py` `make_session()` 按 UA 反推 curl_cffi 的 impersonate 目标，后台参数 `http.tls_impersonate` 可关。**注意：这一版打包产物里 curl_cffi 被打包白名单漏掉，指纹伪造在打包版没生效，v2.3.8 才修好**——三端 CI 产物由 `tools/accept-macos-artifact.sh` / `tools/verify-windows-artifact.sh` 抓出来的。
+- 取证记录见 [docs/反爬实现取证与浏览器通道.md](docs/反爬实现取证与浏览器通道.md)。
 
 ## v2.3.6 — 2026-10-15（`efa3fec`）
 
