@@ -302,6 +302,10 @@ def build(force=False):
         "--include-package=hancast_sidecar",
         "--include-package=lxml",
         "--include-package=netifaces",
+        # JS 解析插件宿主：quickjs 是 C 扩展（沙箱引擎本体），
+        # cssselect 是 lxml.html.cssselect 的纯 Python 后端
+        "--include-package=quickjs",
+        "--include-package=cssselect",
         "--nofollow-import-to=tkinter,unittest,test,distutils,setuptools,pip,_pytest,pytest",
         "--enable-plugin=anti-bloat",
         "--no-progress",

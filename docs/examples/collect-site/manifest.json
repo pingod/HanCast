@@ -1,0 +1,7 @@
+{
+  "name": "collect-site",
+  "version": "1.0.0",
+  "author": "HanCast",
+  "description": "示例：采集站播放页 → 正则取接口地址 → 接口 JSON 取真流，附带防盗链头",
+  "scripts": ["main.js"]
+}

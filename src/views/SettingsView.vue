@@ -9,6 +9,7 @@ import { useUpdateStore } from '@/stores/update'
 import { useLogsStore } from '@/stores/logs'
 import GuardDeviceList from '@/components/GuardDeviceList.vue'
 import CustomSelect from '@/components/CustomSelect.vue'
+import PluginSettings from '@/components/PluginSettings.vue'
 import { exportLogs, getParams, listNetworkInterfaces, saveParams as apiSaveParams } from '@/api/commands'
 import type { NetworkInterface, ParamSpec } from '@/types/settings'
 
@@ -193,6 +194,27 @@ function saveChangedParams() {
 
 function resetParam(spec: ParamSpec) {
   submitParams({ [spec.key]: spec.default })
+}
+
+// ── 解析插件 ──
+
+const showPlugins = ref(false)
+const pluginCount = ref(0)
+
+function togglePlugins() {
+  showPlugins.value = !showPlugins.value
+  if (showPlugins.value && !pluginCount.value) {
+    pluginListCount()
+  }
+}
+
+async function pluginListCount() {
+  try {
+    const { pluginList } = await import('@/api/commands')
+    pluginCount.value = (await pluginList()).length
+  } catch {
+    // 徽标计数失败不影响展开
+  }
 }
 
 const checkUpdateStatus = ref<'idle' | 'checking' | 'no_update' | 'error'>('idle')
@@ -460,6 +482,31 @@ async function onCheckUpdate() {
                 </button>
               </div>
             </template>
+          </div>
+        </Transition>
+      </section>
+
+      <!-- 解析插件（JS 规则包） -->
+      <section class="settings__section">
+        <h3 class="settings__section-title">{{ t('settings.plugins') }}</h3>
+
+        <button class="settings__item settings__item--clickable" @click="togglePlugins">
+          <span class="settings__label">
+            {{ t('settings.pluginsToggle') }}
+            <span v-if="pluginCount" class="settings__badge">{{ pluginCount }}</span>
+          </span>
+          <svg
+            class="settings__chevron"
+            :class="{ 'settings__chevron--open': showPlugins }"
+            viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"
+          >
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+        </button>
+
+        <Transition name="settings-expand-lg">
+          <div v-if="showPlugins" class="settings__params">
+            <PluginSettings />
           </div>
         </Transition>
       </section>

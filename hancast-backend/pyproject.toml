@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "hancast-sidecar"
 # version synced from tauri.conf.json
-version = "2.2.25"
+version = "2.3.0"
 description = "HanCast Python Sidecar"
 readme = "README.md"
 license = "GPL-3.0"
@@ -24,6 +24,8 @@ dependencies = [
     # 用 PortAudio 的 WASAPI 环回分支把渲染设备采成 PCM。PyPI 只发 Windows
     # wheel，所以按平台标记声明，macOS/Linux 不会被拖进构建。
     "pyaudiowpatch>=0.2.12.9; sys_platform == 'win32'",
+    "quickjs>=1.19.4",
+    "cssselect>=1.6.0",
 ]
 
 [project.optional-dependencies]

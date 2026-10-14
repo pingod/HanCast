@@ -273,6 +273,70 @@ async fn get_resolve_result(
         .await
 }
 
+// ── 解析插件（JS 规则包）管理 ──
+
+#[tauri::command]
+async fn plugin_list(sidecar: State<'_, SidecarManager>) -> Result<serde_json::Value, String> {
+    sidecar.send_command("plugin_list", serde_json::json!({})).await
+}
+
+/// 导入插件 ZIP：file_path 本地路径 / data_base64 原始字节 / url 远程地址，三选一
+#[tauri::command]
+async fn plugin_import(
+    sidecar: State<'_, SidecarManager>,
+    file_path: Option<String>,
+    data_base64: Option<String>,
+    url: Option<String>,
+) -> Result<serde_json::Value, String> {
+    sidecar
+        .send_command(
+            "plugin_import",
+            serde_json::json!({
+                "path": file_path,
+                "data_base64": data_base64,
+                "url": url,
+            }),
+        )
+        .await
+}
+
+#[tauri::command]
+async fn plugin_remove(
+    sidecar: State<'_, SidecarManager>,
+    name: String,
+) -> Result<serde_json::Value, String> {
+    sidecar
+        .send_command("plugin_remove", serde_json::json!({"name": name}))
+        .await
+}
+
+#[tauri::command]
+async fn plugin_set_rule_enabled(
+    sidecar: State<'_, SidecarManager>,
+    plugin: String,
+    rule: String,
+    enabled: bool,
+) -> Result<serde_json::Value, String> {
+    sidecar
+        .send_command(
+            "plugin_set_rule_enabled",
+            serde_json::json!({"plugin": plugin, "rule": rule, "enabled": enabled}),
+        )
+        .await
+}
+
+/// 用一段分享文本试跑某插件；返回 {task_id}，结果经 get_resolve_result 轮询
+#[tauri::command]
+async fn plugin_test(
+    sidecar: State<'_, SidecarManager>,
+    plugin: String,
+    text: String,
+) -> Result<serde_json::Value, String> {
+    sidecar
+        .send_command("plugin_test", serde_json::json!({"plugin": plugin, "text": text}))
+        .await
+}
+
 /// 读取系统剪贴板文本。
 ///
 /// WKWebView 默认不授予页面 clipboard-read 权限，前端
@@ -1186,6 +1250,11 @@ pub fn run() {
             parse_media_url,
             resolve_share,
             get_resolve_result,
+            plugin_list,
+            plugin_import,
+            plugin_remove,
+            plugin_set_rule_enabled,
+            plugin_test,
             read_clipboard,
             write_clipboard,
             start_cast,

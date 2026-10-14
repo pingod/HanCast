@@ -25,6 +25,7 @@ from .server import (MediaServer, player_ext_ok, player_safe_suffix,
 from .rules import (RuleContext, matching as rules_matching,
                     refresh_external as refresh_external_rules)
 from .rules.base import DESKTOP_UA, decode_body, normalize_text
+from .rules.jsplugins import PluginManager
 from ..models.media import MediaInfo
 from ..utils.config import SETTING_DIR
 
@@ -342,6 +343,8 @@ class ShareResolver:
         self.bili = bili_resolver or BiliResolver()
         self.rules_dir = rules_dir or getattr(config, "share_rules_dir",
                                               None) or DEFAULT_RULES_DIR
+        # JS 脚本插件根：<share_rules>/plugins/；导入/启停/测试命令经它操作
+        self.plugin_mgr = PluginManager(os.path.join(self.rules_dir, "plugins"))
 
     # ── 对外入口 ──
 
@@ -406,12 +409,16 @@ class ShareResolver:
     # ── 路由 ──
 
     def _load_external_rules(self) -> None:
-        """按目录指纹重载外置规则；规则目录有问题不能连累解析本身"""
+        """按目录指纹重载外置规则与 JS 插件；规则目录有问题不能连累解析本身"""
         try:
             os.makedirs(self.rules_dir, exist_ok=True)
             refresh_external_rules(self.rules_dir)
         except Exception as e:
             logger.warning(f"外置解析规则加载失败 {self.rules_dir}: {e}")
+        try:
+            self.plugin_mgr.refresh()
+        except Exception as e:
+            logger.warning(f"解析插件加载失败 {self.plugin_mgr.root}: {e}")
 
     def _run_rules(self, url: str, html: str, stage: str,
                    ctx: RuleContext) -> dict | None:
@@ -490,8 +497,13 @@ class ShareResolver:
     # ── 交付前检查：电视不带 Cookie/Referer 能否拉到流 ──
 
     def _publish(self, uri: str, mime: str, session: requests.Session,
-                 referer: str, deadline: float, via: str) -> tuple[str, str, str]:
-        """返回 (uri, mime, via)；需要防盗链头时改走本机代理"""
+                 referer: str, deadline: float, via: str,
+                 extra_headers: dict | None = None) -> tuple[str, str, str]:
+        """返回 (uri, mime, via)；需要防盗链头时改走本机代理
+
+        ``extra_headers``：规则自带的关键请求头（JS 插件的签名头这类），
+        改走代理时优先于会话快照里的同名头。
+        """
         if deadline - time.monotonic() < 3.0:
             return uri, mime, via          # 预算见底，按直链交付（原行为）
         try:
@@ -501,6 +513,9 @@ class ShareResolver:
             logger.info(f"直链可播性检查跳过 {uri[:80]}: {e}")
             return uri, mime, via
         headers = self._snapshot_headers(session, referer, uri)
+        if extra_headers:
+            headers = {**headers, **{str(k): str(v)
+                                     for k, v in extra_headers.items()}}
         suffix = ".m3u8" if _playlist_mime(mime, uri) else player_safe_suffix(uri)
         proxied = self.media_server.register_proxy(uri, headers, suffix)
         logger.info(f"直链需要页面请求头，改走本机代理: {uri[:80]}")

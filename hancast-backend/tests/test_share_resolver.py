@@ -52,7 +52,7 @@ def _no_follow(url, session, referer, deadline, _hop=0):
     return url, _EXT_MIME.get(_ext_of(url)) or "video/mp4"
 
 
-def _no_publish(uri, mime, session, referer, deadline, via):
+def _no_publish(uri, mime, session, referer, deadline, via, extra_headers=None):
     """离线替身：跳过「电视不带 Cookie 能否拉到」的探测"""
     return uri, mime, via
 

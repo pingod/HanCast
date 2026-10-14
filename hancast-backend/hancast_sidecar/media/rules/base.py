@@ -74,10 +74,16 @@ class RuleContext:
         return self.resolver._open(url, self.deadline, ua=ua,
                                    session=self.session, referer=referer)
 
-    def publish(self, uri: str, mime: str, referer: str, via: str):
-        """交付前检查电视能否裸拉，必要时改走本机代理"""
+    def publish(self, uri: str, mime: str, referer: str, via: str,
+                extra_headers: Optional[dict] = None):
+        """交付前检查电视能否裸拉，必要时改走本机代理
+
+        ``extra_headers``：规则自带的关键请求头（如插件算出的签名头），
+        仅在改走代理时合并进代理请求头。
+        """
         return self.resolver._publish(uri, mime, self.session, referer,
-                                      self.deadline, via)
+                                      self.deadline, via,
+                                      extra_headers=extra_headers)
 
     def follow(self, url: str, referer: str):
         return self.resolver._follow_stream(url, self.session, referer, self.deadline)
@@ -121,6 +127,7 @@ class SiteRule:
 _RULES: list = []
 _EXT_RULES: list = []
 _EXT_FINGERPRINT: Optional[tuple] = None
+_PLUGIN_RULES: list = []          # JS 脚本插件规则（整体替换式管理）
 
 # 由 declarative.py 注入（避免 rules 包内部循环导入）
 _ext_loader = None
@@ -138,6 +145,20 @@ def registered() -> list:
 
 def matching(url: str, stage: str) -> list:
     return [r for r in _RULES if r.stage == stage and r.matches(url)]
+
+
+def set_plugin_rules(rules: list) -> None:
+    """JS 插件规则整体替换（热载、启用/停用、删除都走这里）"""
+    global _PLUGIN_RULES, _RULES
+    for old in _PLUGIN_RULES:
+        if old in _RULES:
+            _RULES.remove(old)
+    _PLUGIN_RULES = list(rules)
+    for rule in _PLUGIN_RULES:
+        register(rule)
+    if _PLUGIN_RULES:
+        logger.info("已加载解析插件规则 %d 条: " +
+                    ", ".join(f"{r.plugin_name}/{r.name}" for r in _PLUGIN_RULES))
 
 
 def set_external_loader(loader) -> None:
@@ -220,6 +241,6 @@ def _ext_of(url: str) -> str:
 __all__ = [
     "DESKTOP_UA", "MOBILE_UA", "RuleContext", "SiteRule", "register",
     "registered", "matching", "refresh_external", "set_external_loader",
-    "decode_body", "decode_js_string", "normalize_text", "template_apply",
-    "absolutize", "title_from_html", "guess_mime",
+    "set_plugin_rules", "decode_body", "decode_js_string", "normalize_text",
+    "template_apply", "absolutize", "title_from_html", "guess_mime",
 ]

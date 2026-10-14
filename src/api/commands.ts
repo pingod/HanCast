@@ -38,6 +38,20 @@ async function initInvoke() {
 
 // ── Mock fallback for browser dev ──
 
+/** 浏览器 dev 的插件仓库（plugin_* 命令的内存态） */
+const mockPlugins: PluginInfo[] = [
+  {
+    name: 'demo-site',
+    version: '2.3.0',
+    author: 'example',
+    description: '演示插件：页面阶段提取 m3u8',
+    rules: [
+      { id: 'main', name: 'main', hosts: ['example.com', 'demo.example'], stage: 'page', enabled: true },
+      { id: 'legacy', name: 'legacy', hosts: ['old.example'], stage: 'url', enabled: false },
+    ],
+  },
+]
+
 const MOCK_DEVICES: Device[] = [
   {
     id: 'samsung-tv-001',
@@ -92,7 +106,7 @@ const MOCK_DEVICES: Device[] = [
 const MOCK_SETTINGS: AppSettings = {
   usn: 'hancast-uuid-001',
   friendly_name: 'HanCast',
-  version: '2.2.25',
+  version: '2.3.0',
   media_port: 8080,
   default_device: null,
   network_interface: '',
@@ -260,6 +274,55 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
         via: 'direct',
       } as T
     }
+    case 'plugin_list':
+      return { plugins: mockPlugins.map((p) => ({ ...p, rules: p.rules.map((r) => ({ ...r })) })) } as T
+    case 'plugin_import': {
+      const name = args?.url
+        ? decodeURIComponent(String(args.url).split('/').pop() || 'plugin').replace(/\.zip$/i, '')
+        : 'imported-plugin'
+      const existing = mockPlugins.find((p) => p.name === name)
+      const plugin: PluginInfo = existing ?? {
+        name,
+        version: '2.3.0',
+        author: 'mock',
+        description: '',
+        rules: [],
+      }
+      if (!existing) mockPlugins.push(plugin)
+      plugin.rules = [
+        { id: 'main', name: 'main', hosts: ['example.com'], stage: 'page', enabled: true },
+      ]
+      return { plugins: mockPlugins.map((p) => ({ ...p, rules: p.rules.map((r) => ({ ...r })) })) } as T
+    }
+    case 'plugin_remove': {
+      const name = String(args?.name ?? '')
+      const idx = mockPlugins.findIndex((p) => p.name === name)
+      if (idx >= 0) mockPlugins.splice(idx, 1)
+      return { plugins: mockPlugins.map((p) => ({ ...p, rules: p.rules.map((r) => ({ ...r })) })) } as T
+    }
+    case 'plugin_set_rule_enabled': {
+      const plugin = mockPlugins.find((p) => p.name === String(args?.plugin ?? ''))
+      const rule = plugin?.rules.find((r) => r.id === String(args?.rule ?? ''))
+      if (rule) rule.enabled = Boolean(args?.enabled)
+      return { plugins: mockPlugins.map((p) => ({ ...p, rules: p.rules.map((r) => ({ ...r })) })) } as T
+    }
+    case 'plugin_test': {
+      const raw = String(args?.text ?? '')
+      const urlMatch = raw.match(/https?:\/\/[^\s"'<>，。；！？、【】]+/i)
+      const url = urlMatch ? urlMatch[0] : ''
+      if (!url) throw new Error('mock: 未找到链接')
+      // 同步返回结果（无 task_id），走调用方的「直接结果」兼容通道
+      return {
+        media_type: 'url',
+        uri: url,
+        title: decodeURIComponent(url.split('/').pop()?.split('?')[0] || url) || url,
+        mime_type: 'video/mp4',
+        file_size: null,
+        duration: null,
+        thumbnail: null,
+        via: 'mock/main',
+      } as T
+    }
     case 'get_cast_url':
       return {
         url: 'http://example.com/video.mp4',
@@ -291,8 +354,8 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
     case 'check_update':
       return {
         has_update: false,
-        current: '2.2.25',
-        latest: '2.2.25',
+        current: '2.3.0',
+        latest: '2.3.0',
         url: '',
         body: '',
         source: 'github',
@@ -430,7 +493,8 @@ export async function parseMediaUrl(url: string): Promise<MediaInfo> {
 /** 分享文本解析结果：MediaInfo + 提取出的原始地址与解析通道 */
 export type ShareResolveResult = MediaInfo & {
   source_url?: string
-  via?: 'bilibili' | 'douyin' | 'page' | 'direct'
+  /** 解析通道：内置平台 / 站点规则 id / JS 插件的「插件名/规则名」 */
+  via?: string
   author?: string
   bvid?: string
 }
@@ -456,6 +520,96 @@ export async function resolveShare(text: string): Promise<ShareResolveResult> {
     'resolve_share', { text })
 
   // 兼容直接返回结果的实现（浏览器 mock / 旧版）
+  if (!start.task_id) {
+    if (!start.uri) throw new Error('解析结果为空')
+    return start as ShareResolveResult
+  }
+
+  const deadline = Date.now() + 45_000
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 400))
+    const entry = await invoke<ResolveTaskEntry>('get_resolve_result', {
+      taskId: start.task_id,
+    })
+    if (entry.status === 'done' && entry.result) return entry.result
+    if (entry.status === 'error') throw new Error(entry.error || '解析失败')
+  }
+  throw new Error('解析超时，请稍后重试')
+}
+
+// ── 解析插件（JS 规则包）管理 ──
+
+/** 插件内单条规则元信息（不含 resolve 函数） */
+export interface PluginRuleInfo {
+  id: string
+  name: string
+  hosts: string[]
+  stage: 'url' | 'page'
+  enabled: boolean
+}
+
+export interface PluginInfo {
+  name: string
+  version: string
+  author: string
+  description: string
+  rules: PluginRuleInfo[]
+  broken?: boolean
+  error?: string
+}
+
+export async function pluginList(): Promise<PluginInfo[]> {
+  const invoke = await initInvoke()
+  const resp = await invoke<{ plugins: PluginInfo[] }>('plugin_list', {})
+  return resp.plugins ?? []
+}
+
+export async function pluginImportFile(filePath: string): Promise<PluginInfo[]> {
+  const invoke = await initInvoke()
+  const resp = await invoke<{ plugins: PluginInfo[] }>('plugin_import', { filePath })
+  return resp.plugins ?? []
+}
+
+export async function pluginImportData(dataBase64: string): Promise<PluginInfo[]> {
+  const invoke = await initInvoke()
+  const resp = await invoke<{ plugins: PluginInfo[] }>('plugin_import', { dataBase64 })
+  return resp.plugins ?? []
+}
+
+export async function pluginImportUrl(url: string): Promise<PluginInfo[]> {
+  const invoke = await initInvoke()
+  const resp = await invoke<{ plugins: PluginInfo[] }>('plugin_import', { url })
+  return resp.plugins ?? []
+}
+
+export async function pluginRemove(name: string): Promise<PluginInfo[]> {
+  const invoke = await initInvoke()
+  const resp = await invoke<{ plugins: PluginInfo[] }>('plugin_remove', { name })
+  return resp.plugins ?? []
+}
+
+export async function pluginSetRuleEnabled(
+  plugin: string,
+  rule: string,
+  enabled: boolean,
+): Promise<PluginInfo[]> {
+  const invoke = await initInvoke()
+  const resp = await invoke<{ plugins: PluginInfo[] }>('plugin_set_rule_enabled', {
+    plugin,
+    rule,
+    enabled,
+  })
+  return resp.plugins ?? []
+}
+
+/**
+ * 用一段分享文本试跑某插件，复用 resolveShare 的任务轮询通道。
+ */
+export async function pluginTest(plugin: string, text: string): Promise<ShareResolveResult> {
+  const invoke = await initInvoke()
+  const start = await invoke<{ task_id?: string } & Partial<ShareResolveResult>>(
+    'plugin_test', { plugin, text })
+
   if (!start.task_id) {
     if (!start.uri) throw new Error('解析结果为空')
     return start as ShareResolveResult

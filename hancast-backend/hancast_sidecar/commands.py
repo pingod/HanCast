@@ -5,6 +5,7 @@
 import os
 import sys
 import json
+import base64
 import logging
 import threading
 import time
@@ -169,6 +170,13 @@ class CommandHandler:
             "parse_media": self._parse_media,
             "resolve_share": self._resolve_share,
             "get_resolve_result": self._get_resolve_result,
+
+            # 解析插件（JS 脚本包）
+            "plugin_list": self._plugin_list,
+            "plugin_import": self._plugin_import,
+            "plugin_remove": self._plugin_remove,
+            "plugin_set_rule_enabled": self._plugin_set_rule_enabled,
+            "plugin_test": self._plugin_test,
 
             # 设置
             "get_settings": self._get_settings,
@@ -618,7 +626,10 @@ class CommandHandler:
         text = params.get("text") or params.get("url") or ""
         if not text.strip():
             raise ValueError("粘贴内容为空")
+        return self._spawn_resolve_task(text)
 
+    def _spawn_resolve_task(self, text: str) -> dict:
+        """解析任务排队 + 后台执行；resolve_share 与 plugin_test 共用"""
         with self._resolve_lock:
             # 清理过期完成任务（10 分钟）
             now = time.time()
@@ -655,6 +666,45 @@ class CommandHandler:
             if entry is None:
                 raise ValueError("解析任务不存在或已过期")
             return dict(entry)
+
+    # ── 解析插件（JS 脚本包） ──
+
+    def _plugin_list(self, params: dict) -> dict:
+        mgr = self.share_resolver.plugin_mgr
+        mgr.refresh()
+        return {"plugins": mgr.list_info()}
+
+    def _plugin_import(self, params: dict) -> dict:
+        """导入插件包。来源三选一：path（本机 zip）/ data_base64（拖拽）/ url"""
+        mgr = self.share_resolver.plugin_mgr
+        if params.get("path"):
+            with open(params["path"], "rb") as f:
+                data = f.read()
+            mgr.import_zip_bytes(data)
+        elif params.get("data_base64"):
+            mgr.import_zip_bytes(base64.b64decode(params["data_base64"]))
+        elif params.get("url"):
+            mgr.import_url(params["url"])
+        else:
+            raise ValueError("需要 path / data_base64 / url 之一")
+        return {"plugins": mgr.list_info()}
+
+    def _plugin_remove(self, params: dict) -> dict:
+        self.share_resolver.plugin_mgr.remove(params["name"])
+        return {"plugins": self.share_resolver.plugin_mgr.list_info()}
+
+    def _plugin_set_rule_enabled(self, params: dict) -> dict:
+        self.share_resolver.plugin_mgr.set_rule_enabled(
+            params["plugin"], params["rule"], bool(params.get("enabled")))
+        return {"plugins": self.share_resolver.plugin_mgr.list_info()}
+
+    def _plugin_test(self, params: dict) -> dict:
+        """用真实解析管线试跑一段粘贴内容（结果经 get_resolve_result 轮询）"""
+        self.share_resolver.plugin_mgr.get(params.get("plugin") or "")
+        text = params.get("text") or ""
+        if not text.strip():
+            raise ValueError("粘贴内容为空")
+        return self._spawn_resolve_task(text)
 
     # ── 设置 ──
 
