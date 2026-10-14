@@ -235,8 +235,15 @@ class FfmpegCapture:
                     break          # 采集线程已收尾，正常结束
                 if data:
                     proc.stdin.write(data)
-        except (BrokenPipeError, ValueError, OSError):
-            logger.info("[ScreenCast] loopback feeder: FFmpeg stdin 已关闭")
+        except (BrokenPipeError, ValueError, OSError) as e:
+            # 「stdin 已关闭」这句话本身诊断不了问题：写不进去通常意味着 FFmpeg
+            # 已经退出，而退出的真正原因只写在它的 stderr 里。.68 上这异常偶发
+            # 过两次（起流 0.3 秒后）却再也复现不出来，日志里就只剩这一句。
+            rc = proc.poll()
+            state = f"已退出（退出码 {rc}）" if rc is not None else "仍在运行"
+            logger.warning(f"[ScreenCast] 环回 feeder 停止："
+                           f"{type(e).__name__}: {e}；FFmpeg {state}"
+                           + self._stderr_hint())
         except Exception as e:  # noqa: BLE001
             logger.warning(f"[ScreenCast] loopback feeder: {e}")
         finally:

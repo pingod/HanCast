@@ -75,6 +75,19 @@ const selectedWindow = computed(() =>
   sc.windows.find(w => w.id === windowId.value)
 )
 
+// Windows 上「系统声音」是一个环回镜像列表：每块喇叭（含虚拟声卡、HDMI、蓝牙耳机）
+// 各有一条，只有对应当前默认输出的那条真能读到声音。列表里不标出来，用户挑中闲置
+// 的那块就只能看到「投屏正常但没声音」。
+const hasLoopbackMirror = computed(() =>
+  sc.systemDevices.some(d => d.loopback)
+)
+const systemDeviceOptions = computed(() =>
+  sc.systemDevices.map(d => ({
+    value: d.name,
+    label: d.default ? `${d.name}${t('screencast.defaultOutputSuffix')}` : d.name,
+  }))
+)
+
 watch(() => sc.sources?.windows, (wins) => {
   if (!wins?.length) return
   if (wins.some(w => w.id === windowId.value)) return
@@ -298,11 +311,14 @@ async function copyText(text: string) {
       <div v-if="systemOn" class="sc-field">
         <CustomSelect
           v-if="sc.systemDevices.length > 0"
-          :options="sc.systemDevices.map(d => ({ value: d.name, label: d.name }))"
+          :options="systemDeviceOptions"
           :model-value="systemDevice"
           @update:model-value="systemDevice = $event as string"
         />
         <div v-else class="sc-empty">{{ t('screencast.noSystemSound') }}</div>
+        <!-- Windows 每个扬声器都有一条环回镜像，选到没在出声的那块就是「投出去没声音」，
+             所以把「当前出声」标出来，让用户知道自己选的是哪一块 -->
+        <div v-if="hasLoopbackMirror" class="sc-empty-hint">{{ t('screencast.loopbackTip') }}</div>
       </div>
 
       <!-- 视频设置 -->

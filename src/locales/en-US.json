@@ -182,6 +182,8 @@
   "screencast.micDenied": "Microphone access is still denied, so the cast would be silent. Allow HanCast in System Settings → Privacy & Security → Microphone, then retry.",
   "screencast.micRetry": "Retry access",
   "screencast.noSystemSound": "No system audio device detected (macOS 14.2+: HanCast creates \"HanCast 系统声音\" automatically; macOS 14.1 or older needs BlackHole; Windows needs Stereo Mix or a WASAPI loopback)",
+  "screencast.defaultOutputSuffix": " (playing now)",
+  "screencast.loopbackTip": "On Windows every output device has its own loopback mirror, and only the mirror of the current default output actually carries sound; pick an idle one and the picture is fine but the cast is silent. After switching output devices (unplugging headphones, pairing Bluetooth) close this panel and reopen it to refresh the list.",
   "screencast.video": "Quality",
   "screencast.resolution": "Resolution",
   "screencast.bitrate": "Bitrate",

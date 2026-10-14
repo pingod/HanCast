@@ -245,5 +245,25 @@ else
   say "FAIL 超时未生成还是那句没用的「可能是权限未授予」"; fails=$((fails+1))
 fi
 
+# ── v2.2.26 本轮契约：把「当前出声」那条环回标出来 ──
+# WASAPI 环回是「每块输出设备一条镜像」，.68 上同时挂着 4 条；只有对应当前默认
+# 渲染设备的那条读得到声音。sidecar 必须既排第一、也把 default 传到协议里，
+# 界面才标得出来（选到闲置那条的表现是「投屏正常但电视没声音」，用户无从下手）。
+if grep -q 'd\["default"\] = d\["index"\] == default_index' "$RES/screencast/loopback.py" \
+   && grep -q '"default": bool(d.get("default"))' "$RES/screencast/ffmpeg_manager.py"; then
+  say "PASS 环回设备带「当前出声」标记（枚举排序 + 协议字段）"
+else
+  say "FAIL 环回列表仍分不清哪条真在出声"; fails=$((fails+1))
+fi
+
+# 环回 feeder 早退（.68 偶发，起流 0.3 秒后）不能再只留一句「stdin 已关闭」：
+# 异常类型 + FFmpeg 退出码 + stderr 尾巴要一起进日志，否则下一样只能靠复碰。
+if grep -q '环回 feeder 停止' "$RES/screencast/capture.py" \
+   && grep -q 'rc = proc.poll()' "$RES/screencast/capture.py"; then
+  say "PASS 环回 feeder 停止带异常与 ffmpeg 状态"
+else
+  say "FAIL 环回 feeder 停止仍只报「FFmpeg stdin 已关闭」"; fails=$((fails+1))
+fi
+
 say "--- $([ $fails -eq 0 ] && echo 'ALL PASS' || echo "$fails FAIL") ---"
 exit $fails

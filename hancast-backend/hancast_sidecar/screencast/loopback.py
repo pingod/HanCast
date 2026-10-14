@@ -55,9 +55,9 @@ def _import_pyaudio():
 def loopback_devices() -> List[Dict]:
     """可用的 WASAPI loopback 设备（每个渲染设备一个环回镜像）。
 
-    返回 [{"name","index","rate","channels"}]；非 Windows / 无 PortAudio → []。
-    当前默认渲染设备的那一路排在最前面：环回镜像是按设备索引排的，机器上挂着
-    HDMI/虚拟声卡时第一位往往是一块没在出声的喇叭，选它等于「投出去永远没声音」。
+    返回 [{"name","index","rate","channels","default"}]；非 Windows / 无 PortAudio → []。
+    当前默认渲染设备的那一路排在最前面并标 default=True：环回镜像是按设备索引排的，
+    机器上挂着 HDMI/虚拟声卡时第一位往往是一块没在出声的喇叭，选它等于「投出去永远没声音」。
     """
     pyaudio = _import_pyaudio()
     if not pyaudio:
@@ -72,13 +72,16 @@ def loopback_devices() -> List[Dict]:
                 "index": info["index"],
                 "rate": int(info["defaultSampleRate"]),
                 "channels": int(info["maxInputChannels"]) or 2,
+                "default": False,
             })
         try:
             default_index = pa.get_default_wasapi_loopback()["index"]
         except Exception as e:  # noqa: BLE001 - 无渲染设备时仍要给出其余选项
             logger.debug(f"[ScreenCast] 默认环回设备未知: {e}")
         else:
-            out.sort(key=lambda d: d["index"] != default_index)
+            for d in out:
+                d["default"] = d["index"] == default_index
+            out.sort(key=lambda d: not d["default"])
         return out
     except Exception as e:  # noqa: BLE001
         logger.warning(f"[ScreenCast] loopback 设备枚举失败: {e}")

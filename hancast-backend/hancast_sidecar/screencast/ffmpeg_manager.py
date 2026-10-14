@@ -805,7 +805,8 @@ class FfmpegManager:
                 for d in loopback_devices():
                     devices.append({"name": d["name"], "kind": "system",
                                     "loopback": True, "rate": d["rate"],
-                                    "channels": d["channels"]})
+                                    "channels": d["channels"],
+                                    "default": bool(d.get("default"))})
             except Exception as e:
                 logger.warning(f"Failed to enumerate WASAPI loopback devices: {e}")
         elif sys.platform == "darwin":

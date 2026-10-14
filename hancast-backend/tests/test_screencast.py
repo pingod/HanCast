@@ -131,6 +131,27 @@ class TestFfmpegManager(unittest.TestCase):
         self.assertEqual([d["name"] for d in devices],
                          ["麦克风 (Realtek(R) Audio)"])
 
+    @patch("sys.platform", "win32")
+    @patch("os.name", "nt")
+    @patch("hancast_sidecar.screencast.ffmpeg_manager._run_utf8")
+    def test_windows_propagates_loopback_default_flag(self, mock_run):
+        """环回的「当前出声」标记要一路带到协议里，前端才有得标"""
+        mock_run.return_value = MagicMock(stderr=self.DSHOW_NO_HEADER, stdout="")
+        fm = FfmpegManager()
+        fm._path = "ffmpeg"
+        with patch("hancast_sidecar.screencast.loopback.loopback_devices",
+                   return_value=[{"name": "扬声器 (Realtek) [Loopback]", "index": 8,
+                                  "rate": 48000, "channels": 2, "default": True},
+                                 {"name": "HDMI (显示器) [Loopback]", "index": 9,
+                                  "rate": 44100, "channels": 2, "default": False}]):
+            devices = fm._list_audio_devices()
+        lb = {d["name"]: d for d in devices if d.get("loopback")}
+        self.assertEqual(lb["扬声器 (Realtek) [Loopback]"]["default"], True)
+        self.assertEqual(lb["HDMI (显示器) [Loopback]"]["default"], False)
+        # dshow 那条「立体声混音」不是环回，不能莫名其妙带上 default
+        mix = [d for d in devices if d["name"] == "立体声混音 (Realtek(R) Audio)"][0]
+        self.assertNotIn("default", mix)
+
     @patch("sys.platform", "darwin")
     @patch("os.name", "posix")
     @patch("hancast_sidecar.screencast.ffmpeg_manager._run_utf8")
@@ -602,6 +623,50 @@ class TestLoopbackOwnership(unittest.TestCase):
         while "close" not in pa.calls and time.time() < deadline:
             time.sleep(0.01)
         self.assertEqual(pa.thread.get("close"), "loopback-pump")
+
+    class _FakeEnumPa:
+        """只够 loopback_devices() 用的假 pyaudiowpatch：三条环回镜像，默认设备可指"""
+
+        def __init__(self, default_index):
+            self.default_index = default_index
+
+        def PyAudio(self):
+            return self
+
+        def get_loopback_device_info_generator(self):
+            for i, name in ((7, "耳机 (BT) [Loopback]"),
+                            (8, "扬声器 (Realtek) [Loopback]"),
+                            (9, "HDMI (显示器) [Loopback]")):
+                yield {"name": name, "index": i,
+                       "defaultSampleRate": 48000, "maxInputChannels": 2}
+
+        def get_default_wasapi_loopback(self):
+            if self.default_index is None:
+                raise OSError("no default render endpoint")
+            return {"index": self.default_index}
+
+        def terminate(self):
+            pass
+
+    def _loopback_devices(self, default_index):
+        from hancast_sidecar.screencast import loopback as lb_mod
+        with patch.object(lb_mod, "_import_pyaudio",
+                          return_value=self._FakeEnumPa(default_index)):
+            return lb_mod.loopback_devices()
+
+    def test_live_loopback_flagged_and_sorted_first(self):
+        """「当前出声」那条环回既排第一、也带 default=True：
+        .68 上挂着 4 条镜像，界面不标出来就只能靠猜，猜中闲置的那块
+        就是「投屏一切正常、电视没声音」"""
+        devs = self._loopback_devices(9)
+        self.assertEqual([d["index"] for d in devs], [9, 7, 8])
+        self.assertEqual([d["default"] for d in devs], [True, False, False])
+
+    def test_default_lookup_failure_keeps_the_list(self):
+        """查不到默认设备（系统还没设默认输出）时，其余镜像仍要列出来，只是都没标"""
+        devs = self._loopback_devices(None)
+        self.assertEqual([d["index"] for d in devs], [7, 8, 9])
+        self.assertEqual([d["default"] for d in devs], [False, False, False])
 
 
 class TestHttpdPullEvidence(unittest.TestCase):

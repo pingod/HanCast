@@ -182,6 +182,8 @@
   "screencast.micDenied": "麦克风权限还没给：现在投出去的画像是哑的。请到「系统设置 → 隐私与安全性 → 麦克风」里允许 HanCast，再点右边的重试。",
   "screencast.micRetry": "重试授权",
   "screencast.noSystemSound": "未检测到系统声音设备（macOS 14.2 及以上由 HanCast 自动创建「HanCast 系统声音」；14.1 及以下需安装 BlackHole；Windows 需立体声混音或 WASAPI 环回）",
+  "screencast.defaultOutputSuffix": "（当前出声）",
+  "screencast.loopbackTip": "Windows 上每块输出设备各有一条自己的环回镜像，只有对应当前默认输出的那条才真能抓到声音；选到闲置的那块，画面正常但投出去没声音。换了输出设备（拔插耳机、切蓝牙）后请关掉面板重新打开，刷新这份列表。",
   "screencast.video": "画面质量",
   "screencast.resolution": "分辨率",
   "screencast.bitrate": "码率",

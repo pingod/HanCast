@@ -18,6 +18,8 @@ export interface AudioDeviceItem {
   tap?: boolean
   /** Windows WASAPI 环回：ffmpeg 没有这个输入设备，由 sidecar 灌 PCM */
   loopback?: boolean
+  /** 这块环回对应的正是系统当前默认输出（只有它才真的在出声） */
+  default?: boolean
 }
 
 export interface ScreenSources {
