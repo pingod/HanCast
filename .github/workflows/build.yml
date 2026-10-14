@@ -559,6 +559,24 @@ jobs:
       ( github.event_name == 'push' || inputs.make_release == true )
     runs-on: ubuntu-latest
     steps:
+      # 规则包 zip 是被「设置页 → 检查规则包更新 → 安装」下载的，
+      # 索引里的 sha256 必须和 Release 上的字节逐位一致，否则用户装包会被摘要校验拦下。
+      # zip 是固定时间戳/固定顺序生成的，所以从这里 tag 工作区直接上传的字节
+      # 和 `build-rule-packs.py` 重跑的字节相同——不需要另建一条产线。
+      - name: Checkout this tag
+        uses: actions/checkout@v4
+
+      - name: Check rule-pack assets match the index
+        run: |
+          python3 tools/build-rule-packs.py --check
+
+      - name: Stage rule-pack zips for the release
+        run: |
+          mkdir -p artifacts/rule-packs
+          cp rule-packs/dist/*.zip artifacts/rule-packs/
+          echo "=== rule packs ==="
+          ls -l artifacts/rule-packs
+
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
         with:
@@ -588,3 +606,4 @@ jobs:
             artifacts/**/*.deb
             artifacts/**/*.rpm
             artifacts/**/*.AppImage
+            artifacts/rule-packs/*.zip
