@@ -1,12 +1,14 @@
 #!/bin/bash
 # 用法: tools/verify-windows-artifact.sh <version> [rel ...]
-# 例:   tools/verify-windows-artifact.sh 2.3.6
+# 例:   tools/verify-windows-artifact.sh 2.3.7
 #
 # 验收装在 .68（administrator@192.168.1.68）上的 CI 产物本身：
 # 1) 注册表 DisplayVersion 必须等于 <version>；
 # 2) 安装目录里那份**源码级 .py** 逐个与 `git show v<version>:…` 比对。
 #    Windows 包里的 .py 全是 CRLF，所以两边都 `tr -d '\r'` 后再比哈希
 #    （直接 certutil 比 tag 哈希必然「不一致」，会把装对的版本判成装错）。
+# 3) 二进制级契约（curl_cffi 三件套、主程序里的离屏窗口标签）单独扫一遍安装目录，
+#    tag 里还没有这项就 SKIP，不拿老版本验出假 FAIL。
 # 不碰 UI、不打任何补丁。任一项 FAIL = 这版产物在他手上不可信，别继续让他测。
 set -uo pipefail
 
@@ -16,11 +18,14 @@ TAG="v$VER"
 WIN=administrator@192.168.1.68
 SIDE='C:\Users\Administrator\AppData\Local\HanCast\hancast_sidecar'
 
-# 默认清单：本轮及最近几轮「判修复在不在」的关键文件
+# 默认清单：本轮及最近几轮「判修复在不在」的关键文件。
+# 逐文件哈希同时充当「存在性」判据——v2.3.7 新增的 utils/httpclient.py（JA3 指纹
+# 会话工厂）与 utils/browser_channel.py（浏览器通道 Python 半）就是靠这条判在不在。
 RELS=("$@")
 if [ ${#RELS[@]} -eq 0 ]; then
   RELS=(protocol/dlna.py protocol/server.py params.py media/failures.py
-        utils/identity.py media/rules/jsruntime.py media/rules/jsplugins.py
+        utils/identity.py utils/httpclient.py utils/browser_channel.py
+        media/rules/jsruntime.py media/rules/jsplugins.py
         media/share_resolver.py media/server.py screencast/capture.py
         screencast/loopback.py main.py)
 fi
@@ -70,6 +75,54 @@ for rel in "${RELS[@]}"; do
   if [ "$got" = "$want" ]; then say "PASS $rel (${want:0:12})"
   else say "FAIL $rel: got '${got:-无输出}' want '${want:0:12}…'"; fails=$((fails+1)); fi
 done
+
+# v2.3.7 契约：指纹伪造的两个二进制 + 浏览器通道的 Rust 半，只能按产物文件判。
+# 漏 `_cffi_backend`/`_wrapper` 时表现是「解析照旧能跑、JA3 仍是 Python」，
+# 日志和肉眼都看不出来；漏 browser.rs 则沙箱 host.render 永远等不到回包。
+# 老 tag 里没有这些文件，用 git 树探测决定是否该判——免得拿 v2.3.6 验出假 FAIL。
+NEED_JA3=$(git show "$TAG:hancast-backend/pyproject.toml" 2>/dev/null | grep -q curl_cffi && echo 1 || echo 0)
+NEED_RENDER=$(git show "$TAG:src-tauri/src/browser.rs" >/dev/null 2>&1 && echo 1 || echo 0)
+PS2_REMOTE='D:\Temp\hc_presence.ps1'
+cat > /tmp/hc_presence.ps1 <<'EOF'
+$root = 'C:\Users\Administrator\AppData\Local\HanCast'
+$files = @(Get-ChildItem -Path $root -Recurse -File -ErrorAction SilentlyContinue)
+$dirs  = @(Get-ChildItem -Path $root -Recurse -Directory -ErrorAction SilentlyContinue)
+function Report($label, $hit) {
+  if ($null -ne $hit) { Write-Output ('FOUND ' + $label) }
+  else { Write-Output ('ABSENT ' + $label) }
+}
+$cdir = @($dirs | Where-Object { $_.Name -eq 'curl_cffi' })
+Report 'curl_cffi' $cdir[0]
+$backend = @($files | Where-Object { $_.Name -like '_cffi_backend*' })
+Report '_cffi_backend' $backend[0]
+$wrapper = @($files | Where-Object { ($_.Name -like '_wrapper.pyd' -or $_.Name -like '_wrapper.*.pyd' -or $_.Name -like '_wrapper.*.dll') })
+Report 'curl_cffi/_wrapper' $wrapper[0]
+$exe = Join-Path $root 'HanCast.exe'
+if (Test-Path $exe) {
+  $txt = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($exe))
+  if ($txt.Contains('hc-render-')) { Write-Output 'FOUND hc-render-' }
+  else { Write-Output 'ABSENT hc-render-' }
+} else { Write-Output 'ABSENT hc-render-' }
+EOF
+scp -q /tmp/hc_presence.ps1 "$WIN:D:/Temp/hc_presence.ps1"
+rm -f /tmp/hc_presence.ps1
+PRES=$(ssh -o ConnectTimeout=20 "$WIN" \
+  "powershell -NoProfile -ExecutionPolicy Bypass -File $PS2_REMOTE" 2>&1 | tr -d '\r')
+check() {  # check <git树该有?> <label> <说明>
+  local want="$1" label="$2" why="$3"
+  if [ "$want" != "1" ]; then say "SKIP $label（$TAG 还没有这项）"; return; fi
+  if printf '%s\n' "$PRES" | grep -q "^FOUND $label\$"; then
+    say "PASS 产物含 $label"
+  else
+    say "FAIL 产物缺 $label（$why）"; fails=$((fails+1))
+  fi
+}
+check "$NEED_JA3" 'curl_cffi' '指纹伪造在打包版里静默降级'
+check "$NEED_JA3" '_cffi_backend' 'curl_cffi 一 import 就失败，JA3 仍是 Python'
+check "$NEED_JA3" 'curl_cffi/_wrapper' 'curl_cffi 的真二进制没进包，能 import 但无指纹'
+check "$NEED_RENDER" 'hc-render-' '离屏渲染窗口没编进主程序，host.render 永远等不到回包'
+
+ssh -o ConnectTimeout=10 "$WIN" "del D:\Temp\hc_presence.ps1" >/dev/null 2>&1
 
 # 在跑的进程版本（判他测的到底是哪版：StartTime 早于安装时间 = 还没重启）
 ssh -o ConnectTimeout=10 "$WIN" \

@@ -34,7 +34,8 @@ for rel in ssdp.py commands.py params.py security/guard.py protocol/dlna.py prot
            screencast/httpd.py screencast/ffmpeg_manager.py screencast/www/index.html \
            screencast/macos_tap.py utils/logger.py utils/config.py main.py \
            media/server.py media/share_resolver.py media/rules/__init__.py media/rules/base.py \
-           media/rules/declarative.py media/rules/jsplugins.py media/rules/jsruntime.py; do
+           media/rules/declarative.py media/rules/jsplugins.py media/rules/jsruntime.py \
+           utils/identity.py utils/httpclient.py utils/browser_channel.py; do
   want=$(git show "$TAG:hancast-backend/hancast_sidecar/$rel" | shasum -a 256 | cut -d' ' -f1)
   got=$(shasum -a 256 "$RES/$rel" 2>/dev/null | cut -d' ' -f1)
   chk "sha256 $rel" "${got:0:12}" "${want:0:12}"
@@ -359,6 +360,42 @@ if echo "$PARAMS_JSON" | /usr/bin/python3 -c \
   say "PASS discovery.device_stale_s 已在参数登记表"
 else
   say "FAIL 参数表缺 discovery.device_stale_s（下线判定没法调）"; fails=$((fails+1))
+fi
+
+# v2.3.7 契约①：TLS 指纹伪造的两个包必须真的冻进产物。
+# 漏了 _cffi_backend 时产物是「能跑，但 JA3 仍是 Python」——顶层 curl_cffi 一 import
+# 就要它，代码里又有降级，肉眼与日志都看不出来，只能按 bundle 里的文件判。
+RROOT="$APP/Contents/Resources"
+if [ -d "$RROOT/curl_cffi" ]; then
+  say "PASS 产物含 curl_cffi"
+else
+  say "FAIL 产物缺 curl_cffi（指纹伪造在打包版里静默降级）"; fails=$((fails+1))
+fi
+if ls "$RROOT"/_cffi_backend*.so >/dev/null 2>&1; then
+  say "PASS 产物含 _cffi_backend"
+else
+  say "FAIL 产物缺 _cffi_backend（curl_cffi 一 import 就失败，指纹仍是 Python）"; fails=$((fails+1))
+fi
+if grep -q 'def make_session' "$RES/utils/httpclient.py" \
+   && grep -q 'from ..utils.httpclient import make_session\|utils.httpclient' "$RES/media/share_resolver.py"; then
+  say "PASS 解析链路走指纹工厂"
+else
+  say "FAIL 解析链路没接上 utils/httpclient.py 的会话工厂"; fails=$((fails+1))
+fi
+
+# v2.3.7 契约②：浏览器通道两端都在产物里。Python 半查文件，Rust 半查主程序里的
+# 窗口标签——离屏窗口的 label 前缀只出现在 browser.rs，是最省事的「编进去了」判据。
+if grep -q 'emit_event("browser_request"' "$RES/utils/browser_channel.py" \
+   && grep -q '"browser_result":' "$RES/commands.py" \
+   && grep -q '__render' "$RES/media/rules/jsruntime.py"; then
+  say "PASS sidecar 半的浏览器通道链路完整（事件/命令/沙箱口）"
+else
+  say "FAIL sidecar 半的浏览器通道缺一段（事件、命令或沙箱 host.render）"; fails=$((fails+1))
+fi
+if strings -a "$APP/Contents/MacOS/HanCast" 2>/dev/null | grep -q "hc-render-"; then
+  say "PASS 主程序含离屏渲染窗口（browser.rs 已编进产物）"
+else
+  say "FAIL 主程序里没有 hc-render- 窗口标签（Rust 半没进这个包）"; fails=$((fails+1))
 fi
 
 say "--- $([ $fails -eq 0 ] && echo 'ALL PASS' || echo "$fails FAIL") ---"
