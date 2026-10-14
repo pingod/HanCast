@@ -233,7 +233,9 @@ class LoopbackStream:
                 return
             self._closed = True
         self._stop.set()
-        self._pump.join(timeout=1.0)
+        # 设备在正常交付时采集线程 21ms 内就回来；等不到说明它卡在没有数据的
+        # 端点上，继续等只会拖慢「停止投屏」，交给它自己收尾
+        self._pump.join(timeout=0.5)
         if self._pump.is_alive():
             logger.info("[ScreenCast] 环回仍在读取，流由采集线程自己关闭")
 

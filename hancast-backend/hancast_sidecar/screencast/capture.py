@@ -339,13 +339,13 @@ class FfmpegCapture:
                     except Exception:
                         pass
             self._running = False
-            # 先等 feeder 退出再关 PortAudio 流：在 read() 进行中关掉流会在
-            # C 扩展里踩到已释放的 stream。等不到就把关闭权留给它自己——
-            # 这里硬关等于让 sidecar 整个进程 0xc0000005（.68 实测）
+            # 先等 feeder 退出：它一停才没人再往 stdin 写。关流本身不在这里发生——
+            # LoopbackStream.close() 只发通知，PortAudio 的 C 调用仍由采集线程自己收尾，
+            # 别的线程去 close 就是踩已释放的 stream（.68 实测 0xc0000005）
             if feeder is not None:
                 feeder.join(timeout=2)
                 if feeder.is_alive():
-                    logger.info("[ScreenCast] 环回线程仍在读取，流由它自己关闭")
+                    logger.info("[ScreenCast] 环回喂料线程仍在写 stdin")
                 else:
                     self._close_loopback()
             else:
