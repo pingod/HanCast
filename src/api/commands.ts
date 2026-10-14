@@ -42,7 +42,7 @@ async function initInvoke() {
 const mockPlugins: PluginInfo[] = [
   {
     name: 'demo-site',
-    version: '2.3.0',
+    version: '2.3.1',
     author: 'example',
     description: '演示插件：页面阶段提取 m3u8',
     rules: [
@@ -106,7 +106,7 @@ const MOCK_DEVICES: Device[] = [
 const MOCK_SETTINGS: AppSettings = {
   usn: 'hancast-uuid-001',
   friendly_name: 'HanCast',
-  version: '2.3.0',
+  version: '2.3.1',
   media_port: 8080,
   default_device: null,
   network_interface: '',
@@ -283,7 +283,7 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
       const existing = mockPlugins.find((p) => p.name === name)
       const plugin: PluginInfo = existing ?? {
         name,
-        version: '2.3.0',
+        version: '2.3.1',
         author: 'mock',
         description: '',
         rules: [],
@@ -354,8 +354,8 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
     case 'check_update':
       return {
         has_update: false,
-        current: '2.3.0',
-        latest: '2.3.0',
+        current: '2.3.1',
+        latest: '2.3.1',
         url: '',
         body: '',
         source: 'github',
