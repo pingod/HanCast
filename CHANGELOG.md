@@ -21,6 +21,7 @@
 - **dev mock 保真**：`src/api/commands.ts` 的 `resolve_share` 对网页地址同样抛「解不出可播源」。此前 mock 是无条件成功，浏览器模式下永远走不到真实报错分支，这类口径问题也就永远测不出来。
 - **测试不再污染用户数据**：新增 `hancast-backend/tests/conftest.py`（session 级 fixture 把 `failures.SETTING_DIR` 指进临时目录），`tools/share_resolve_probe.py` 默认同样重定向、`--keep-ledger` 才写真实台账。此前跑一次测试就往用户设置页那份台账里塞进 `b23.tv/AbCdEf`、`ads.example.com/lp` 之类的假域名，把真实失败冲淡。
 - **验收**：本机浏览器实测两条分支——网页地址 → 报错 + 台账提示、三台设备的投屏按钮全禁用；`…/movie.mp4` 直链 → 出预览卡片、按钮可用且不再误显示台账提示。`vue-tsc --noEmit` rc=0；定向 `pytest tests/test_share_resolver.py tests/test_jsplugins.py` 99 passed，且 `parse_failures.json` 跑前后 md5 逐字节一致。文档同步：[docs/HanCast-Frontend-API.md](docs/HanCast-Frontend-API.md) §4.3、[docs/HanCast-Frontend-Spec.md](docs/HanCast-Frontend-Spec.md) 链路 1 要点 3、[docs/故障排查.md](docs/故障排查.md) §7.4/§7.5、[docs/开发指南.md](docs/开发指南.md) §5.1、[tools/README.md](tools/README.md)。
+- **验收层级要说清**：上面那两条分支是在 **Vite dev server + 浏览器 mock** 上实测的，不是装好的 `.app`。Tauri 把前端资源压缩后内嵌进主二进制，`strings` 在 `Contents/MacOS/HanCast` 里搜 `m2ts`/`ledgerHint`/提示文案全是 0 命中，所以 `tools/accept-macos-artifact.sh` 这次**证明不了前端那一半**（它只覆盖 sidecar 与打包资源；2.3.10 三平台 CI 全绿 + 该脚本 ALL PASS + `probe-installed-ja3.py` PASS 说明的是后端与二进制）。产物内前端的真实判据只能在装好的 GUI 里粘一次网页地址看报错与按钮状态。
 - **没动的地方**：`share_resolver.py:695-699` 候选地址验证遇网络层异常时「按原样交付」是刻意取舍（本机网络判定不稳，电视端反而可能拉得通），本轮不改；它和 `_publish` 预算见底、`_media_ok` 对未知 Content-Type 判 OK 一起，是后端侧仅剩的三类假成功来源。
 
 ## v2.3.9 — 2026-10-15（本轮发布提交）
