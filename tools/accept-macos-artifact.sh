@@ -34,7 +34,8 @@ for rel in ssdp.py commands.py params.py security/guard.py protocol/dlna.py prot
            screencast/httpd.py screencast/ffmpeg_manager.py screencast/www/index.html \
            screencast/macos_tap.py utils/logger.py utils/config.py main.py \
            media/server.py media/share_resolver.py media/rules/__init__.py media/rules/base.py \
-           media/rules/bili.py media/rules/douyin.py media/rules/declarative.py; do
+           media/rules/bili.py media/rules/douyin.py media/rules/declarative.py \
+           media/rules/jsplugins.py media/rules/jsruntime.py; do
   want=$(git show "$TAG:hancast-backend/hancast_sidecar/$rel" | shasum -a 256 | cut -d' ' -f1)
   got=$(shasum -a 256 "$RES/$rel" 2>/dev/null | cut -d' ' -f1)
   chk "sha256 $rel" "${got:0:12}" "${want:0:12}"
@@ -121,13 +122,23 @@ fi
 # 回 success:false（'ascii' codec can't encode），设置页整块读不到参数。
 osascript -e 'tell application "HanCast" to quit' 2>/dev/null
 for i in $(seq 1 12); do pgrep -x hancast-sidecar >/dev/null 2>&1 || break; sleep 2; done
-PROTO_LINE=$(printf '{"id":1,"cmd":"get_params","params":{}}\n{"id":2,"cmd":"exit","params":{}}\n' \
-  | env -i PATH=/usr/bin:/bin LC_ALL=C "$APP/Contents/MacOS/hancast-sidecar" 2>/dev/null \
-  | grep -a '"id": 1' | head -1)
+PROTO_OUT=$(printf '{"id":1,"cmd":"get_params","params":{}}\n{"id":2,"cmd":"plugin_list","params":{}}\n{"id":3,"cmd":"exit","params":{}}\n' \
+  | env -i PATH=/usr/bin:/bin LC_ALL=C "$APP/Contents/MacOS/hancast-sidecar" 2>/dev/null)
+PROTO_LINE=$(echo "$PROTO_OUT" | grep -a '"id": 1' | head -1)
 if echo "$PROTO_LINE" | grep -q '"success": true' && echo "$PROTO_LINE" | grep -q 'label_zh'; then
   say "PASS 无 locale 环境下协议仍走通（中文登记表原样回来）"
 else
   say "FAIL LC_ALL=C 下 get_params 没走通: ${PROTO_LINE:0:160}"; fails=$((fails+1))
+fi
+
+# ── v2.3.0/v2.3.1 本轮契约：JS 解析插件宿主进了冻结的二进制 ──
+# quickjs 是 C 扩展，Nuitka 少收一个 --include-package 的话源码测试全绿、产物里
+# 一调就崩；所以判据不能只看文件在不在包里，要让装好的 sidecar 真答一次 plugin_list。
+PLUGIN_LINE=$(echo "$PROTO_OUT" | grep -a '"id": 2' | head -1)
+if echo "$PLUGIN_LINE" | grep -q '"success": true'; then
+  say "PASS plugin_list 在打包 sidecar 里答得上来（quickjs 宿主可用）"
+else
+  say "FAIL plugin_list 没成功，产物里 JS 插件宿主多半起不来: ${PLUGIN_LINE:0:200}"; fails=$((fails+1))
 fi
 open -a HanCast
 
