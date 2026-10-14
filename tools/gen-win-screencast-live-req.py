@@ -4,8 +4,9 @@
 子命令：
   phase1 -o req.txt              只枚举设备（第一轮跑这个，拿设备名）
   devices <out.txt>              列出 phase-1（只跑 list_screen_sources）响应里的音频输入设备
-  req <out.txt> --mic I [--sys J] [--second mic|system] [-o req.txt]
+  req <out.txt> --mic I [--sys J] [--second mic|system]... [-o req.txt]
                                  按序号取设备名，拼出 ASCII 请求文件
+                                 --second 可重复，用来把三路组合排在一次运行里
 
 为什么全是 ASCII：这台机器的设备名是中文，而 cmd 读带 UTF-8 中文的批处理会按字节偏移
 错位解析（2026-10-14 实测）。json.dumps(ensure_ascii) 把中文变成 \\uXXXX，这里再把
@@ -92,10 +93,13 @@ def cmd_req(args) -> int:
     source = {"type": "screen", "id": "desktop"}
     video = {"width": 1280, "height": 720, "fps": 15, "bitrate": "2M"}
     rounds = [(mic, sysdev)]
-    if args.second == "system" and sysdev:
-        rounds.append((None, sysdev))
-    if args.second == "mic" and mic:
-        rounds.append((mic, None))
+    # --second 可以给两次：三路组合（both / 单独 mic / 单独 system）要在一次
+    # sidecar 生命周期里全跑完，否则「哪一路把管线饿死」就分不清是组合还是单路
+    for which in (args.second or []):
+        if which == "system" and sysdev:
+            rounds.append((None, sysdev))
+        if which == "mic" and mic:
+            rounds.append((mic, None))
 
     req = [{"id": 1, "cmd": "set_ffmpeg_path", "params": {"path": FFMPEG}},
            {"id": 2, "cmd": "list_screen_sources", "params": {}}]
@@ -156,8 +160,8 @@ def main(argv) -> int:
         ap.add_argument("from_out", help="phase-1 的 out.txt")
         ap.add_argument("--mic", type=int, default=-1, help="麦克风序号")
         ap.add_argument("--sys", type=int, default=-1, help="系统声音（loopback）序号")
-        ap.add_argument("--second", choices=["mic", "system"],
-                        help="第一轮之后再单独跑这一路")
+        ap.add_argument("--second", choices=["mic", "system"], action="append",
+                        help="第一轮（两路组合）之后再单独跑这一路，可重复给")
         ap.add_argument("-o", "--output")
         return cmd_req(ap.parse_args(argv[2:]))
     raise SystemExit(__doc__)

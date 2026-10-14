@@ -14,12 +14,12 @@ REM   perl -pe 's/\r?\n/\r\n/' tools/verify-win-screencast-audio-live.cmd > /tmp
 REM   scp /tmp/hcsl.cmd administrator@192.168.1.68:D:/Temp/hcsl.cmd
 REM   ssh administrator@192.168.1.68 "schtasks /create /f /tn HANCAST_HCSL /tr D:\Temp\hcsl.cmd /sc once /sd 2999-01-01 /st 00:00 /ru Administrator /it"
 REM   ssh administrator@192.168.1.68 "schtasks /run /tn HANCAST_HCSL"
-REM Result: D:\Temp\hcsl\out.txt  -> expect
-REM   id=2 / id=5  "ok":true        (mic, then mic+system: capture started at all)
-REM   id=3 / id=6  "running":true   (still alive ~9s later, i.e. no EINVAL exit)
+REM Result: D:\Temp\hcsl\out.txt  -> expect (rounds: 3/6/9 = mic+system, system, mic)
+REM   every start "ok":true         (capture started and the playlist landed)
+REM   every status "running":true   (still alive ~3s later, i.e. no EINVAL early exit)
+REM   SIDECAR_EXIT=0                (no 0xc0000005 on the stop path)
 REM   no "Option vf cannot be applied to input url"
-REM   D:\Temp\hcsl\seg*.txt      segment snapshots taken WHILE the capture ran
-REM   (stop/cleanup deletes the session dir, hence the background snapshots)
+REM   D:\Temp\hcsl\seg.txt       stamped segment snapshots taken WHILE each round ran
 REM Cleanup afterwards: schtasks /delete /tn HANCAST_HCSL /f  and  rmdir /s /q D:\Temp\hcsl
 setlocal
 set ROOT=C:\Users\Administrator\AppData\Local\HanCast
@@ -41,10 +41,11 @@ if not exist "%WORK%" mkdir "%WORK%"
 del "%OUT%" >nul 2>&1
 del "%WORK%\seg*.txt" >nul 2>&1
 
-REM Snapshot the HLS dir twice mid-run: the batch's own stdout goes to %OUT%,
-REM so these land in separate files. Paths carry no spaces -> no quotes here,
-REM because cmd /c "..." would end at the first inner quote anyway.
-start /b cmd /c "ping -n 14 127.0.0.1 >nul & dir /b %HLS% > %WORK%\seg1.txt 2>&1 & dir /b %HLS%\*.ts >> %WORK%\seg1.txt 2>&1 & ping -n 16 127.0.0.1 >nul & dir /b %HLS% > %WORK%\seg2.txt 2>&1 & dir /b %HLS%\*.ts >> %WORK%\seg2.txt 2>&1"
+REM Snapshot the HLS dir every ~5s for 60s, stamped with the wall clock: three
+REM rounds run back to back (mic+system, system only, mic only), so a bare
+REM "before/after" listing cannot tell which round made which segments. Stop and
+REM cleanup delete the session dir, hence sampling WHILE the capture runs.
+start /b cmd /c "for /l %%i in (1,1,12) do (ping -n 6 127.0.0.1 >nul & call echo SNAP %%TIME%% & dir /b %HLS%)" > "%WORK%\seg.txt" 2>&1
 
 REM 3s after each request. start_hls blocks until the playlist exists, so an
 REM "ok" response already means ffmpeg produced output with the audio input
