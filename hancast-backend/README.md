@@ -1,162 +1,137 @@
-# HanCast 2.0 Python Sidecar
+# HanCast Python Sidecar
 
-HanCast 2.0 的 Python 后端，作为 Tauri 应用的 Sidecar 运行。
+> 最后校对：2026-10-15，对应版本 v2.3.6（`package.json:4`，tag `v2.3.6`）。深度内容见 [../docs/README.md](../docs/README.md)。
 
-## 功能
+`hancast-backend/` 是 HanCast 的 Python 后端，以 **Sidecar 子进程**形式被 Tauri 壳层拉起，
+通过 stdin/stdout 的行分隔 JSON 与 Rust 通信。它负责 DLNA/SSDP、媒体服务、mpv 渲染、
+屏幕投屏采集，以及粘贴链接的站点解析。
 
-- **SSDP 设备发现**: 自动发现局域网内的 DLNA 设备
-- **DLNA 协议**: 支持 DLNA 渲染器（接收投屏）和控制端（发送投屏）
-- **MPV 渲染器**: 作为 DLNA 渲染器播放接收的媒体
-- **媒体服务**: 提供本地文件的 HTTP 访问
-- **投屏控制**: 播放/暂停/停止/音量/进度控制
-- **B站解析**: 支持 bilibili.com 视频链接解析
+版本：与主程序同步（当前 v2.3.6，`hancast_sidecar/utils/config.py:39`），
+Python `>= 3.11`（`pyproject.toml:13`）。
 
-## 架构
+> 深入内容不在此文：分层与端口/线程/落盘状态见 [../docs/架构总览.md](../docs/架构总览.md)，
+> 命令与事件契约见 [../docs/HanCast-Frontend-API.md](../docs/HanCast-Frontend-API.md)，
+> 跑法/测试/调试见 [../docs/开发指南.md](../docs/开发指南.md)，出问题先看
+> [../docs/故障排查.md](../docs/故障排查.md)。
+
+## 目录
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                     HanCast 2.0 单一应用                          │
-│                                                                  │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │                 Tauri 主进程 (Rust)                        │   │
-│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐               │   │
-│  │  │ 窗口管理  │  │ Sidecar  │  │ IPC 桥接  │               │   │
-│  │  └──────────┘  └──────────┘  └──────────┘               │   │
-│  └─────────────────────────┬────────────────────────────────┘   │
-│                            │ stdin/stdout JSON                   │
-│  ┌─────────────────────────┴────────────────────────────────┐   │
-│  │                Python Sidecar 进程                        │   │
-│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐ │   │
-│  │  │ SSDP 发现 │  │ DLNA 协议 │  │ 媒体服务  │  │ 命令路由  │ │   │
-│  │  └──────────┘  └──────────┘  └──────────┘  └──────────┘ │   │
-│  └──────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────┘
+hancast-backend/
+├── hancast_sidecar/
+│   ├── main.py          # 入口：UTF-8 stdio 包裹 → ready 事件 → 命令主循环
+│   ├── commands.py      # 命令路由与 Sidecar 侧服务装配（注册 55 条命令）
+│   ├── params.py        # 后台参数登记表 PARAM_SPECS（27 项）
+│   ├── ssdp.py          # SSDP 发现（M-SEARCH / NOTIFY alive+byebye / 陈旧摘除）
+│   ├── protocol/        # dlna.py（SOAP 控制与描述）、server.py（UPnP HTTP 服务）
+│   ├── renderer/        # mpv.py（接收端播放与 IPC）、base.py
+│   ├── media/           # parser.py、server.py（本地文件 HTTP + 链路内代理）、
+│   │                    # share_resolver.py（粘贴解析管线）、rules/（声明式 + JS 包 + 沙箱）、
+│   │                    # failures.py（解析失败台账）
+│   ├── screencast/      # 屏幕投屏：ffmpeg 采集、HLS 分片、aiohttp 供流、www 观看页
+│   ├── security/        # guard.py（投屏确认）
+│   ├── models/ utils/   # 数据结构、日志、身份（UA/设备号）、协议 IO
+│   └── xml/             # UPnP 描述文件（随包数据）
+├── scripts/
+│   ├── run_sidecar.py   # 本地直跑（等价于 -m hancast_sidecar.main）
+│   └── build_sidecar.py # Nuitka 打包成平台二进制
+├── tests/               # pytest（20+ 文件，见 docs/开发指南.md §5）
+├── pyproject.toml       # 依赖与 dev extras（uv 管理）
+└── requirements.txt     # 运行依赖的 pip 视角镜像
 ```
 
-## 开发
-
-### 安装依赖
+## 安装与运行
 
 ```bash
-pip install -r requirements.txt
+uv sync                                  # 推荐：读 pyproject + uv.lock
+uv run python -m hancast_sidecar.main    # 只调后端（Rust 不在场时它照常跑 stdin 循环）
+uv run python scripts/run_sidecar.py     # 同上，脚本入口
 ```
 
-### 运行测试
+pip 用户：`pip install -r requirements.txt`。屏幕投屏还需要系统里有 **ffmpeg**，
+接收端播放需要 **mpv**——两者都是外部二进制，不打进 Python 依赖里
+（开发时从 `src-tauri/mpv/`、`src-tauri/ffmpeg/` 取，见 [../docs/开发指南.md](../docs/开发指南.md) §1）。
 
-```bash
-python -m pytest
-```
-
-### 打包
-
-```bash
-python scripts/build_sidecar.py
-```
+从 `npm run tauri dev` 起的全栈开发不需要单独跑这里。
 
 ## 通信协议
 
-### 请求格式 (Rust → Python stdin)
+请求（Rust → stdin）：
 
 ```json
-{
-  "id": 0,
-  "cmd": "start_cast",
-  "params": {
-    "device_id": "uuid-xxxx",
-    "media_uri": "http://192.168.1.5:8080/video.mp4"
-  }
-}
+{"id": 5, "cmd": "start_cast", "params": {"device_id": "uuid-xxx", "media_uri": "http://192.168.1.5:52341/video.mp4"}}
 ```
 
-### 响应格式 (Python → Rust stdout)
+响应（stdout，与 `id` 配对）：
 
 ```json
-// 成功
-{
-  "id": 0,
-  "success": true,
-  "data": { ... }
-}
-
-// 失败
-{
-  "id": 0,
-  "success": false,
-  "error": "Device not found"
-}
+{"id": 5, "success": true,  "data": null}
+{"id": 5, "success": false, "error": "Device not found"}
 ```
 
-### 事件格式 (Python → Rust stdout)
+事件（stdout，无 `id`，主动推送）：
 
 ```json
-{
-  "event": "device_found",
-  "data": { ... }
-}
+{"event": "device_found", "data": {"id": "...", "name": "..."}}
 ```
 
-## 命令列表
+三条铁律（改代码前必读）：
 
-| 命令 | 参数 | 返回 | 说明 |
-|------|------|------|------|
-| `get_devices` | `{}` | `Device[]` | 获取已发现设备 |
-| `refresh_devices` | `{}` | `Device[]` | 触发扫描并返回 |
-| `set_default_device` | `{id}` | `null` | 设为默认设备 |
-| `rename_device` | `{id, name}` | `null` | 重命名设备 |
-| `remove_device` | `{id}` | `null` | 移除设备 |
-| `start_cast` | `{device_id, media_uri}` | `null` | 开始投屏 |
-| `stop_cast` | `{}` | `null` | 停止投屏 |
-| `pause_cast` | `{}` | `null` | 暂停投屏 |
-| `resume_cast` | `{}` | `null` | 恢复投屏 |
-| `seek_cast` | `{position}` | `null` | 跳转到指定位置 |
-| `get_cast_state` | `{}` | `CastState` | 获取投屏状态 |
-| `set_volume` | `{volume}` | `null` | 设置音量 |
-| `set_mute` | `{muted}` | `null` | 设置静音 |
-| `parse_media` | `{type, path/url}` | `MediaInfo` | 解析媒体 |
-| `get_settings` | `{}` | `AppSettings` | 获取设置 |
-| `save_settings` | `{settings}` | `null` | 保存设置 |
-| `exit` | `{}` | — | 优雅退出 |
+1. **stdout 只能有一个写者**。响应与事件都必须走 `hancast_sidecar/utils/protocol_io.py`，
+   直接 `print` 会和响应交错，Rust 侧解析出半行 JSON。
+2. **每个请求必须有响应**。命令抛异常时主循环仍回 `success:false`（`main.py:138-140`）；
+   长任务改成「立即返回 `task_id` + 轮询出口」（`resolve_share` / `get_resolve_result`）。
+3. **stdio 一律 UTF-8**，且包裹点在 logger 初始化之前（`main.py:21-28`）。
+   少了这一层，父进程没给 locale 时中文响应全部变 `success:false`（v2.2.19 实测）。
+
+启动时发一条 `{"event":"ready"}` 作为握手信号，但**目前没有任何一侧监听它**
+（`sidecar.rs` 里没有 `ready` 分支，前端也没订阅；壳层是照 timeout 兜底投请求的），
+留着的价值在日志里看得清「后端到底起没起来」。详见
+[../docs/HanCast-Frontend-API.md](../docs/HanCast-Frontend-API.md) §3.1。
+用户直接双击打包后的 sidecar 二进制（stdin 是 tty）时，它会转而拉起主程序后退出（`main.py:52-78`）。
+
+## 命令一览
+
+完整表（含参数、返回、执行层）在 [../docs/HanCast-Frontend-API.md](../docs/HanCast-Frontend-API.md)，
+这里只给分组印象：
+
+| 组 | 代表命令 |
+| --- | --- |
+| 设备 | `get_devices` `refresh_devices` `add_device` `hide_device` `remove_device` `get_manual_devices` `list_network_interfaces` |
+| 投屏控制 | `start_cast` `stop_cast` `pause_cast` `resume_cast` `seek_cast` `get_cast_state` `get_cast_url` `set_volume` `set_mute` |
+| 媒体解析 | `parse_media_file` `parse_media_url` `resolve_share` `get_resolve_result` |
+| 屏幕投屏 | `start_screen_cast` `stop_screen_cast` `screen_cast_status` `list_screen_sources` |
+| 投屏确认 | `get_guard_devices` `get_guard_settings` `save_guard_settings` `set_guard_policy` `respond_cast_confirm` `remove_guard_device` |
+| 规则包与失败台账 | `plugin_list` `plugin_import` `plugin_pull` `plugin_check_updates` `plugin_test` `rule_inventory` `failure_list` `failure_delete` `failure_clear` |
+| 配置与运维 | `get_settings` `save_settings` `get_params` `save_params` `get_logs` `export_logs` `set_log_level` `check_update` `exit` |
+
+Sidecar 主动推送的事件共 6 条：`ready`、`device_found`、`device_lost`、`cast_state_changed`、
+`cast_confirm_request`、`screen_cast_state_changed`（判据：`grep -rn emit_event hancast_sidecar/`）。
+前端还会收到壳层自身发出的事件，合计 8 条，见 [../docs/HanCast-Frontend-API.md](../docs/HanCast-Frontend-API.md) §3。
+
+## 打包
+
+```bash
+uv run python scripts/build_sidecar.py            # 当前平台
+uv run python scripts/build_sidecar.py --help     # 平台/输出参数
+```
+
+产物是 Nuitka standalone 目录，由 `npm run tauri build` 前的 `sync-sidecar.cjs` 放进壳层资源，
+最终随安装包发布。三平台流程与产物验收见 [../docs/构建与发布.md](../docs/构建与发布.md)。
+
+> ⚠️ 直接双击打包后的 sidecar 二进制不会启动主程序（它需要 stdin 管道），
+> 而 `hancast.exe` 主程序缺了 Sidecar 会闪退——本地自测请用 `npm run tauri dev`。
+
+## 测试
+
+```bash
+uv run pytest tests/test_share_resolver.py -q          # 定向（默认口径）
+uv run pytest tests/ -q                                 # 全量，仅发版前跑一次
+```
+
+`smoke_*.py` 需要真实 ffmpeg/mpv 环境，不在 CI 里跑。
+**别默认全量**——套件的多数用例要起 socket 与线程，慢且噪音大（见 [../docs/开发指南.md](../docs/开发指南.md) §5.2）。
 
 ## 许可证
 
-GPL-3.0
-
----
-
-## 调试技巧
-
-### MPV Lua 脚本快速写日志
-
-在 `mpv/portable_config/scripts/` 下的 Lua 脚本中，使用以下模板快速写日志到文件：
-
-```lua
--- 写入诊断文件
-local diag_file = io.open("mpv_diag.txt", "a")
-local function log(msg)
-    if diag_file then
-        diag_file:write(os.date("%H:%M:%S") .. " script-name: " .. msg .. "\n")
-        diag_file:flush()
-    end
-end
-
-log("=== script loaded ===")
-```
-
-使用方式：
-1. 在脚本开头添加上述代码
-2. 在需要调试的地方调用 `log("message")`
-3. 运行后查看 `mpv_diag.txt` 文件
-4. 调试完成后删除日志代码
-
-示例：
-```lua
-mp.register_event('file-loaded', function()
-    log("file-loaded: media-title=" .. mp.get_property("media-title"))
-    log("file-loaded: filename=" .. mp.get_property("filename"))
-    log("file-loaded: title=" .. mp.get_property("title"))
-end)
-```
-
-### Python 端日志
-
-Python 端的日志输出到 stderr，在 Tauri 开发模式下会显示在终端中。
+GPL-3.0，继承 [xfangfang/Macast](https://github.com/xfangfang/Macast) 原协议。

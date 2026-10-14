@@ -1,5 +1,9 @@
 # HanCast 2.0 — 前端设计规格
 
+> ⚠️ **已被 [HanCast-Frontend-Spec.md](HanCast-Frontend-Spec.md) 取代**（本文最后提交于 2026-07-08）。
+> 组件清单、store 划分、样式与 i18n 约定均已变化（例如屏幕投屏、规则包管理、后台参数设置页
+> 在这份里还不存在）。现行版本请看取代者；本文件仅作历史设计留档，索引见 [README.md](README.md) §3。
+
 > **文档性质**: Tauri 2.0 前端 UI/UX 专属方案
 > **对应层级**: WebView 层 + Rust Tauri 壳层
 > **不涉及**: Python 后端内部实现、DLNA 协议细节
