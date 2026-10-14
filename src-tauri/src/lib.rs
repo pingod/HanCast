@@ -1,3 +1,4 @@
+mod browser;
 mod sidecar;
 
 use serde::{Deserialize, Serialize};

@@ -33,6 +33,7 @@ PACKS_DIR = os.path.join(ROOT, "rule-packs")
 DIST_DIR = os.path.join(PACKS_DIR, "dist")
 INDEX_PATH = os.path.join(PACKS_DIR, "index.json")
 
+from hancast_sidecar import params                            # noqa: E402
 from hancast_sidecar.media.rules import jsplugins              # noqa: E402
 from hancast_sidecar.media.share_resolver import ShareResolver  # noqa: E402
 
@@ -122,6 +123,10 @@ def main() -> int:
 
     try:
         resolver = ShareResolver(StubMediaServer(), rules_dir=rules_dir)
+        # 离线验收没有宿主进程：host.render/sniff 在这里只能等到超时，还会往 stdout
+        # 写协议事件行污染输出。关掉通道，让依赖渲染的规则立刻降级回 HTTP 路径——
+        # 这类包要验渲染那一段只能在真机 GUI 里跑。
+        params.apply({"browser.enabled": False})
         mgr = resolver.plugin_mgr
         if not args.no_packs:
             install_official_packs(mgr)

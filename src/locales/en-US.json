@@ -73,6 +73,7 @@
   "settings.paramsGroup.discovery": "Device discovery",
   "settings.paramsGroup.media": "Media server",
   "settings.paramsGroup.http": "Outbound identity",
+  "settings.paramsGroup.browser": "Page rendering (browser core)",
   "settings.paramsGroup.logs": "Logs",
   "settings.paramsGroup.rules": "Parsing rules",
   "settings.paramsGroup.failures": "Failure ledger",

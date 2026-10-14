@@ -73,6 +73,7 @@
   "settings.paramsGroup.discovery": "设备发现",
   "settings.paramsGroup.media": "媒体服务",
   "settings.paramsGroup.http": "对外请求身份",
+  "settings.paramsGroup.browser": "页面渲染（浏览器内核）",
   "settings.paramsGroup.logs": "日志",
   "settings.paramsGroup.rules": "解析规则",
   "settings.paramsGroup.failures": "解析失败台账",

@@ -12,7 +12,7 @@ class SlowResolver:
     def __init__(self):
         self.calls = 0
 
-    def resolve(self, text):
+    def resolve(self, text, quality=""):
         self.calls += 1
         time.sleep(0.3)
         return {"media_type": "url", "uri": "https://cdn.example/v.mp4",
@@ -22,7 +22,7 @@ class SlowResolver:
 
 
 class FailResolver:
-    def resolve(self, text):
+    def resolve(self, text, quality=""):
         time.sleep(0.1)
         raise ValueError("站点防抓取")
 

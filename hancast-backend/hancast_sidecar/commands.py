@@ -26,6 +26,7 @@ from .utils.config import Config
 from . import params as app_params
 from .security.guard import DeviceGuard
 from .utils.mpv_manager import MpvManager
+from .utils import browser_channel
 from .utils import protocol_io
 from .screencast import ScreenCastManager
 
@@ -160,6 +161,9 @@ class CommandHandler:
             # 后台可调参数（改参数不用重新编译）
             "get_params": self._get_params,
             "save_params": self._save_params,
+
+            # 浏览器通道：Rust 渲染完 WebView 后把结果送回等待中的解析线程
+            "browser_result": self._browser_result,
 
             # 更新检查
             "check_update": self._check_update,
@@ -840,6 +844,14 @@ class CommandHandler:
         # 预发布版：用 (0, ids) 表示。正式版首元素 1 > 预发布版 0，
         # 所以 2.1.0 > 2.1.0-beta.1；同为预发布版时再比 ids。
         return nums + (0, tuple(ids))
+
+    def _browser_result(self, params: dict) -> dict:
+        """浏览器通道的渲染结果回传（Rust → sidecar，唤醒正在等的那条解析线程）
+
+        这里不判成败也不记台账：等待方自己按 ok/error 决定这条规则让不让路，
+        命令循环只做一次投递，绝不能被渲染内容拖住。
+        """
+        return browser_channel.deliver(params or {})
 
     def _check_update(self, params: dict) -> dict:
         """

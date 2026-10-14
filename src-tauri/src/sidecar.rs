@@ -358,6 +358,16 @@ impl SidecarManager {
                 } else if let Some(event_name) = val.get("event").and_then(|v| v.as_str()) {
                     // Event pushed by Python
                     let data = val.get("data").cloned().unwrap_or(Value::Null);
+                    if event_name == "browser_request" {
+                        // 浏览器通道不转给前端（这个窗口加载的是外站页面），
+                        // 而且必须另起任务：结果要靠 stdin 命令送回，它的应答正是
+                        // 由本函数所在的那条循环读取的——在这儿等就是自己堵死自己。
+                        let app = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            crate::browser::handle_request(app, data).await;
+                        });
+                        return;
+                    }
                     let _ = app.emit(event_name, data);
                 }
             }

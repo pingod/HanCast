@@ -37,6 +37,7 @@ import quickjs
 from lxml import html as lxml_html
 
 from .base import decode_body, normalize_text
+from ...utils import browser_channel
 from ...utils.identity import desktop_ua, mobile_ua, device_id
 from .crypto import (aes_cbc_decrypt, aes_cbc_encrypt, aes_ecb_decrypt,
                      aes_ecb_encrypt, rsa_encrypt)
@@ -138,7 +139,16 @@ var __hostRaw = {
   // 本包持久 cookie 罐 + 本次解析会话里该域名已有的 cookie，拼成 "a=1; b=2"
   cookies:      function (u) { return __cookies(String(u)); },
   setCookie:    function (u, s) { return __setCookie(String(u), String(s)); },
-  clearCookies: function (u) { return __clearCookies(u === undefined ? '' : String(u)); }
+  clearCookies: function (u) { return __clearCookies(u === undefined ? '' : String(u)); },
+
+  // ── 浏览器通道 ──
+  // 播放地址由播放器现调接口下发时，HTTP 抓页永远嗅不到；这两个口借宿主 WebView
+  // 真渲染一次。options: {html:false 只要地址, mobile:true 用移动 UA, settle_ms 加载后再等}
+  // render 返回 {url,title,html,candidates,media,ua,elapsedMs}；sniff 只返回 media 数组。
+  // WebView 拿到的 cookie（含 HttpOnly）会自动灌进本包罐子与本次会话，不必自己搬。
+  // ua 就是 host.userAgent(mobile) 那一份：浏览器身份与 HTTP 身份同源，签名照它算。
+  render: function (u, o) { return __parse(__render(String(u), o ? JSON.stringify(o) : null)); },
+  sniff:  function (u, o) { return __parse(__sniff(String(u), o ? JSON.stringify(o) : null)); }
 };
 var __HOST_ERR = "\u0001hancast-host-error:";
 function __unwrap(v) {
@@ -146,6 +156,9 @@ function __unwrap(v) {
     throw new Error(v.slice(__HOST_ERR.length));
   return v;
 }
+// 返回 JSON 文本的口要先解错误再 parse：直接 JSON.parse 的话，宿主侧的
+// 「人话错误」会被 JSON.parse 的 SyntaxError 顶掉，规则里只剩一句看不懂的话
+function __parse(v) { return JSON.parse(__unwrap(v)); }
 // Python 异常绝不直接越过 C 边界：quickjs 只会留一句 "Python call failed"，
 // 真实原因全丢，而且上下文被永久弄坏（实测此后每次 eval 都 SystemError，
 // 整个包的规则一起废）。宿主侧 _guard 把异常编码成带标记的返回值，
@@ -457,6 +470,51 @@ class JsRuntime:
                 self._session, url, _opts_json(options_json), False)
             return code
 
+        # ── 浏览器通道（借宿主 WebView 渲染一次）──
+
+        def _render_opts(options_json):
+            if not options_json:
+                return {}
+            try:
+                opts = json.loads(options_json)
+            except ValueError:
+                raise ValueError("options 不是合法 JSON 对象")
+            if not isinstance(opts, dict):
+                raise ValueError("options 必须是对象")
+            return opts
+
+        def render(url, options_json=None):
+            opts = _render_opts(options_json)
+            res = browser_channel.render(
+                url, want_html=bool(opts.get("html", True)),
+                mobile=bool(opts.get("mobile")),
+                settle_ms=(int(opts["settle_ms"]) if opts.get("settle_ms") is not None
+                           else None),
+                deadline=self._deadline or None)
+            if not res.ok:
+                raise ValueError(res.error or "渲染失败")
+            # 浏览器拿到的 cookie 是「这个访客」的身份，只给 WebView 用等于没同步：
+            # 灌进本次解析会话（后续 host.fetch 自动带上），并落进本包持久罐子
+            browser_channel.inject_cookies(self._session, res.cookies)
+            self._store_webview_cookies(res.cookies)
+            return json.dumps({
+                "url": res.final_url or url,
+                "title": res.title,
+                "html": res.html[:_MAX_FETCH_BODY],
+                "candidates": res.candidates,
+                "media": browser_channel.media_candidates(res.candidates),
+                # WebView 实际报出去的 UA：签名常把 UA 算进去，规则不必再自己猜一份
+                "ua": res.ua or (mobile_ua() if opts.get("mobile") else desktop_ua()),
+                "elapsedMs": res.elapsed_ms,
+            })
+
+        def sniff(url, options_json=None):
+            # 只要地址不要正文：明确关掉头，宿主就不会为这一次渲染回传整页 HTML
+            opts = _render_opts(options_json)
+            opts["html"] = False
+            raw = render(url, json.dumps(opts))
+            return json.dumps(json.loads(raw)["media"])
+
         def select(html, css, base):
             try:
                 doc = lxml_html.fromstring(html)
@@ -639,6 +697,7 @@ class JsRuntime:
             ("__deviceId", device_id),
             ("__cookies", cookies_fn), ("__setCookie", set_cookie_fn),
             ("__clearCookies", clear_cookies_fn),
+            ("__render", render), ("__sniff", sniff),
         ]
 
     def _cache_path(self, name: str) -> str:
@@ -699,6 +758,31 @@ class JsRuntime:
             if self._domain_match(host, domain):
                 out.update(pairs)
         return out
+
+    def _store_webview_cookies(self, cookies: list) -> None:
+        """WebView 渲染拿到的 cookie 落进本包持久罐子（浏览器 → HTTP 同步）
+
+        站点在浏览器里发的 cookie 常常就是它认这个访客的依据；不同步的话，
+        规则接着用 HTTP 抓页时又变成「陌生客户端」，等于白渲染一次。
+        """
+        if not cookies:
+            return
+        jar = self._jar_data()
+        changed = False
+        for item in cookies:
+            domain = str(item.get("domain") or "").lower()
+            name = str(item.get("name") or "")
+            if not domain or not name:
+                continue
+            bucket = jar.setdefault(domain, {})
+            if name not in bucket and len(bucket) >= _MAX_COOKIE_PER_DOMAIN:
+                continue
+            if bucket.get(name) != item.get("value"):
+                bucket[name] = str(item.get("value"))
+                changed = True
+        self._prune_jar(jar)
+        if changed:
+            self._save_jar()
 
     def _session_cookies(self, url: str) -> dict:
         """本次解析会话里该域名已有的 cookie（抓页拿到的，比罐里的新鲜）"""

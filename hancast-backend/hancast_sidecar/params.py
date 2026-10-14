@@ -161,6 +161,32 @@ PARAM_SPECS: List[Dict] = [
                 "User-Agent above, so UA and TLS agree. Unrecognised UAs stay unspoofed; "
                 "turning this off falls back to Python's native handshake"},
 
+    # ── 浏览器通道 ──
+    # 站点的播放地址越来越多由播放器现调签名接口下发，纯 HTTP 抓页永远拿不到。
+    # 这三项管的是「借宿主 WebView 渲染一次」的开销与上限，不是功能开关之外的策略。
+    {"key": "browser.enabled", "section": "browser", "type": "bool", "default": True,
+     "label_zh": "浏览器通道（借本机 WebView 渲染嗅探）",
+     "label_en": "Browser channel (render via local WebView)",
+     "help_zh": "规则包可以让程序用本机浏览器内核渲染页面，取渲染后的正文、播放器现取的"
+               "流地址和 Cookie。渲染比 HTTP 抓页贵得多，也只有真浏览器能过某些站的校验",
+     "help_en": "Lets rule packs render a page in the app's own WebView to get post-JS "
+                "HTML, player-fetched stream URLs and cookies. Far costlier than an HTTP "
+                "fetch, and the only way past some checks"},
+    {"key": "browser.timeout_s", "section": "browser",
+     "type": "number", "default": 12, "min": 3, "max": 25, "unit": "s",
+     "label_zh": "单次渲染上限", "label_en": "Per-render timeout",
+     "help_zh": "一次渲染最多等多久（同时受整条解析的 25 秒总预算约束）。"
+               "超时后通道冷却 90 秒，不再让每条规则都重等一遍",
+     "help_en": "Max wait for one render (also capped by the 25s resolve budget). "
+                "A timeout cools the channel down for 90s instead of re-waiting per rule"},
+    {"key": "browser.settle_ms", "section": "browser",
+     "type": "number", "default": 1500, "min": 0, "max": 8000, "unit": "ms",
+     "label_zh": "页面加载后再等待", "label_en": "Settle time after load",
+     "help_zh": "加载完成后额外等这么久再收地址——不少站点的播放器是加载后再调接口拿流，"
+               "不等就只嗅到页面骨架",
+     "help_en": "Extra wait after load; many players fetch their stream only after the "
+                "page settled, so a shorter value sniffs just the skeleton"},
+
     # ── 解析失败台账 ──
     {"key": "failures.enabled", "section": "failures", "type": "bool", "default": True,
      "label_zh": "记录解析失败的地址", "label_en": "Log failed links",
