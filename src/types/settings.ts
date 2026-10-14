@@ -20,7 +20,7 @@ export interface NetworkInterfacesInfo {
   selected: string
 }
 
-export type ParamType = 'number' | 'bool' | 'enum' | 'text'
+export type ParamType = 'number' | 'bool' | 'enum' | 'text' | 'string'
 
 export interface ParamSpec {
   key: string

@@ -21,7 +21,16 @@ ADVANCED_KEY = "advanced"
 DEFAULT_RULES_INDEX = ("https://raw.githubusercontent.com/pingod/HanCast"
                        "/main/rule-packs/index.json")
 
+# 对外身份的默认值就登记在这里，`utils/identity.py` 反过来读它——
+# 两边各写一份正是以前「规则层 Chrome/124、代理层 Chrome/120」的由来。
+DEFAULT_UA_DESKTOP = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+DEFAULT_UA_MOBILE = ("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+                     "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 "
+                     "Mobile/15E148 Safari/604.1")
+
 # type: number（配 min/max/unit）| bool | enum（配 options）| text（配 placeholder）
+# text 强制 http(s) 前缀，只给地址类参数用；自由文本（UA 这种）走 string
 # section 仅用于设置页分组
 PARAM_SPECS: List[Dict] = [
     # ── 屏幕投屏 / HLS ──
@@ -125,6 +134,40 @@ PARAM_SPECS: List[Dict] = [
      "label_zh": "SOAP 请求体上限", "label_en": "Max SOAP body size",
      "help_zh": "部分控制器会塞进很长的 DIDL 元数据，超限直接拒收",
      "help_en": "Some controllers send very long DIDL metadata; oversized bodies are refused"},
+
+    # ── 对外请求身份 ──
+    # 站点风控看的是「一整套说法是否自洽」，不是单个字段。这两项把解析、代理转发、
+    # 交付给电视的请求头收到同一个开关下：改了立刻全链路一致，不必重新编译。
+    {"key": "http.ua_desktop", "section": "http", "type": "string",
+     "default": DEFAULT_UA_DESKTOP,
+     "label_zh": "桌面 User-Agent", "label_en": "Desktop User-Agent",
+     "help_zh": "解析分享链接和本机代理拉流时对外报的浏览器身份，改完下一次解析即生效。"
+               "只认 UA 不构成「像人」：TLS 指纹仍是 Python 的，把 UA 换成最新版 Chrome "
+               "反而更容易被交叉比对识破，要换就整条链一起换",
+     "help_en": "Identity reported by parsing and the local media proxy. Takes effect on "
+                "the next resolve. UA alone does not make traffic look human - TLS/JA3 is "
+                "still Python's, so a very fresh Chrome UA can be more suspicious"},
+    {"key": "http.ua_mobile", "section": "http", "type": "string",
+     "default": DEFAULT_UA_MOBILE,
+     "label_zh": "手机 User-Agent", "label_en": "Mobile User-Agent",
+     "help_zh": "规则要求移动站点（分享页、小程序页）时用的身份",
+     "help_en": "Identity used when a rule asks for the mobile page"},
+
+    # ── 解析失败台账 ──
+    {"key": "failures.enabled", "section": "failures", "type": "bool", "default": True,
+     "label_zh": "记录解析失败的地址", "label_en": "Log failed links",
+     "help_zh": "按域名记下来解析不出来的链接和失败原因，方便以后照着它给站写规则包",
+     "help_en": "Remember unresolvable links grouped by host with the reason"},
+    {"key": "failures.max_per_host", "section": "failures",
+     "type": "number", "default": 50, "min": 5, "max": 500, "unit": "",
+     "label_zh": "每个域名保留条数", "label_en": "Entries kept per host",
+     "help_zh": "同一个站超出上限就淘汰最旧的，防止刷粘贴把台账撑爆",
+     "help_en": "Oldest entries of a host are dropped past this cap"},
+    {"key": "failures.retention_days", "section": "failures",
+     "type": "number", "default": 30, "min": 1, "max": 365, "unit": "天",
+     "label_zh": "台账保留天数", "label_en": "Failure ledger retention",
+     "help_zh": "超过这么久没再出现的地址在下次启动时清掉",
+     "help_en": "Hosts unseen for this long are pruned at next start"},
 
     # ── 日志 ──
     {"key": "logs.tail_mb", "section": "logs",
@@ -260,6 +303,13 @@ def _coerce(spec: Dict, value):
         text = str(value)
         if text not in spec["options"]:
             raise ValueError(f"只能取 {'/'.join(spec['options'])}")
+        return text
+    if kind == "string":
+        text = str(value).strip()
+        if not text:
+            raise ValueError("不能为空，要改回默认请点「恢复默认」")
+        if len(text) > 512:
+            raise ValueError("内容过长（上限 512 字符）")
         return text
     if kind == "text":
         text = str(value).strip()

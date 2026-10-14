@@ -41,8 +41,9 @@ class TestDefaults(unittest.TestCase):
                              "src", "locales", f"{name}.json")
             with open(p, encoding="utf-8") as f:
                 locales.append(_json.load(f))
-        # 与 SettingsView.vue 的分支保持一致：text / number / enum / bool
-        rendered = ("text", "number", "enum", "bool")
+        # 与 SettingsView.vue 的分支保持一致：text（地址）/ string（自由文本）
+        # / number / enum / bool
+        rendered = ("text", "string", "number", "enum", "bool")
         for spec in params.PARAM_SPECS:
             self.assertIn(spec["type"], rendered)
             self.assertTrue(spec["label_zh"] and spec["label_en"], spec["key"])

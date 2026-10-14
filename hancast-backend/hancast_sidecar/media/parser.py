@@ -13,6 +13,7 @@ import logging
 import requests
 from urllib.parse import urlparse
 from ..models.media import MediaInfo
+from ..utils.identity import desktop_ua
 
 logger = logging.getLogger("hancast.media.parser")
 
@@ -55,7 +56,8 @@ class MediaParser:
 
         # 设置请求头，模拟浏览器
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            # 身份单点定义：以前这里是一条被截断的 UA，和解析/代理两侧都不同
+            "User-Agent": desktop_ua()
         }
 
         content_type = ""

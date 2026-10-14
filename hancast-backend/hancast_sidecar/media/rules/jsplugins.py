@@ -120,10 +120,35 @@ class JsRule(SiteRule):
             title_from_html(html or "") or urlparse(cand).netloc
         thumb = str(ret.get("thumbnail") or "").strip()
         return ctx.info(uri, mime, title[:80], via, source_url=ctx.source_url,
-                        thumbnail=absolutize(thumb, referer) if thumb else None)
+                        thumbnail=absolutize(thumb, referer) if thumb else None,
+                        qualities=_clean_qualities(ret),
+                        quality=str(ret.get("quality") or "").strip())
 
     def _via(self) -> str:
         return f"{self.plugin_name}/{self.name}"
+
+
+def _clean_qualities(ret: dict) -> list[dict]:
+    """把包返回的档位表收成 [{id, label}]；形状不对就当没有
+
+    档位是「重解析的钥匙」而不是地址：切换画质时按 id 再解一次，
+    所以这里只保留能重新喂回 resolve 的标识，不落任何会过期的直链。
+    """
+    raw = ret.get("qualities")
+    if not isinstance(raw, list):
+        return []
+    out: list[dict] = []
+    for item in raw[:12]:
+        if isinstance(item, str):
+            item = {"id": item, "label": item}
+        if not isinstance(item, dict):
+            continue
+        qid = str(item.get("id") or "").strip()[:24]
+        if not qid:
+            continue
+        label = str(item.get("label") or qid).strip()[:24]
+        out.append({"id": qid, "label": label})
+    return out
 
 
 def _clamp(value: float, lo: float, hi: float) -> float:
@@ -210,6 +235,8 @@ class JsPlugin:
             "host": (p.netloc or "").lower(),
             "scheme": (p.scheme or "https").lower(),
             "path": p.path or "/",
+            # 用户点名的画质档位（空＝规则自己定，通常是最高）；包按它取流
+            "quality": (ctx.quality if ctx else "") or "",
             # 与声明式规则同一份视图：先归一化 \/ \u002F &amp;
             "body": normalize_text(html or "") if ctx and html else "",
         }

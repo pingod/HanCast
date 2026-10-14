@@ -2,10 +2,10 @@
   "packs": [
     {
       "name": "hancast-bilibili",
-      "version": "1.0.0",
-      "url": "https://raw.githubusercontent.com/pingod/HanCast/main/rule-packs/dist/hancast-bilibili-1.0.0.zip",
-      "sha256": "e807b4c324cd3a3a1d8c96cfbde508a6ef47fbb917a6a1eba874f7da02abc4b3",
-      "description": "B 站解析：APP 签名多线路取流 iOS → TV → Web HTML5，反爬 Cookie 落盘复用。"
+      "version": "1.1.0",
+      "url": "https://raw.githubusercontent.com/pingod/HanCast/main/rule-packs/dist/hancast-bilibili-1.1.0.zip",
+      "sha256": "70e223a6ef256f13092065b4ca846e0ddc147bc6c004fab372f7cfdaca08c9d1",
+      "description": "B 站解析：APP 签名多线路取流 iOS → TV → Web HTML5，反爬 Cookie 落盘复用；默认投最高画质，投屏中可切换档位。"
     },
     {
       "name": "hancast-douyin",
@@ -16,10 +16,10 @@
     },
     {
       "name": "hancast-template",
-      "version": "1.0.0",
-      "url": "https://raw.githubusercontent.com/pingod/HanCast/main/rule-packs/dist/hancast-template-1.0.0.zip",
-      "sha256": "d13f4ba170bc554ef4e6621b31b8ebb6114629f8855aaceca6b3cff015cdcf2a",
-      "description": "规则包模板：演示 manifest 字段、host API 与 resolve 返回值契约。只匹配保留域名 .invalid，不参与真实解析。"
+      "version": "1.1.0",
+      "url": "https://raw.githubusercontent.com/pingod/HanCast/main/rule-packs/dist/hancast-template-1.1.0.zip",
+      "sha256": "e103c54e49b82f14c3700bb191e912a28f669c099c4cd1945dafbd4ce5328d76",
+      "description": "规则包模板：演示 manifest 字段、host API（含签名原语与 cookie 罐）与 resolve 返回值契约，含多画质档位示例。只匹配保留域名 .invalid，不参与真实解析。"
     }
   ]
 }

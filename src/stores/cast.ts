@@ -2,6 +2,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { defineStore } from 'pinia'
 import type { CastState, CastSession } from '@/types/cast'
 import { createSession } from '@/types/cast'
+import type { MediaQuality } from '@/types/media'
 import type { UnlistenFn } from '@tauri-apps/api/event'
 import {
   getCastState,
@@ -14,6 +15,7 @@ import {
   setVolume as apiSetVolume,
   setMute as apiSetMute,
   getAutostart,
+  resolveShare,
 } from '@/api/commands'
 import type { StopWarning } from '@/api/commands'
 
@@ -42,6 +44,9 @@ export const useCastStore = defineStore('cast', () => {
 
   // 「点了停止但电视没确认收到 Stop」的设备与原因，由界面翻译成一句话展示
   const stopWarning = ref<StopWarning | null>(null)
+
+  // 投屏中切换画质进行中（重新解析 + 重新投放要几秒，期间锁住选择器）
+  const qualitySwitching = ref(false)
 
   // ── Autostart prompt state ──
   const showAutostartPrompt = ref(false)
@@ -303,7 +308,14 @@ export const useCastStore = defineStore('cast', () => {
   }
 
   // ── Cast actions ──
-  async function startCast(deviceId: string, mediaUri: string, mediaInfo?: { title?: string; mime_type?: string; thumbnail?: string | null }) {
+  async function startCast(deviceId: string, mediaUri: string, mediaInfo?: {
+    title?: string
+    mime_type?: string
+    thumbnail?: string | null
+    qualities?: MediaQuality[]
+    quality?: string
+    source_url?: string
+  }) {
     loading.value = true
     stopWarning.value = null
     try {
@@ -325,6 +337,9 @@ export const useCastStore = defineStore('cast', () => {
             file_size: null,
             duration: null,
             thumbnail: mediaInfo?.thumbnail ?? null,
+            qualities: mediaInfo?.qualities ?? [],
+            quality: mediaInfo?.quality ?? '',
+            source_url: mediaInfo?.source_url ?? '',
           },
         },
       }
@@ -432,6 +447,68 @@ export const useCastStore = defineStore('cast', () => {
       startSim(id)
     } catch (err) {
       console.error('Failed to resume cast:', err)
+    }
+  }
+
+  /**
+   * 投屏中切换画质：拿来源页 + 档位 id 重新解析，再重新投放，最后追回原进度。
+   * 档位是「重解析的钥匙」而不是缓存直链 —— 站点直链会过期，重新解一次才有稳定答案。
+   */
+  async function switchQuality(qualityId: string, deviceId?: string) {
+    const id = deviceId ?? focusedDeviceId.value
+    const session = id ? sessions.value[id] : null
+    if (!id || !session?.media || qualitySwitching.value) return
+    const media = session.media
+    const source = media.source_url ?? ''
+    if (!source || (media.quality ?? '') === qualityId) return
+
+    qualitySwitching.value = true
+    const resumeAt = session.positionTime
+    stopSim(id)
+    try {
+      const info = await resolveShare(source, qualityId)
+      if (!info.uri) throw new Error('解析结果为空')
+      await apiStartCast(id, info.uri, info.mime_type)
+      updateSession(id, {
+        status: 'playing',
+        position: 0,
+        positionTime: '00:00:00',
+        media: {
+          ...media,
+          uri: info.uri,
+          mime_type: info.mime_type || media.mime_type,
+          quality: info.quality || qualityId,
+          qualities: info.qualities?.length ? info.qualities : media.qualities,
+          thumbnail: info.thumbnail ?? media.thumbnail,
+        },
+      })
+      startPolling()
+      await restorePosition(id, resumeAt)
+      startSim(id)
+    } catch (err) {
+      console.error('Failed to switch quality:', err)
+    } finally {
+      qualitySwitching.value = false
+    }
+  }
+
+  /** 电视刚换地址时还在加载，Seek 会被拒；重试几次把进度追回来 */
+  async function restorePosition(deviceId: string, positionTime: string) {
+    if (!positionTime || positionTime === '00:00:00') return
+    for (let attempt = 0; attempt < 4; attempt++) {
+      await new Promise((r) => setTimeout(r, 1000))
+      const session = sessions.value[deviceId]
+      if (!session || ['stopped', 'idle', 'error'].includes(session.status)) return
+      try {
+        await apiSeekCast(positionTime, deviceId)
+        updateSession(deviceId, {
+          position: parseTimeToSeconds(positionTime),
+          positionTime,
+        })
+        return
+      } catch {
+        // 仍在缓冲，稍后再试
+      }
     }
   }
 
@@ -595,6 +672,7 @@ export const useCastStore = defineStore('cast', () => {
     loading,
     showController,
     stopWarning,
+    qualitySwitching,
 
     // Autostart prompt
     showAutostartPrompt,
@@ -625,6 +703,7 @@ export const useCastStore = defineStore('cast', () => {
     stopCast,
     pauseCast,
     resumeCast,
+    switchQuality,
     seek,
     setVolume,
     setMute,

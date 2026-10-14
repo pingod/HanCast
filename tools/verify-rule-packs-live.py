@@ -101,6 +101,8 @@ def main() -> int:
                     help="不装 repo 根的官方包，只用目录里已有的规则")
     ap.add_argument("--pull", action="store_true",
                     help="对回源地址真拉 256KB，验证地址可用")
+    ap.add_argument("--quality", default="",
+                    help="点名画质档位 id（B 站是 qn：16/32/64/80…），空＝包自己定（通常最高）")
     ap.add_argument("--keep", action="store_true", help="保留临时规则目录")
     ap.add_argument("--verbose", action="store_true",
                     help="打开 sidecar 日志，看规则让路/失败的具体原因")
@@ -139,7 +141,7 @@ def main() -> int:
             proxy_count = len(resolver.media_server.proxies)
             started = time.monotonic()
             try:
-                info = resolver.resolve(target)
+                info = resolver.resolve(target, args.quality)
             except Exception as e:
                 failures += 1
                 print(f"  FAIL {type(e).__name__}: {e}")
@@ -149,6 +151,12 @@ def main() -> int:
             print(f"  播放   : {(info.get('uri') or '')[:110]}")
             print(f"  mime   : {info.get('mime_type')}  "
                   f"耗时 {time.monotonic() - started:.1f}s")
+            if info.get("qualities"):
+                # 档位表是「重解析的钥匙」，这里同时标出本次实际交付的是哪一档
+                table = "、".join(
+                    f"{q['label']}{'[本次]' if q['id'] == info.get('quality') else ''}"
+                    for q in info["qualities"])
+                print(f"  画质   : {table}")
             if info.get("thumbnail"):
                 print(f"  封面   : {str(info['thumbnail'])[:100]}")
             for remote, headers in resolver.media_server.proxies[proxy_count:]:

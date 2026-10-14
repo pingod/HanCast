@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useCastStore } from '@/stores/cast'
 import { useDeviceStore } from '@/stores/device'
@@ -39,6 +39,27 @@ const isPlayable = computed(() => mediaMimeType.value.startsWith('video/') || me
 
 // ── Media title ──
 const mediaTitle = computed(() => castStore.castState.media?.title ?? '')
+
+// ── Quality ──
+// 规则包给了 2 档以上才允许切换；档位不是缓存直链，切换要按档位重新解析
+const qualityOptions = computed(() => {
+  const qs = castStore.castState.media?.qualities ?? []
+  return qs.length >= 2 ? qs : null
+})
+const selectedQuality = ref('')
+watch(() => castStore.castState.media?.quality, (q) => {
+  if (q) selectedQuality.value = q
+}, { immediate: true })
+
+async function onQualityChange(e: Event) {
+  const qid = (e.target as HTMLSelectElement).value
+  const before = castStore.castState.media?.quality ?? ''
+  await castStore.switchQuality(qid)
+  // 没切成就把选择器拨回原档位，别显示一个没投出去的画质
+  if (castStore.castState.media?.quality !== qid) {
+    selectedQuality.value = before
+  }
+}
 
 // ── Preview ──
 const convertFileSrc = ref<((path: string, protocol?: string) => string) | null>(null)
@@ -239,6 +260,18 @@ onMounted(async () => {
             <!-- Filename -->
             <div class="ctrl__name">{{ mediaTitle }}</div>
 
+            <!-- Quality (shown only when the rule pack offers 2+ tiers) -->
+            <div v-if="qualityOptions" class="ctrl__quality">
+              <span class="ctrl__quality-label">{{ t('cast.quality') }}</span>
+              <select class="ctrl__quality-select" :value="selectedQuality"
+                :disabled="castStore.qualitySwitching" @change="onQualityChange">
+                <option v-for="q in qualityOptions" :key="q.id" :value="q.id">{{ q.label }}</option>
+              </select>
+            </div>
+            <div v-if="castStore.qualitySwitching" class="ctrl__quality-hint">
+              {{ t('cast.qualitySwitching') }}
+            </div>
+
             <!-- Progress bar -->
             <div v-if="canSeek" class="ctrl__progress">
               <span class="ctrl__time">{{ displayPosition }}</span>
@@ -417,6 +450,44 @@ onMounted(async () => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  width: 100%;
+}
+
+/* ── Quality (rule-pack supplied tiers) ── */
+.ctrl__quality {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 12px;
+  width: 100%;
+}
+
+.ctrl__quality-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.ctrl__quality-select {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  font-family: var(--font);
+  color: var(--text-primary);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 6px;
+  cursor: pointer;
+  outline: none;
+}
+.ctrl__quality-select:disabled { opacity: .5; cursor: not-allowed; }
+
+.ctrl__quality-hint {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  padding: 0 12px;
   width: 100%;
 }
 

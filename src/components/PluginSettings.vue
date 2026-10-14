@@ -11,10 +11,15 @@ import {
   pluginRemove,
   pluginSetRuleEnabled,
   pluginTest,
+  failureList,
+  failureDelete,
+  failureClear,
+  writeClipboardText,
   type PackIndexEntry,
   type PackUpdateEntry,
   type PluginInfo,
   type RuleInventory,
+  type FailureLedger,
 } from '@/api/commands'
 
 const { t } = useI18n()
@@ -194,6 +199,67 @@ async function runTest(p: PluginInfo) {
     testBusy.value[p.name] = false
   }
 }
+
+// ── 解析失败台账：哪些站解不出来、卡在哪一步（照着它写规则包）──
+
+const ledger = ref<FailureLedger>({ enabled: true, path: '', hosts: [], total: 0 })
+const ledgerLoading = ref(false)
+const collapsed = ref<Record<string, boolean>>({})
+const copied = ref('')
+
+async function loadLedger() {
+  ledgerLoading.value = true
+  try {
+    ledger.value = await failureList()
+  } catch (err: any) {
+    actionError.value = String(err?.message ?? err)
+  } finally {
+    ledgerLoading.value = false
+  }
+}
+
+onMounted(loadLedger)
+
+async function deleteHost(host: string) {
+  try {
+    ledger.value = await failureDelete(host)
+  } catch (err: any) {
+    actionError.value = String(err?.message ?? err)
+  }
+}
+
+async function deleteUrl(url: string) {
+  try {
+    ledger.value = await failureDelete('', url)
+  } catch (err: any) {
+    actionError.value = String(err?.message ?? err)
+  }
+}
+
+async function clearLedger() {
+  try {
+    ledger.value = await failureClear()
+  } catch (err: any) {
+    actionError.value = String(err?.message ?? err)
+  }
+}
+
+async function copyUrl(url: string) {
+  try {
+    await writeClipboardText(url)
+    copied.value = url
+    setTimeout(() => { if (copied.value === url) copied.value = '' }, 2000)
+  } catch {
+    // 剪贴板不可用时不拦用户：地址就在屏幕上，选中也能复制
+  }
+}
+
+function timeAgo(ts: number): string {
+  if (!ts) return ''
+  const d = Math.max(0, (Date.now() / 1000 - ts)) / 86400
+  if (d < 1) return t('settings.rulesFailureToday')
+  return t('settings.rulesFailureDaysAgo', { days: Math.floor(d) })
+}
 </script>
 
 <template>
@@ -362,6 +428,58 @@ async function runTest(p: PluginInfo) {
       class="plugins__empty"
     >{{ t('settings.rulesNoUpdates') }}</div>
 
+    <!-- 解析失败台账：按域名分组的「解不出来的地址」，写规则包就照这个清单 -->
+    <h4 class="plugins__section">{{ t('settings.rulesSectionFailures') }}</h4>
+    <p class="plugins__hint">{{ t('settings.rulesFailuresHint') }}</p>
+    <div class="plugins__row">
+      <button class="plugins__btn" :disabled="ledgerLoading" @click="loadLedger">
+        {{ ledgerLoading ? t('settings.rulesFailuresLoading') : t('settings.rulesFailuresReload') }}
+      </button>
+      <button
+        v-if="ledger.hosts.length"
+        class="plugins__btn plugins__btn--ghost"
+        @click="clearLedger"
+      >{{ t('settings.rulesFailuresClear') }}</button>
+    </div>
+    <p v-if="!ledger.enabled" class="plugins__warn">{{ t('settings.rulesFailuresOff') }}</p>
+    <p v-if="ledger.path" class="plugins__hint">
+      {{ t('settings.rulesFailuresFile') }} <code class="plugins__dir">{{ ledger.path }}</code>
+    </p>
+
+    <div v-if="ledger.hosts.length" class="plugins__card">
+      <div v-for="h in ledger.hosts" :key="h.host" class="plugins__fail-host">
+        <div class="plugins__pack-row">
+          <div class="plugins__rule-info">
+            <span class="plugins__rule-name">{{ h.host }}</span>
+            <span class="plugins__rule-meta">
+              {{ t('settings.rulesFailuresHostMeta', { urls: h.entries.length, fails: h.count, when: timeAgo(h.last_at) }) }}
+            </span>
+          </div>
+          <div class="plugins__row">
+            <button class="plugins__btn plugins__btn--ghost" @click="collapsed[h.host] = !collapsed[h.host]">
+              {{ collapsed[h.host] ? t('common.expand') : t('common.collapse') }}
+            </button>
+            <button class="plugins__btn plugins__btn--danger" @click="deleteHost(h.host)">
+              {{ t('common.delete') }}
+            </button>
+          </div>
+        </div>
+        <div v-if="!collapsed[h.host]" class="plugins__fail-urls">
+          <div v-for="e in h.entries" :key="e.url" class="plugins__fail-url">
+            <button class="plugins__fail-url-text" @click="copyUrl(e.url)" :title="e.url">
+              {{ copied === e.url ? t('settings.rulesFailuresCopied') : e.url }}
+              <span v-if="e.count > 1" class="plugins__tag">×{{ e.count }}</span>
+            </button>
+            <span class="plugins__fail-error">{{ e.error }}</span>
+            <button class="plugins__btn plugins__btn--ghost" @click="deleteUrl(e.url)">
+              {{ t('common.delete') }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div v-else class="plugins__empty">{{ t('settings.rulesFailuresEmpty') }}</div>
+
     <input ref="fileInput" type="file" accept=".zip" hidden @change="onFileSelected" />
   </div>
 </template>
@@ -417,6 +535,76 @@ async function runTest(p: PluginInfo) {
   gap: var(--sp-sm);
   padding: var(--sp-xs) 0;
   border-top: 1px solid var(--border);
+}
+
+.plugins__row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-sm);
+}
+
+.plugins__btn--ghost {
+  background: transparent;
+}
+
+.plugins__btn--danger:hover:not(:disabled) {
+  border-color: #EF4444;
+  color: #EF4444;
+}
+
+.plugins__warn {
+  font-size: 12px;
+  color: #F59E0B;
+  margin: 0;
+}
+
+.plugins__fail-host {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-xs);
+}
+
+.plugins__fail-host > .plugins__pack-row {
+  border-top: none;
+}
+
+.plugins__fail-urls {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-xs);
+  padding-bottom: var(--sp-sm);
+}
+
+.plugins__fail-url {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-sm);
+}
+
+.plugins__fail-url-text {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  word-break: break-all;
+  line-height: 1.5;
+}
+
+.plugins__fail-url-text:hover {
+  color: var(--primary);
+}
+
+.plugins__fail-error {
+  flex: 0 1 45%;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  line-height: 1.5;
+  word-break: break-word;
 }
 
 .plugins__pulled {

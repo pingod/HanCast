@@ -1,7 +1,7 @@
 {
   "name": "hancast-template",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "HanCast",
-  "description": "规则包模板：演示 manifest 字段、host API 与 resolve 返回值契约。只匹配保留域名 .invalid，不参与真实解析。",
+  "description": "规则包模板：演示 manifest 字段、host API（含签名原语与 cookie 罐）与 resolve 返回值契约，含多画质档位示例。只匹配保留域名 .invalid，不参与真实解析。",
   "scripts": ["main.js"]
 }

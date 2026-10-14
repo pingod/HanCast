@@ -19,11 +19,12 @@ import requests
 from urllib.parse import (parse_qs, quote, urlparse, urljoin, unquote, urlunparse)
 from html import unescape as html_unescape
 
+from . import failures
 from .server import (MediaServer, player_ext_ok, player_safe_suffix,
                      _proxy_broken)
 from .rules import (RuleContext, matching as rules_matching,
                     refresh_external as refresh_external_rules)
-from .rules.base import DESKTOP_UA, decode_body, normalize_text
+from .rules.base import decode_body, desktop_ua, normalize_text
 from .rules.jsplugins import PluginManager
 from ..models.media import MediaInfo
 from ..utils.config import SETTING_DIR
@@ -344,7 +345,7 @@ class ShareResolver:
 
     # ── 对外入口 ──
 
-    def resolve(self, text: str) -> dict:
+    def resolve(self, text: str, quality: str = "") -> dict:
         text = (text or "").strip()
         if not text:
             raise ValueError("粘贴内容为空")
@@ -359,15 +360,23 @@ class ShareResolver:
 
         deadline = time.monotonic() + _TOTAL_BUDGET
         errors: list[str] = []
+        failed: list[tuple[str, str]] = []
         # 一次解析共用一个 Session：页面下发的 Cookie 要能带进
         # /api/m3u8?origin=xx&url=yy 这类「播放地址由接口再给一次」的二次请求
         with ResilientSession() as session:
             for url in candidates[:3]:
                 try:
-                    return self._resolve_url(url, deadline, session)
+                    hit = self._resolve_url(url, deadline, session, quality)
                 except Exception as e:
                     logger.warning(f"候选地址解析失败 {url}: {e}")
                     errors.append(f"{urlparse(url).netloc}: {e}")
+                    failed.append((url, str(e)))
+                    continue
+                # 有一条成了就别再占台账：口令文案里混的推广链接常常是噪声
+                failures.forget(url)
+                return hit
+        for url, reason in failed:
+            failures.record(url, reason)
         raise ValueError("无法解析出可播放地址 — " + "；".join(errors) +
                          f"（可为该站点在 {self.rules_dir} 添加解析规则，或在设置页安装规则包）")
 
@@ -414,9 +423,9 @@ class ShareResolver:
         return None
 
     def _resolve_url(self, url: str, deadline: float,
-                     session: requests.Session) -> dict:
+                     session: requests.Session, quality: str = "") -> dict:
         ctx = RuleContext(resolver=self, session=session, deadline=deadline,
-                          source_url=url)
+                          source_url=url, quality=(quality or "").strip())
 
         # 拿到链接就能解析的站点（B 站官方接口、声明式 url 阶段规则）
         hit = self._run_rules(url, "", "url", ctx)
@@ -532,7 +541,7 @@ class ShareResolver:
         而电视恰恰不带 Range。
         """
         timeout = self._remaining(deadline)
-        headers = {"User-Agent": DESKTOP_UA}
+        headers = {"User-Agent": desktop_ua()}
         if use_range:
             headers["Range"] = "bytes=0-1023"
         with ResilientSession() as probe:
@@ -568,7 +577,7 @@ class ShareResolver:
         （global.dyrsxm.cc 发 sion_id，box.dyrs.com.de 认它），按浏览器同源规则
         过滤会把关键 Cookie 滤掉，所以页面域与目标域都取。
         """
-        headers = {"User-Agent": DESKTOP_UA, "Referer": referer}
+        headers = {"User-Agent": desktop_ua(), "Referer": referer}
         origin = urlparse(referer)
         if origin.scheme and origin.netloc:
             headers["Origin"] = f"{origin.scheme}://{origin.netloc}"
@@ -596,14 +605,14 @@ class ShareResolver:
         return min(remaining, 10.0)
 
     def _open(self, url: str, deadline: float,
-              ua: str = DESKTOP_UA, session: requests.Session | None = None,
+              ua: str | None = None, session: requests.Session | None = None,
               referer: str | None = None) -> tuple[str, str, str | None, bytes | None]:
         """GET（流式、正文封顶）→ (最终URL, Content-Type, Content-Length, 正文或None)
 
         正文为媒体类型时不下载，返回 None。
         """
         timeout = self._remaining(deadline)
-        headers = {"User-Agent": ua, "Accept": "*/*"}
+        headers = {"User-Agent": ua or desktop_ua(), "Accept": "*/*"}
         if referer:
             headers["Referer"] = referer
         get = session.get if session is not None else requests.get
@@ -742,7 +751,7 @@ class ShareResolver:
         timeout = self._remaining(deadline)
         try:
             r = session.get(url, timeout=min(timeout, 8.0), allow_redirects=True,
-                            headers={"User-Agent": DESKTOP_UA, "Referer": referer,
+                            headers={"User-Agent": desktop_ua(), "Referer": referer,
                                      "Accept": "*/*"}, stream=True)
         except requests.RequestException as e:
             raise ValueError(f"候选地址不可达: {e}") from e

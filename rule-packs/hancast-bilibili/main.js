@@ -4,12 +4,51 @@
  * 线路优先级 iOS APP → TV APP → Web HTML5，任一线路拿到 durl 即交付。
  * APP 签名是公开资料里的 appkey/appsec 方案：参数排序拼 query，再 md5(query + appsec)。
  * 反爬 Cookie（buvid3/buvid4）落盘缓存 1 小时，跨次解析复用，省掉每次一趟 finger/spi。
+ * 画质：默认投最高档（qn=80），并按接口回报的 accept_quality 告诉客户端还能切哪些档。
  */
 
 var REFERER = 'https://www.bilibili.com/';
 var COOKIE_TTL_MS = 3600 * 1000;
 var FALLBACK_BUVID3 =
   'FE6D3664-927F-F75B-B7D4-733E5D4B263F69428infoc';
+
+// 档位 id 直接用 B 站自己的 qn：切换画质时客户端原样回传，不用再做一次映射
+var QN_LABELS = {
+  '16': '360P 流畅',
+  '32': '480P 清晰',
+  '64': '720P 超清',
+  '80': '1080P 高清',
+  '116': '1080P 高帧率',
+  '127': '4K 超清'
+};
+var DEFAULT_QN = '80';
+
+function wantedQn(ctx) {
+  var q = String((ctx && ctx.quality) || '').trim();
+  // 只认表里的 qn，用户传什么都不会污染签名 query
+  return QN_LABELS[q] ? q : DEFAULT_QN;
+}
+
+function qnLabel(q) {
+  var s = String(q);
+  return QN_LABELS[s] || (s + 'P');
+}
+
+/** 本次能给的档位表（从高到低）+ 实际交付的档位 */
+function qualityInfo(data, deliveredQn) {
+  var acc = items(data, 'data.accept_quality');
+  var list = [];
+  for (var i = 0; i < acc.length; i++) {
+    var q = String(acc[i]);
+    if (QN_LABELS[q]) list.push({ id: q, label: QN_LABELS[q] });
+  }
+  list.sort(function (a, b) { return Number(b.id) - Number(a.id); });
+  var got = String(int(data, 'data.quality', 0) || deliveredQn || '');
+  if (!got) return { qualities: list };
+  // 接口没给 accept_quality 时，至少告诉客户端这次实际是什么档
+  if (!list.length) return { qualities: [], quality: got };
+  return { qualities: list, quality: got };
+}
 
 // appkey/appsec 为公开资料（bilibili-API-collect）
 var APP_LINES = [
@@ -97,11 +136,12 @@ registerRule({
     var cover = str(info, 'data.pic');
 
     var ts = String(Math.floor(Date.now() / 1000));
+    var qn = wantedQn(ctx);
     for (var i = 0; i < APP_LINES.length; i++) {
       var line = APP_LINES[i];
       try {
         var signed = appSign({
-          bvid: bvid, cid: cid, qn: '80', fnval: '1', fnver: '0',
+          bvid: bvid, cid: cid, qn: qn, fnval: '1', fnver: '0',
           fourk: '1', platform: line.platform, ts: ts
         }, line.appkey, line.appsec);
         var data = host.getJson(
@@ -109,8 +149,10 @@ registerRule({
           { headers: { 'User-Agent': line.ua, Cookie: cookie, Referer: REFERER } });
         var url = pickDurl(data);
         if (int(data, 'code') === 0 && url) {
-          host.log('取流成功 (线路: ' + line.key + ')');
+          host.log('取流成功 (线路: ' + line.key + ', 档位: ' + qn + ')');
+          var qi = qualityInfo(data, qn);
           return { url: url, title: title, thumbnail: cover,
+                   qualities: qi.qualities, quality: qi.quality,
                    headers: { Referer: REFERER, Cookie: cookie } };
         }
       } catch (e) {
@@ -121,12 +163,14 @@ registerRule({
     // 兜底：Web HTML5 直链（无需签名）
     var web = host.getJson(
       'https://api.bilibili.com/x/player/playurl?bvid=' + bvid +
-      '&cid=' + encodeURIComponent(cid) + '&qn=80&fnval=0&platform=html5',
+      '&cid=' + encodeURIComponent(cid) + '&qn=' + qn + '&fnval=0&platform=html5',
       { headers: { Cookie: cookie, Referer: REFERER } });
     var webUrl = pickDurl(web);
     if (!webUrl) throw new Error('所有取流线路均失败，请稍后重试');
-    host.log('取流成功 (线路: web html5)');
+    host.log('取流成功 (线路: web html5, 档位: ' + qn + ')');
+    var webQi = qualityInfo(web, qn);
     return { url: webUrl, title: title, thumbnail: cover,
+             qualities: webQi.qualities, quality: webQi.quality,
              headers: { Referer: REFERER, Cookie: cookie } };
   }
 });

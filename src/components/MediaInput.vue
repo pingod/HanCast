@@ -420,22 +420,14 @@ async function onCast() {
 
   // Has suitable device → cast directly
   if (mediaStore.mediaInfo) {
-    await castStore.startCast(targetDevice.id, mediaStore.mediaInfo.uri, {
-      title: mediaStore.mediaInfo.title,
-      mime_type: mediaStore.mediaInfo.mime_type,
-      thumbnail: mediaStore.mediaInfo.thumbnail,
-    })
+    await castStore.startCast(targetDevice.id, mediaStore.mediaInfo.uri, mediaStore.mediaInfo)
   }
 }
 
 async function onSelectDevice(deviceId: string) {
   showDeviceModal.value = false
   if (mediaStore.mediaInfo) {
-    await castStore.startCast(deviceId, mediaStore.mediaInfo.uri, {
-      title: mediaStore.mediaInfo.title,
-      mime_type: mediaStore.mediaInfo.mime_type,
-      thumbnail: mediaStore.mediaInfo.thumbnail,
-    })
+    await castStore.startCast(deviceId, mediaStore.mediaInfo.uri, mediaStore.mediaInfo)
   }
 }
 

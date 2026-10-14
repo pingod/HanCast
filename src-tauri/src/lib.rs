@@ -257,9 +257,13 @@ async fn parse_media_url(
 async fn resolve_share(
     sidecar: State<'_, SidecarManager>,
     text: String,
+    quality: Option<String>,
 ) -> Result<serde_json::Value, String> {
     sidecar
-        .send_command("resolve_share", serde_json::json!({"text": text}))
+        .send_command(
+            "resolve_share",
+            serde_json::json!({"text": text, "quality": quality.unwrap_or_default()}),
+        )
         .await
 }
 
@@ -284,6 +288,36 @@ async fn plugin_list(sidecar: State<'_, SidecarManager>) -> Result<serde_json::V
 #[tauri::command]
 async fn rule_inventory(sidecar: State<'_, SidecarManager>) -> Result<serde_json::Value, String> {
     sidecar.send_command("rule_inventory", serde_json::json!({})).await
+}
+
+/// 解析失败台账（按域名分组）
+#[tauri::command]
+async fn failure_list(sidecar: State<'_, SidecarManager>) -> Result<serde_json::Value, String> {
+    sidecar.send_command("failure_list", serde_json::json!({})).await
+}
+
+/// 删台账里一个域名或其中一条地址
+#[tauri::command]
+async fn failure_delete(
+    sidecar: State<'_, SidecarManager>,
+    host: Option<String>,
+    url: Option<String>,
+) -> Result<serde_json::Value, String> {
+    sidecar
+        .send_command(
+            "failure_delete",
+            serde_json::json!({
+                "host": host.unwrap_or_default(),
+                "url": url.unwrap_or_default(),
+            }),
+        )
+        .await
+}
+
+/// 清空解析失败台账
+#[tauri::command]
+async fn failure_clear(sidecar: State<'_, SidecarManager>) -> Result<serde_json::Value, String> {
+    sidecar.send_command("failure_clear", serde_json::json!({})).await
 }
 
 /// 对照官方索引看有哪些包可更新 / 可安装
@@ -1287,6 +1321,9 @@ pub fn run() {
             get_resolve_result,
             plugin_list,
             rule_inventory,
+            failure_list,
+            failure_delete,
+            failure_clear,
             plugin_check_updates,
             plugin_pull,
             plugin_import,

@@ -91,6 +91,38 @@ function mockInventory(): RuleInventory {
   }
 }
 
+/** 解析失败台账的内存态：mock 模式下也能演示删域名/删单条/清空 */
+const mockFailureHosts: FailureHost[] = [
+  {
+    host: 'weibo.com',
+    count: 3,
+    first_at: 1759000000,
+    last_at: 1759600000,
+    entries: [
+      { url: 'https://weibo.com/tv/show/1035:4800000000000000', error: '页面里没有可播放地址', count: 2, last_at: 1759600000 },
+      { url: 'https://video.weibo.com/show?1lxz3u', error: '接口返回 403', count: 1, last_at: 1759500000 },
+    ],
+  },
+  {
+    host: 'v.ixigua.com',
+    count: 1,
+    first_at: 1759400000,
+    last_at: 1759400000,
+    entries: [
+      { url: 'https://v.ixigua.com/hdlA2B3/', error: '短链展开后没有媒体', count: 1, last_at: 1759400000 },
+    ],
+  },
+]
+
+function mockLedger(): FailureLedger {
+  return {
+    enabled: true,
+    path: '~/Library/Application Support/HanCast/parse_failures.json',
+    hosts: mockFailureHosts.map((h) => ({ ...h, entries: h.entries.map((e) => ({ ...e })) })),
+    total: mockFailureHosts.reduce((n, h) => n + h.count, 0),
+  }
+}
+
 const MOCK_DEVICES: Device[] = [
   {
     id: 'samsung-tv-001',
@@ -145,7 +177,7 @@ const MOCK_DEVICES: Device[] = [
 const MOCK_SETTINGS: AppSettings = {
   usn: 'hancast-uuid-001',
   friendly_name: 'HanCast',
-  version: '2.3.5',
+  version: '2.3.6',
   media_port: 8080,
   default_device: null,
   network_interface: '',
@@ -315,6 +347,27 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
         mp3: 'audio/mpeg', aac: 'audio/aac', ogg: 'audio/ogg', m4a: 'audio/mp4',
         jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif',
       }
+      // B 站类链接：dev 模式下也要有多画质可点，否则画质选择器无从验证
+      if (/bilibili\.com|b23\.tv/i.test(url)) {
+        const q = String(args?.quality ?? '') || '80'
+        return {
+          media_type: 'url',
+          uri: `https://mock.bilivideo.com/v/${q}.mp4`,
+          title: '示例视频（浏览器 mock）',
+          mime_type: 'video/mp4',
+          file_size: null,
+          duration: null,
+          thumbnail: null,
+          qualities: [
+            { id: '80', label: '1080P 高清' },
+            { id: '64', label: '720P 超清' },
+            { id: '32', label: '480P 清晰' },
+          ],
+          quality: q,
+          source_url: url,
+          via: 'mock/hancast-bilibili',
+        } as T
+      }
       return {
         media_type: 'url',
         uri: url,
@@ -331,6 +384,28 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
       return { plugins: mockPlugins.map((p) => ({ ...p, rules: p.rules.map((r) => ({ ...r })) })) } as T
     case 'rule_inventory':
       return mockInventory() as T
+    case 'failure_list':
+      return mockLedger() as T
+    case 'failure_delete': {
+      const host = String(args?.host ?? '').toLowerCase()
+      const url = String(args?.url ?? '').toLowerCase()
+      if (url) {
+        for (const h of mockFailureHosts) {
+          h.entries = h.entries.filter((e) => e.url.toLowerCase() !== url)
+          h.count = h.entries.reduce((s, e) => s + e.count, 0)
+        }
+      } else if (host) {
+        const i = mockFailureHosts.findIndex((h) => h.host === host)
+        if (i >= 0) mockFailureHosts.splice(i, 1)
+      }
+      for (let j = mockFailureHosts.length - 1; j >= 0; j--) {
+        if (!mockFailureHosts[j].entries.length) mockFailureHosts.splice(j, 1)
+      }
+      return mockLedger() as T
+    }
+    case 'failure_clear':
+      mockFailureHosts.length = 0
+      return mockLedger() as T
     case 'plugin_check_updates': {
       const installed = new Map(mockPlugins.map((p) => [p.name, p.version]))
       const cmp = (v: string) => v.split('.').map((n) => parseInt(n, 10) || 0)
@@ -446,8 +521,8 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
     case 'check_update':
       return {
         has_update: false,
-        current: '2.3.5',
-        latest: '2.3.5',
+        current: '2.3.6',
+        latest: '2.3.6',
         url: '',
         body: '',
         source: 'github',
@@ -606,10 +681,10 @@ interface ResolveTaskEntry {
  * 后端为异步任务：resolve_share 立即返回 task_id，轮询 get_resolve_result
  * 直到 done/error（sidecar 单条解析预算 25s，这里给 45s 兜底）。
  */
-export async function resolveShare(text: string): Promise<ShareResolveResult> {
+export async function resolveShare(text: string, quality = ''): Promise<ShareResolveResult> {
   const invoke = await initInvoke()
   const start = await invoke<ResolveTaskStart & Partial<ShareResolveResult>>(
-    'resolve_share', { text })
+    'resolve_share', { text, quality })
 
   // 兼容直接返回结果的实现（浏览器 mock / 旧版）
   if (!start.task_id) {
@@ -689,6 +764,30 @@ export interface RuleInventory {
   declarative: DeclarativeRuleInfo[]
 }
 
+/** 解析失败台账：一条没解出来的地址 */
+export interface FailureEntry {
+  url: string
+  error: string
+  count: number
+  last_at: number
+}
+
+/** 台账里按域名分组的一堆 */
+export interface FailureHost {
+  host: string
+  count: number
+  first_at: number
+  last_at: number
+  entries: FailureEntry[]
+}
+
+export interface FailureLedger {
+  enabled: boolean
+  path: string
+  hosts: FailureHost[]
+  total: number
+}
+
 export async function pluginList(): Promise<PluginInfo[]> {
   const invoke = await initInvoke()
   const resp = await invoke<{ plugins: PluginInfo[] }>('plugin_list', {})
@@ -743,6 +842,34 @@ export async function ruleInventory(): Promise<RuleInventory> {
     rules_dir: resp.rules_dir ?? '',
     script_packs: resp.script_packs ?? [],
     declarative: resp.declarative ?? [],
+  }
+}
+
+/** 解析失败台账：哪些站解不出来、卡在哪一步（按域名分组，供以后写规则） */
+export async function failureList(): Promise<FailureLedger> {
+  const invoke = await initInvoke()
+  return normalizeLedger(await invoke<FailureLedger>('failure_list', {}))
+}
+
+/** 删台账里的一个域名（传 host）或其中一条地址（传 url） */
+export async function failureDelete(host = '', url = ''): Promise<FailureLedger> {
+  const invoke = await initInvoke()
+  return normalizeLedger(
+    await invoke<FailureLedger>('failure_delete', { host: host || null, url: url || null }),
+  )
+}
+
+export async function failureClear(): Promise<FailureLedger> {
+  const invoke = await initInvoke()
+  return normalizeLedger(await invoke<FailureLedger>('failure_clear', {}))
+}
+
+function normalizeLedger(resp: FailureLedger): FailureLedger {
+  return {
+    enabled: resp.enabled !== false,
+    path: resp.path ?? '',
+    hosts: resp.hosts ?? [],
+    total: resp.total ?? 0,
   }
 }
 

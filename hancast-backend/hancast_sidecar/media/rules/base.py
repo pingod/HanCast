@@ -28,10 +28,8 @@ from ...models.media import MediaInfo
 
 logger = logging.getLogger("hancast.media.rules")
 
-DESKTOP_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-              "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
-MOBILE_UA = ("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
-             "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1")
+# 身份常量单点定义在 utils/identity.py（代理侧要用同一个 UA，不能再各写一份）
+from ...utils.identity import (DESKTOP_UA, MOBILE_UA, desktop_ua, mobile_ua)
 
 
 def normalize_text(text: str) -> str:
@@ -69,11 +67,13 @@ class RuleContext:
     session: requests.Session
     deadline: float
     source_url: str = ""      # 用户粘贴的那条候选地址（交付信息里回指用）
+    quality: str = ""         # 用户点名的画质档位 id（空＝按规则自己的默认，通常最高）
 
-    def open(self, url: str, ua: str = DESKTOP_UA,
+    def open(self, url: str, ua: Optional[str] = None,
              referer: Optional[str] = None):
         """GET → (最终URL, Content-Type, Content-Length, 正文或None)"""
-        return self.resolver._open(url, self.deadline, ua=ua,
+        return self.resolver._open(url, self.deadline,
+                                   ua=ua or desktop_ua(),
                                    session=self.session, referer=referer)
 
     def publish(self, uri: str, mime: str, referer: str, via: str,
@@ -91,13 +91,17 @@ class RuleContext:
         return self.resolver._follow_stream(url, self.session, referer, self.deadline)
 
     def info(self, uri: str, mime: str, title: str, via: str,
-             source_url: str = "", thumbnail: Optional[str] = None) -> dict:
+             source_url: str = "", thumbnail: Optional[str] = None,
+             qualities: Optional[list] = None,
+             quality: str = "") -> dict:
         media_info = MediaInfo(
             media_type="url",
             uri=uri,
             title=(title or urlparse(uri).netloc)[:80],
             mime_type=mime,
             thumbnail=thumbnail,
+            qualities=qualities or [],
+            quality=quality or "",
         )
         return {**media_info.to_dict(),
                 "source_url": source_url or self.source_url, "via": via}
@@ -241,7 +245,8 @@ def _ext_of(url: str) -> str:
 
 
 __all__ = [
-    "DESKTOP_UA", "MOBILE_UA", "RuleContext", "SiteRule", "register",
+    "DESKTOP_UA", "MOBILE_UA", "desktop_ua", "mobile_ua",
+    "RuleContext", "SiteRule", "register",
     "registered", "matching", "refresh_external", "set_external_loader",
     "set_plugin_rules", "decode_body", "decode_js_string", "normalize_text",
     "template_apply", "absolutize", "title_from_html", "guess_mime",

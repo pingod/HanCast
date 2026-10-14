@@ -131,7 +131,7 @@ class TestExtractCandidates(unittest.TestCase):
                                  rules_dir=_isolated_rules_dir(self))
         tried: list[str] = []
 
-        def fake(url, deadline, session):
+        def fake(url, deadline, session, quality=""):
             tried.append(url)
             raise ValueError("stub fail to continue")
 

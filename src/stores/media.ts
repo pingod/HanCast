@@ -99,14 +99,14 @@ export const useMediaStore = defineStore('media', () => {
    * 后端 resolve_share 负责文本提取 + 短链展开 + 页面直链解析；
    * 失败且能提取出链接时降级为透传原始地址（沿用旧行为）。
    */
-  async function parseUrl(input?: string) {
+  async function parseUrl(input?: string, quality = '') {
     const raw = (input ?? urlInput.value).trim()
     if (!raw) return
 
     state.value = 'parsing'
     error.value = null
     try {
-      const info = await resolveShare(raw)
+      const info = await resolveShare(raw, quality)
       if (!info.uri) throw new Error('解析结果为空')
       mediaInfo.value = {
         media_type: 'url',
@@ -116,6 +116,10 @@ export const useMediaStore = defineStore('media', () => {
         file_size: info.file_size ?? null,
         duration: info.duration ?? null,
         thumbnail: info.thumbnail ?? null,
+        qualities: info.qualities ?? [],
+        quality: info.quality ?? quality,
+        // 切换画质要拿它再解一次（口令里的短链已展开，重解更快）
+        source_url: info.source_url || raw,
       }
       // 输入框回显提取出的干净地址，便于用户确认投屏目标
       if (info.source_url) urlInput.value = info.source_url

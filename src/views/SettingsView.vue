@@ -426,7 +426,7 @@ async function onCheckUpdate() {
 
                     <div class="settings__param-control">
                       <input
-                        v-if="spec.type === 'text'"
+                        v-if="spec.type === 'text' || spec.type === 'string'"
                         class="settings__input settings__input--text"
                         type="text"
                         spellcheck="false"

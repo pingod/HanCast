@@ -81,11 +81,7 @@ function isOffline() {
 
 function onCast() {
   if (!isOnline() || !mediaStore.mediaInfo) return
-  castStore.startCast(props.device.id, mediaStore.mediaInfo.uri, {
-    title: mediaStore.mediaInfo.title,
-    mime_type: mediaStore.mediaInfo.mime_type,
-    thumbnail: mediaStore.mediaInfo.thumbnail,
-  })
+  castStore.startCast(props.device.id, mediaStore.mediaInfo.uri, mediaStore.mediaInfo)
 }
 
 async function onRestoreController() {

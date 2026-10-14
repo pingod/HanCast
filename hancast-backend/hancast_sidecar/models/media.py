@@ -28,6 +28,9 @@ class MediaInfo:
     mime_type: str = ""
     file_size: Optional[int] = None
     thumbnail: Optional[str] = field(default=None)
+    # 多画质：可选档位 [{id, label}] 与本次交付的档位 id（规则包给出，没有就为空）
+    qualities: list = field(default_factory=list)
+    quality: str = ""
 
     def __post_init__(self):
         self.thumbnail = secure_thumbnail(self.thumbnail)

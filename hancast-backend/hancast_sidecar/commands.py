@@ -147,6 +147,11 @@ class CommandHandler:
             # 规则总览（脚本包 + 声明式 JSON，两处一屏）
             "rule_inventory": self._rule_inventory,
 
+            # 解析失败台账（按域名分类，供以后给这些站写规则）
+            "failure_list": self._failure_list,
+            "failure_delete": self._failure_delete,
+            "failure_clear": self._failure_clear,
+
             # 设置
             "get_settings": self._get_settings,
             "save_settings": self._save_settings,
@@ -600,9 +605,9 @@ class CommandHandler:
         text = params.get("text") or params.get("url") or ""
         if not text.strip():
             raise ValueError("粘贴内容为空")
-        return self._spawn_resolve_task(text)
+        return self._spawn_resolve_task(text, str(params.get("quality") or ""))
 
-    def _spawn_resolve_task(self, text: str) -> dict:
+    def _spawn_resolve_task(self, text: str, quality: str = "") -> dict:
         """解析任务排队 + 后台执行；resolve_share 与 plugin_test 共用"""
         with self._resolve_lock:
             # 清理过期完成任务（10 分钟）
@@ -620,7 +625,7 @@ class CommandHandler:
 
         def _run():
             try:
-                result = self.share_resolver.resolve(text)
+                result = self.share_resolver.resolve(text, quality)
                 done = {"status": "done", "result": result, "ts": time.time()}
             except Exception as e:
                 logger.info(f"分享解析失败: {e}")
@@ -651,6 +656,22 @@ class CommandHandler:
     def _rule_inventory(self, params: dict) -> dict:
         """两种来源的规则一处列全（脚本包 / 声明式 JSON）"""
         return self.share_resolver.rule_inventory()
+
+    # ── 解析失败台账 ──
+
+    def _failure_list(self, params: dict) -> dict:
+        from .media import failures
+        return failures.snapshot()
+
+    def _failure_delete(self, params: dict) -> dict:
+        from .media import failures
+        removed = failures.delete(str(params.get("host") or ""),
+                                  str(params.get("url") or ""))
+        return {"removed": removed, **failures.snapshot()}
+
+    def _failure_clear(self, params: dict) -> dict:
+        from .media import failures
+        return {"removed": failures.clear(), **failures.snapshot()}
 
     def _plugin_check_updates(self, params: dict) -> dict:
         """对照官方索引看哪些包有新版本，顺带列出索引里还没装的包"""

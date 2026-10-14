@@ -1,0 +1,120 @@
+{
+ "generated_by": "Node.js crypto (OpenSSL) — 见文件头注释",
+ "aes": [
+  {
+   "bits": 128,
+   "mode": "ecb",
+   "key": "7903709609361fa7442a6ed6c4e378d2",
+   "iv": "XkBgisSJjXkIuDhU0fyWZA==",
+   "plain": "/WMmopMew3pfbJ0452EWiEWt7Z/AEOLHSfMvcw2kBJZ7mKB57w==",
+   "cipher": "1TZ/T8Q7br2PENFqxjQBB2DmsDrtN1cb11k4bxenhYPg3QDTs9WIajU2JvyFtwDT"
+  },
+  {
+   "bits": 128,
+   "mode": "cbc",
+   "key": "7903709609361fa7442a6ed6c4e378d2",
+   "iv": "XkBgisSJjXkIuDhU0fyWZA==",
+   "plain": "/WMmopMew3pfbJ0452EWiEWt7Z/AEOLHSfMvcw2kBJZ7mKB57w==",
+   "cipher": "KnPbhW8pBP/IM+04DkGS2TeTBc6KyMzVoRVqqjV0Gs9Pvz9XtiJ8XTcN/B014hcG"
+  },
+  {
+   "bits": 192,
+   "mode": "ecb",
+   "key": "645d92e70c0ea5978718e2d53bbb20c0ea60698509ecd533",
+   "iv": "UYAj3M/H/WI2hmO23970HA==",
+   "plain": "Csg7xEkeNKg/JgV2MQvDXpvno79qTblk0AnaAa0EOLUVjLstYw==",
+   "cipher": "EhhpB6pov5C0lAEWUZUGcvl2jP9QDfcycDytuPQKU5FP5WeAgzi4yzPYTETzRMTw"
+  },
+  {
+   "bits": 192,
+   "mode": "cbc",
+   "key": "645d92e70c0ea5978718e2d53bbb20c0ea60698509ecd533",
+   "iv": "UYAj3M/H/WI2hmO23970HA==",
+   "plain": "Csg7xEkeNKg/JgV2MQvDXpvno79qTblk0AnaAa0EOLUVjLstYw==",
+   "cipher": "zBRlsgrZRYq4L7uwnR3qzI/0It+gf/EvLVOMP9HjpaKpc+6yWcbLJldV4BsdTfNA"
+  },
+  {
+   "bits": 256,
+   "mode": "ecb",
+   "key": "cca954ceb4c1c898ad3e02c5b850f1f2bc4e1188a9f414f2307b00feb4fc09ea",
+   "iv": "w6nfpvW2wDiRRIjlqU0WRg==",
+   "plain": "Zrh9DM2fcLhyv+mu+3Bv468jKS6YVvvpi94cr59NKTRYEzOaLEGIL9GogckHA02D+df03Ls=",
+   "cipher": "t7kdIzfN7rO/SH4rDbS0Djcxm0zbb0ejml1uesqy+JUqAOtgnILolt/7s3enF6+ECow3aBdGTkbIBw4/I7TlXg=="
+  },
+  {
+   "bits": 256,
+   "mode": "cbc",
+   "key": "cca954ceb4c1c898ad3e02c5b850f1f2bc4e1188a9f414f2307b00feb4fc09ea",
+   "iv": "w6nfpvW2wDiRRIjlqU0WRg==",
+   "plain": "Zrh9DM2fcLhyv+mu+3Bv468jKS6YVvvpi94cr59NKTRYEzOaLEGIL9GogckHA02D+df03Ls=",
+   "cipher": "4eUUFpty403XpIlZbpILbSjh4O7Kus8a2ctbXB687tCB4/NKEZCQAEiZasgIZqqUtXY8DE+ICVhClUT0jyzCJw=="
+  }
+ ],
+ "fips": [
+  {
+   "bits": 128,
+   "key": "000102030405060708090a0b0c0d0e0f",
+   "plain": "00112233445566778899aabbccddeeff",
+   "cipher": "69c4e0d86a7b0430d8cdb78070b4c55a"
+  },
+  {
+   "bits": 192,
+   "key": "000102030405060708090a0b0c0d0e0f1011121314151617",
+   "plain": "00112233445566778899aabbccddeeff",
+   "cipher": "dda97ca4864cdfe06eaf70a0ec0d7191"
+  },
+  {
+   "bits": 256,
+   "key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+   "plain": "00112233445566778899aabbccddeeff",
+   "cipher": "8ea2b7ca516745bfeafc49904b496089"
+  }
+ ],
+ "hmac": [
+  {
+   "algo": "sha1",
+   "key": "qwer1234",
+   "msg": "abc=1&b=2&ts=1700000000",
+   "hex": "5f2c9e6185ed2c7f12d247f362eef7f98295638c"
+  },
+  {
+   "algo": "sha1",
+   "key": "qwer1234",
+   "msg": "中文参数=1",
+   "b64": "O9H5gWUpoXL4yNuSsLE/VbgFCsc="
+  },
+  {
+   "algo": "sha256",
+   "key": "qwer1234",
+   "msg": "abc=1&b=2&ts=1700000000",
+   "hex": "ed61312ba58e5985282bc3d2378f970676b176813dae793654354577b33c5359"
+  },
+  {
+   "algo": "sha256",
+   "key": "qwer1234",
+   "msg": "中文参数=1",
+   "b64": "sahZfhmx5FwSgDAiH+pPPfB3JxdUJ1nL0ndtiR2tKXk="
+  },
+  {
+   "algo": "md5",
+   "key": "qwer1234",
+   "msg": "abc=1&b=2&ts=1700000000",
+   "hex": "b73391a9ae094b874a11d0ae029c3c4f"
+  },
+  {
+   "algo": "md5",
+   "key": "qwer1234",
+   "msg": "中文参数=1",
+   "b64": "ey98qtd/PZmLAbVpKfZXyw=="
+  }
+ ],
+ "rsa": {
+  "note": "一次性测试密钥，仅用于验证沙箱 RSA 公钥加密的填充正确",
+  "n_hex": "d773a5cea48927173216d635d0d016f1b1793e47712323eaaa4f31507c5aa0e730c6f9dfac4011c9530b69fe9ef1057d339b9655e90f1bfde2b696a7e42b3da107fbbecbb5d26e93e30ad445862e1da4233855bc788286b801bf68dd731e391222dc7d71ea87f2cfda7c426236c3efaf1b281b95160eb7d47f2a5c859a14331d",
+  "e_hex": "010001",
+  "d_hex": "4c30d189ea15b68535696e0749f8cca45c268c27a792cdb8c6d18a96f3e2f8d3c92414694cf8bb517ed4a27f30a5fb52f3552a2ce7663877e81cb9da558e15149ee3f95d3688e4b94797ea2cb7023eb6429f38b2e4c046effacbb81e3154a6483597af0cf2e4b948bb92559fb2fdf4d4ceb5c8f30f6d9f4bf5925d3fe67acee1",
+  "cipher": "YYlZrnYFRYS1fEW03ZRlTTrtJMJONrl/K2uIC61PwVp7kCsSBP5k2FUalmfZoSWf4ggwJ5iMh6n/1vKlHn5MftmsDIdpjrIRTseACBEA844dvSNwqVqfh5YZw8Uz0BH+PVkkC74Lho6ndSt68tyoi8tFPAb/9WHbah7oEBAyO5A=",
+  "k": 128,
+  "plain": "pin=1234&uid=42"
+ }
+}

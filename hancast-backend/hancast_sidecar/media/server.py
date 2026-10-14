@@ -21,6 +21,7 @@ from urllib.parse import urlparse, parse_qs
 from typing import Dict, Tuple
 
 from ..params import get as param
+from ..utils.identity import desktop_ua
 
 logger = logging.getLogger("hancast.media.server")
 
@@ -39,9 +40,6 @@ PROXY_ALLOWED_SUFFIXES = {
 # 解析器注册的外部站点（不在白名单内）不允许指向内网/回环，
 # 避免局域网 HTTP 服务被当成访问路由器、metadata 端点的跳板
 _PRIVATE_HOST_PREFIXES = ("127.", "10.", "169.254.", "192.168.", "0.")
-
-_PROXY_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-             "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
 # requests 会把值为 None 的键从合并结果里删掉，等于「这一次不走任何代理」
 _NO_PROXY = {"http": None, "https": None}
@@ -414,7 +412,7 @@ class MediaHandler(BaseHTTPRequestHandler):
                 return
         headers = dict(self._BILI_HEADERS if whitelisted and reg_headers is None
                        else reg_headers or {})
-        headers.setdefault("User-Agent", _PROXY_UA)
+        headers.setdefault("User-Agent", desktop_ua())
 
         logger.info(f"Proxy request: {self.path} → {remote_url[:100]}...")
 
@@ -431,7 +429,7 @@ class MediaHandler(BaseHTTPRequestHandler):
                 denied = resp.status_code
                 resp.close()
                 logger.info(f"代理带页面头被拒 {denied}，改用裸 UA 重试: {host}")
-                bare = {"User-Agent": _PROXY_UA}
+                bare = {"User-Agent": desktop_ua()}
                 if range_val:
                     # 裸头只甩掉防盗链字段，Range 必须原样保留，否则电视的
                     # 分段请求会拿到整条资源却仍是 206 语义之外的响应
