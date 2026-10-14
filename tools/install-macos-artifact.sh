@@ -44,7 +44,10 @@ set -e
 ditto "$SRC" "$APP"
 chown -R root:wheel "$APP"
 plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist"
-EOFchmod +x "$SCRIPT"
+EOF
+chmod +x "$SCRIPT"
+# 空脚本也会「授权成功」，装完还是旧版——必须在弹框前就挡住
+grep -q ditto "$SCRIPT" || { echo "FAIL 生成的提权脚本不完整: $SCRIPT"; exit 1; }
 
 OUT=$(osascript -e "do shell script \"/bin/bash $SCRIPT\" with administrator privileges with prompt \"安装 HanCast $VER\"" | tr -d '\r')
 rm -f "$SCRIPT"
