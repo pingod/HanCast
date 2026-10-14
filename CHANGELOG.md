@@ -11,14 +11,15 @@
 
 ---
 
-## v2.3.8 — 2026-10-15（`9e3f9c9`）
+## v2.3.8 — 2026-10-15（`2562d9f`，修复本体在 `9e3f9c9`）
 
 修 v2.3.7 的一个**产物级**缺陷：源码里的 TLS/JA3 指纹伪造在打包版里根本没生效。
 
 - **根因**：`bundle.resources` 是白名单，v2.3.7 只加了 `--include-package=curl_cffi`，没往三份平台 conf 里加 `curl_cffi/**/*`，于是 Nuitka 冻结出的 `curl_cffi/` 目录在打包时被整体丢弃，`make_session()` 的 `import curl_cffi` 当场失败并静默回落到 `requests`——指纹照样是 python-requests，且日志里一句错都不报。
 - **修法**：三端 conf 各补 `curl_cffi/**/*`（`_cffi_backend*.so/.pyd` 由既有的 `*.so`/`*.pyd` 顶层 glob 接住）；`scripts/check-resources.cjs` 新增预检，把 `build_sidecar.py` 里每条 `--include-package` 与 resources 白名单逐条对齐，产出有该目录而白名单没列就 exit 1；`uv.lock` 补齐 curl-cffi 0.16.3 / cffi 2.1.1 / pycparser 3.11。
 - **契约**：`src-tauri/Cargo.lock` 收进版本契约点（第 7 处），`version:set`、无参数同步、`check-version.cjs` 三处同时覆盖；`tools/rust-check.sh` 的桩列表补 `curl_cffi`，本地 `cargo check` 不会因新 glob 落空而失败。
-- **验收判据**：`tools/accept-macos-artifact.sh` / `tools/verify-windows-artifact.sh` 按 tag 探测 `curl_cffi` 与 `browser.rs`，产物里缺二进制即 FAIL。
+- **验收判据**：`tools/accept-macos-artifact.sh` / `tools/verify-windows-artifact.sh` 按 tag 探测 `curl_cffi` 与 `browser.rs`，产物里缺二进制即 FAIL。另加产物级闭环探针 `tools/probe-installed-ja3.py`：直接起 `.app` 里那个冻结 sidecar，喂一条带一次性标记的 `resolve_share`，在同一次运行里与 stdlib ssl 基线对照，**判据只认 GREASE**（源码级 `probe-tls-ja3.py --client hancast` 走 `sys.path` 里的源码，测不到这一层）。
+- **实测**：v2.3.7 产物 JA3 `4f05321b…`、零 GREASE（判 FAIL，正是降级形状）；装好 v2.3.8 后 `tools/accept-macos-artifact.sh 2.3.8` 全绿（含 curl_cffi 目录 / `_wrapper` 二进制 / 顶层 `_cffi_backend` 三项），同一条探针判 PASS，产物 JA3 `73e88c3c…` 与源码级 `curl_cffi[chrome124]` **逐字节同一个哈希**。
 
 ## v2.3.7 — 2026-10-15（`2a93873`）
 
