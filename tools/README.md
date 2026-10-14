@@ -1,10 +1,10 @@
 # HanCast — `tools/` 验收与探针脚本索引
 
-> 这份文档回答：`tools/` 下 38 个脚本各自验什么、怎么跑、需要什么环境，以及新增脚本要守哪些约定。
+> 这份文档回答：`tools/` 下这些脚本各自验什么、怎么跑、需要什么环境，以及新增脚本要守哪些约定。
 
 `tools/` 里放的是**可重复运行的验收 / 探针脚本**，不是一次性的 `/tmp` 手搓脚本。它们必须自适应当前机器——设备名、网卡、产物路径、参数条数都从现场现读，不写死。用法上的两条铁律：**修 bug 之前先跑它复现，修完之后再用它证明**。「证明」的对象是判据（退出码 / PASS-FAIL 行），不是截图，也不是「我点了一下看起来对」。
 
-当前共 **38 个脚本**（`git ls-files tools/` 的计数；`ls tools/` 显示 39 项是因为多了一个 `__pycache__/` 目录）。
+当前分类表收录 **41 个顶层脚本 + 1 个目录型验收包**（`browser-channel-livecheck/`，4 个文件合写成 §1.7 的一行）。核对计数用 `git ls-files tools/`：现在是 47 项 = 42 个顶层脚本文件 + 验收包 4 个 + 本 README，其中 `audit-doc-refs.py` 是全仓文档体检工具，用法记在 `AGENTS.md:598` 与 [docs/README.md](../docs/README.md) §4，不进本索引的分类表。`ls tools/` 还多一个不入库的 `__pycache__/`。
 
 ---
 
@@ -18,6 +18,7 @@
 |------|-----------|---------|---------|
 | `accept-macos-artifact.sh` | macOS 产物验收总入口：版本、Info.plist 三条声明、签名身份、产物内文件 sha256 对齐 tag、参数表逐键比对、SSDP 心跳通道、跨机入站、JS 插件宿主、窗口/音频契约，逐项打 PASS/FAIL | `tools/accept-macos-artifact.sh <version>`（例 `tools/accept-macos-artifact.sh 2.3.5`） | 仅 macOS；`/Applications/HanCast.app` 已装 CI 产物；仓库里能 `git show v<version>`（tag 已 fetch）；局域网可达 |
 | `install-macos-artifact.sh` | 把 CI 的 dmg 原样装进 `/Applications`，不做任何补丁；装完直接接 `accept-macos-artifact.sh` | `tools/install-macos-artifact.sh <version> <dmg 路径>` | 仅 macOS；dmg 产物；当前用户在 `admin` 组（全程不提权，`:8-11`）；旧 sidecar 必须已自行退出（脚本只等不 `pkill`，`:31-34`） |
+| `verify-windows-artifact.sh` | 验收装在 .68 上的 CI 产物**本身**：注册表 `DisplayVersion` == 要求版本；安装目录里那份源码级 `.py` 逐个与 `git show v<tag>` 比对（两边都 `tr -d '\r'`，Windows 包全是 CRLF，直接 certutil 比 tag 哈希会把装对的版本判成装错）；curl_cffi 三件套与主程序里的离屏窗口标签单独扫一遍，tag 里没这项就 SKIP 而不是假 FAIL | `tools/verify-windows-artifact.sh <version>`<br>`… <version> params.py utils/httpclient.py`（只比对指定文件） | 仅 macOS 侧发起；能 `ssh administrator@192.168.1.68`；本地有 `v<version>` tag；不碰 UI、不打补丁。任一项 FAIL = 这版产物在他手上不可信，别继续让他测 |
 | `pull-rule-packs-installed.py` | 驱动**打包版** sidecar 走 `plugin_check_updates` → `plugin_pull`，证明已装的规则包真能升到官方索引版本 | `python3 tools/pull-rule-packs-installed.py`<br>`… --only hancast-douyin`<br>`… --no-relaunch`<br>`… --app /Applications/HanCast.app` | 仅 macOS（默认 `APP = /Applications/HanCast.app`，`:38`）；打包产物；能访问 `raw.githubusercontent.com`，走系统代理时带 `HTTPS_PROXY`；脚本会**整体退出并重启 GUI** |
 | `cleanup-macos-aggregates.py` | 清掉探针残留在系统里的 HanCast CoreAudio 聚合设备（默认只打印计划） | `hancast-backend/.venv/bin/python tools/cleanup-macos-aggregates.py`<br>`… --apply`<br>`… --apply --product` | 仅 macOS；后端 venv（import `hancast_sidecar.screencast.macos_tap`） |
 | `rust-check.sh` | 本地 `cargo check` 的前置：按 Tauri 配置建一次性空桩，让资源 glob 不落空；check 完只删自己建的文件 | `tools/rust-check.sh`<br>`tools/rust-check.sh --release`（参数透传给 `cargo check`） | 本地开发机；`rustc`/`cargo`；会**在 `src-tauri/` 下临时写文件**（`trap cleanup EXIT` 回收，已存在的路径绝不动） |
@@ -99,6 +100,14 @@ ssh administrator@192.168.1.68 "schtasks /delete /tn <TASK> /f"      # 收尾
 | `verify-params-ui.mjs` | 设置页「后台参数」区块的浏览器验收：用真实 Chromium（headless shell + CDP）渲染，不靠快照推断布局。走 vite dev 的 mock 通道，只验 UI 行为（展开 / 三类控件 / 待保存计数 / 保存回落 / 恢复默认） | `node tools/verify-params-ui.mjs [base-url]`（默认 `http://localhost:5199`） | 先起 vite：`node node_modules/vite/bin/vite.js --port 5199`；`~/.cache/puppeteer/chrome-headless-shell` 下有 `mac_arm-*` 构建；CDP 端口 9337；截图落 `/tmp/hancast-params-ui-*.png`；退出码 0 = 全部断言通过。**后端契约不由它负责**——那是 `hancast-backend/tests/test_params*.py` 与 `tools/accept-macos-artifact.sh` 的活 |
 | `verify-sidecar-utf8-protocol.py` | 验证 sidecar 的 stdin/stdout 协议在「父进程没有 locale」时仍走得通。登记表/错误文案全是中文，而 stdout 就是与 Rust 的通信通道；父进程没给 `LANG`/`LC_*` 时 Python 的 stdout 会退回 ASCII，`emit_response(..., ensure_ascii=False)` 直接抛 `UnicodeEncodeError`，表现为「命令永远失败」而不是「编码不对」 | `python3 tools/verify-sidecar-utf8-protocol.py [python 二进制]`（缺省用 `sys.executable`；可指向打包版 sidecar） | 后端源码可 import；无需外网、无需真机。判据：hostile env（`LC_ALL=C` 等）下 `get_params` 必须成功、条数不少于 18、中文标签原样回来；`stop_screen_cast`（空载）这种带中文提示的响应也必须回来。v2.2.18 用打包版实测撞到过 `{"id":2,"success":false,"error":"'ascii' codec can't encode characters …"}` |
 
+### 1.7 反爬：TLS 指纹与浏览器通道
+
+| 脚本 | 一句话用途 | 运行方式 | 前置环境 |
+|------|-----------|---------|---------|
+| `probe-tls-ja3.py` | **源码级** TLS 指纹取证：本机起一个只读 ClientHello 的裸 TLS 服务（不做握手、不需要证书、不出网），逐个客户端握手后算 JA3 并标出 GREASE。`--client hancast` 走 `utils/httpclient.make_session()`，证明的是**接线**而不是库能用 | `hancast-backend/.venv/bin/python tools/probe-tls-ja3.py`（四个客户端对照跑）<br>`… --client hancast`（单探针，只报本次指纹）<br>`… --target chrome124`（impersonate 目标）<br>`… --ua "…Chrome/124…"` | 后端 venv（那里装了 `curl_cffi`）；只在 `127.0.0.1` 起临时端口；无需外网。判据只认 GREASE（`0x?a?a`）：OpenSSL/SecureTransport 发不出，Chrome 系必发。**别拿「与裸 ssl 基线不同」当生效证据**——urllib3 v2 自己会加 ALPN `http/1.1`，两者 JA3 本来就不逐字相同 |
+| `probe-installed-ja3.py` | **产物级**同款取证：起 `.app` 里那个冻结 sidecar，喂一条真实 `resolve_share`（地址带一次性标记），看它自己发出去的 ClientHello。存在的理由：v2.3.7 接线是对的、`bundle.resources` 白名单漏了 `curl_cffi/`，import 失败按设计静默降级回 requests——**只有装好的包才暴露得出来** | `python3 tools/probe-installed-ja3.py`（默认 `/Applications/HanCast.app/Contents/MacOS/hancast-sidecar`）<br>`… --binary <sidecar 路径>`<br>`… --timeout 60` | 仅 macOS 打包产物；不需要外网、不需要 GUI 起着、不锁屏也能跑。同一份 JA3 解析代码由 `importlib` 直接复用 `probe-tls-ja3.py`，两套判据不会走偏。⚠️ 会**写用户的解析失败台账**（收尾用 `failure_delete{url}` 只删自己那一条，绝不调 `failure_clear`） |
+| `browser-channel-livecheck/`（`run.sh` + `serve.py` + `pack/`） | 浏览器通道（`host.render` / `host.sniff` / WebView Cookie）真机验收包：把测试包装进应用的规则目录 → 起一个假站点（播放地址**只由页面 JS 现挂**、并下发一枚 HttpOnly Cookie，HTTP 抓页永远看不到）→ 等人工把地址粘进主界面点「粘贴」→ 从应用日志读四条判据 | `bash tools/browser-channel-livecheck/run.sh [--port 8099] [--host 192.168.1.7] [--wait 180] [--no-serve] [--keep]` | 仅 macOS/Linux；应用启动过（规则目录得存在）；**必须人工粘贴**（`resolve_share` 只是 sidecar 命令，DLNA 入站不走解析链）。四条判据：`sniff=.*master\.m3u8`、`httponly=1`、`uaMatchesHost=true`、`render title=HanCast 浏览器通道验收页`，全中才 `exit 0`。细节见 [docs/反爬实现取证与浏览器通道.md](../docs/反爬实现取证与浏览器通道.md) |
+
 ---
 
 ## 2. 使用纪律
@@ -119,6 +128,8 @@ ssh administrator@192.168.1.68 "schtasks /delete /tn <TASK> /f"      # 收尾
 | `verify-ssdp-offline-eviction.py` | 在本机**起一台假 MediaRenderer**并监听端口 | LOCATION 故意写 `127.0.0.1`；替身端口可指定（`--port`） |
 | `share_resolve_probe.py --serve/--play`、`verify-proxy-live.py` | **真起 MediaServer**，占本机端口、写临时文件 | 默认模式（不带 `--serve`/`--play`）用替身代理，不占端口不起服务 |
 | `verify-proxy-segment-decodable.py` | 在 `127.0.0.1` 起一个临时端口 | 明确声明「只读上游、不碰任何产品配置」 |
+| `probe-installed-ja3.py` | 起**打包版 sidecar** 进程并向用户的配置目录**写一条解析失败台账** | 只在 `127.0.0.1` 起取证端口；地址带一次性标记 `hancast-ja3-probe`，收尾用 `failure_delete{url}` 精确删自己那一条（绝不调 `failure_clear`，那是用户的数据）；`close()` 只收尾自己 spawn 的那个 pid——**绝不 `pkill` sidecar**，那会杀掉正在投屏的实例 |
+| `browser-channel-livecheck/run.sh` | 往应用的**用户规则目录**装一个测试包，并起 HTTP 服务 | `trap cleanup EXIT` 只删本次自己建的那一个目录（`--keep` 才留）；服务是脚本自己起的子进程，退出即 `kill` |
 | `rust-check.sh` | 在 `src-tauri/` 下**创建桩文件与目录** | `stub()` 遇已存在的路径直接跳过（打印「已存在，跳过」）；`trap cleanup EXIT` 逆序回收，先删文件再 `rmdir -p` 空目录，绝不动仓库里原有的东西 |
 | `build-rule-packs.py`（无 `--check`） | **写 `rule-packs/dist/*.zip` 与 `rule-packs/index.json`** | `--check` 是只读模式；`--clean` 才删文件，且只删「源目录已不存在」的孤儿 zip |
 | Windows `.cmd` 全家 | 在 .68 上**创建计划任务**、写 `D:\Temp\*`、起真实屏幕捕获 | 每个脚本头部都写了收尾命令（`schtasks /delete /tn <TASK> /f` + `rmdir /s /q <dir>`）；`gen-win-screencast-live-req.py` 里的 ffmpeg 路径与输出目录都是 .68 专属硬编码 |
@@ -134,6 +145,8 @@ ssh administrator@192.168.1.68 "schtasks /delete /tn <TASK> /f"      # 收尾
 - `verify-win-screencast-audio-live.cmd` — 驱动 `C:\Users\Administrator\AppData\Local\HanCast` 下**已发布的** sidecar；docstring 明写「a hand-written ffmpeg line can only prove an argument layout; this proves the layout the app actually emits」。
 - `verify-proxy-segment-decodable.py` — 提供 `--root` / `--ffmpeg` 两个开关专门指向已装产物，注释写着「禁止拿工作树冒充验收」。
 - `verify-ssdp-offline-eviction.py` — 默认读打包版日志。
+- `probe-installed-ja3.py` — 跑的是 `.app` 里的冻结 sidecar（`DEFAULT_BIN`，`:47`）。它存在的理由就是源码级探针测不到这一层：`probe-tls-ja3.py --client hancast` 走 `sys.path` 里的源码，只能证明接线对，v2.3.7 恰恰是接线对、白名单漏包。
+- `verify-windows-artifact.sh` — 读的是 .68 安装目录里那份 `.py` 与二进制，与 `git show v<tag>` 逐文件比哈希；本地工作树跟它无关。
 
 反过来，这些是**源码级/离线**的，不需要产物：`verify-dlna-volume-chain.py`、`verify-dshow-parse-offline.py`、`verify-sidecar-utf8-protocol.py`、`verify-params-ui.mjs`、`probe-hls-antileech.py`、`probe-ts-skin-offset.py`、`probe-dyrs-*.sh`、`ssdp_probe.py`、`dump-cgwindowlist.py`、`rust-check.sh`、`build-rule-packs.py`。
 
@@ -143,7 +156,7 @@ ssh administrator@192.168.1.68 "schtasks /delete /tn <TASK> /f"      # 收尾
 
 - **必须在 .68 的交互桌面会话里跑**（gdigrab 抓不到 session 0，所以必须经 `schtasks … /it` 投递）：`verify-screencast-audio-order.cmd`、`verify-win-loopback-feed.cmd`、`verify-win-screencast-audio-live.cmd`、`probe-win-window-picker.py`
 - **必须在 .68 上跑但不需要桌面**：`probe-wasapi-loopback.py`、`probe-win-audio-pipe.py`（后者显式避开 gdigrab，视频输入用 `lavfi testsrc` 顶替）、`verify-screencast-audio-order.ps1`（读已产出的 m3u8）
-- **从 macOS/Linux 远程打 .68**：`verify-win-screencast-dwell.sh`、`verify-win-screencast-tone-content.sh`（两者 `HOST` 默认 `192.168.1.68`，走 ssh + 产品的 `http://<host>:8765/hls/<session>/` 通道）
+- **从 macOS/Linux 远程打 .68**：`verify-windows-artifact.sh`（产物验收）、`verify-win-screencast-dwell.sh`、`verify-win-screencast-tone-content.sh`（两者 `HOST` 默认 `192.168.1.68`，走 ssh + 产品的 `http://<host>:8765/hls/<session>/` 通道）
 - **不需要 .68**：`verify-dshow-parse-offline.py`（离线回放 .68 抓来的文本，设计上就是在 Mac 上跑）、`gen-win-screencast-live-req.py`（只生成 ASCII 请求文本）
 - `verify-dlna-stop-chain.py` 需要局域网里有一台在跑的 Windows renderer，默认认 `display_name` 含 `AMD-YES` 或 IP `192.168.1.68`
 
