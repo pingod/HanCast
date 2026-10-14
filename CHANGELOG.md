@@ -1,6 +1,6 @@
 # Changelog
 
-> 最后校对：2026-10-15，对应版本 v2.3.8（`package.json:4`）
+> 最后校对：2026-10-15，对应版本 v2.3.9（`package.json:4`）
 
 本文件记录 HanCast 的版本历史。口径说明：
 
@@ -10,6 +10,16 @@
 - 新加版本时**同一次提交**里补这里，并按 [docs/README.md](docs/README.md) §4 的约定同步对应文档。
 
 ---
+
+## v2.3.9 — 2026-10-15（本轮发布提交）
+
+修的是**发布链路自己**：v2.3.8 的 `windows-x64` 作业在 `Build frontend` 步就炸，Windows 安装包从未产出，连带 `Upload to draft Release` 被 skip——功能代码一行没错，错在上一轮刚收进契约点的 `Cargo.lock` 正则。
+
+- **根因**：`scripts/sync-version.cjs:57-68` 的 `read`/`replace`/`expect` 三条正则写死了 `\n`。仓库里 `Cargo.lock` 是 LF，但 Windows runner 的 `actions/checkout` 把文本刷成 CRLF，于是三条同时落空；`expect` 闸门如实判「找不到应被刷新的版本字段，脚本正则已失效」并 `exit 1`。macOS/Linux 检出是 LF，所以只有 windows 一路红——**这条 FAIL 是真的，不是抖动**。
+- **复现**：把 `src-tauri/Cargo.lock` 临时转成 CRLF 再跑 `node scripts/sync-version.cjs 2.3.8`，本机输出与 CI 日志逐字一致（`⏭️ …（已是最新）` + `❌ …` + `💥 1 个版本契约点没匹配上`，退出码 1）。
+- **修法**：三处正则改 `\r?\n`；`scripts/check-version.cjs:18` 同一形状一起改。判据补了两条：CRLF + 滞后值注入时 `✅ src-tauri/Cargo.lock` 必须改写成功，且改写后仍是纯 CRLF（5618 行 CRLF、0 行混入裸 LF），不污染行尾；两轮结束后 `Cargo.lock` 与改前 md5 逐字节一致。
+- **契约文档**：[docs/构建与发布.md](docs/构建与发布.md) §1.2 记下这第二课——契约点的正则必须容忍 CRLF，闸门的表现是「宁可毫秒级炸掉也不安静发一版没人知道装的是哪版」。
+- **与 v2.3.8 的关系**：功能内容与 v2.3.8 完全相同，只差这个脚本修复。v2.3.8 的 macOS 产物已验收通过（`tools/accept-macos-artifact.sh 2.3.8` 全绿 + `tools/probe-installed-ja3.py` 判 PASS，产物 JA3 与源码级 `curl_cffi[chrome124]` 逐字节同一个哈希），已装在本机。
 
 ## v2.3.8 — 2026-10-15（`2562d9f`，修复本体在 `9e3f9c9`）
 

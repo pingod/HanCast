@@ -55,16 +55,16 @@ const targets = [
     ),
   },
   {
-    // Cargo.lock 里本地包 HanCast 的 version 必须与 Cargo.toml 一致：cargo 会校验，
-    // 但 CI 没带 --locked，不一致时它只是悄悄重写 lock，仓库里就留下一份滞后的 lock。
-    // v2.3.8 首发提交就是靠人肉补这行，历史三轮（v2.3.5/6/7）同理，索性收进契约点。
+    // Cargo.lock 里本地包 HanCast 的 version 必须与 Cargo.toml 一致；CI 没带 --locked，
+    // 不一致时 cargo 只悄悄重写 lock，仓库里留下一份滞后的（v2.3.5~7 全靠人肉补）。
+    // 正则写 `\r?\n`：Windows runner 的 checkout 是 CRLF，写死 `\n` 炸掉了 v2.3.8 的 windows 作业。
     file: 'src-tauri/Cargo.lock',
-    read: (c) => c.match(/name = "HanCast"\nversion = "([\d.]+)"/)?.[1],
+    read: (c) => c.match(/name = "HanCast"\r?\nversion = "([\d.]+)"/)?.[1],
     replace: (content) => content.replace(
-      /(name = "HanCast"\nversion = ")[\d.]+(")/,
+      /(name = "HanCast"\r?\nversion = ")[\d.]+(")/,
       `$1${newVersion}$2`
     ),
-    expect: (content) => /name = "HanCast"\nversion = "[\d.]+"/.test(content),
+    expect: (content) => /name = "HanCast"\r?\nversion = "[\d.]+"/.test(content),
   },
   {
     file: 'hancast-backend/pyproject.toml',
