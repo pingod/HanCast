@@ -128,6 +128,9 @@ _RULES: list = []
 _EXT_RULES: list = []
 _EXT_FINGERPRINT: Optional[tuple] = None
 _PLUGIN_RULES: list = []          # JS 脚本插件规则（整体替换式管理）
+# 被用户关掉的内置 Python 规则名：内置规则与 JS 包是同一件事的两份实现，
+# 包跑通之后要能在同一处把兜底的那份关掉，不然「统一管理」只是看着统一。
+_DISABLED_BUILTIN: set = set()
 
 # 由 declarative.py 注入（避免 rules 包内部循环导入）
 _ext_loader = None
@@ -144,7 +147,37 @@ def registered() -> list:
 
 
 def matching(url: str, stage: str) -> list:
-    return [r for r in _RULES if r.stage == stage and r.matches(url)]
+    injected = {id(r) for r in _PLUGIN_RULES} | {id(r) for r in _EXT_RULES}
+    return [r for r in _RULES
+            if r.stage == stage
+            and r.matches(url)
+            # 停用集合只管内置 Python 规则：用户包里同名的规则不能被它误杀
+            and (id(r) in injected or r.name not in _DISABLED_BUILTIN)]
+
+
+def set_builtin_disabled(names) -> None:
+    """整体替换「被关掉的内置规则」集合（状态由插件管理器的 state.json 持久化）"""
+    global _DISABLED_BUILTIN
+    _DISABLED_BUILTIN = {str(n) for n in (names or ())}
+
+
+def builtin_disabled() -> list:
+    return sorted(_DISABLED_BUILTIN)
+
+
+def builtin_rules_info() -> list:
+    """内置 Python 规则清单（设置页「规则总览」用）
+
+    JS 包与外置 JSON 规则是运行期注入注册表的，这里按对象身份排除，
+    剩下的就是随包编译进去的那几条（B 站、抖音）。
+    """
+    injected = {id(r) for r in _PLUGIN_RULES} | {id(r) for r in _EXT_RULES}
+    return [{"name": r.name,
+             "hosts": list(r.hosts),
+             "stage": r.stage,
+             "priority": r.priority,
+             "enabled": r.name not in _DISABLED_BUILTIN}
+            for r in _RULES if id(r) not in injected]
 
 
 def set_plugin_rules(rules: list) -> None:
@@ -157,7 +190,7 @@ def set_plugin_rules(rules: list) -> None:
     for rule in _PLUGIN_RULES:
         register(rule)
     if _PLUGIN_RULES:
-        logger.info("已加载解析插件规则 %d 条: " +
+        logger.info(f"已加载解析插件规则 {len(_PLUGIN_RULES)} 条: " +
                     ", ".join(f"{r.plugin_name}/{r.name}" for r in _PLUGIN_RULES))
 
 

@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
-  pluginList,
+  ruleInventory,
+  ruleSetBuiltinEnabled,
   pluginImportFile,
   pluginImportData,
   pluginImportUrl,
@@ -10,11 +11,13 @@ import {
   pluginSetRuleEnabled,
   pluginTest,
   type PluginInfo,
+  type RuleInventory,
 } from '@/api/commands'
 
 const { t } = useI18n()
 
-const plugins = ref<PluginInfo[]>([])
+const inv = ref<RuleInventory>({ rules_dir: '', script_packs: [], declarative: [], builtin: [] })
+const plugins = computed(() => inv.value.script_packs)
 const loading = ref(false)
 const importing = ref(false)
 const actionError = ref('')
@@ -22,7 +25,7 @@ const actionError = ref('')
 async function reload() {
   loading.value = true
   try {
-    plugins.value = await pluginList()
+    inv.value = await ruleInventory()
     actionError.value = ''
   } catch (err: any) {
     actionError.value = String(err?.message ?? err)
@@ -87,7 +90,7 @@ async function onImportUrl() {
 async function doImport(fn: () => Promise<PluginInfo[]>) {
   importing.value = true
   try {
-    plugins.value = await fn()
+    inv.value = { ...inv.value, script_packs: await fn() }
     actionError.value = ''
   } catch (err: any) {
     actionError.value = String(err?.message ?? err)
@@ -101,7 +104,17 @@ async function doImport(fn: () => Promise<PluginInfo[]>) {
 async function onToggleRule(plugin: string, rule: string, e: Event) {
   const enabled = (e.target as HTMLInputElement).checked
   try {
-    plugins.value = await pluginSetRuleEnabled(plugin, rule, enabled)
+    inv.value = { ...inv.value, script_packs: await pluginSetRuleEnabled(plugin, rule, enabled) }
+  } catch (err: any) {
+    actionError.value = String(err?.message ?? err)
+    await reload()
+  }
+}
+
+async function onToggleBuiltin(rule: string, e: Event) {
+  const enabled = (e.target as HTMLInputElement).checked
+  try {
+    inv.value = await ruleSetBuiltinEnabled(rule, enabled)
   } catch (err: any) {
     actionError.value = String(err?.message ?? err)
     await reload()
@@ -151,15 +164,21 @@ async function runTest(p: PluginInfo) {
     <div v-if="loading" class="plugins__empty">{{ t('settings.pluginsLoading') }}</div>
 
     <template v-else>
+      <h4 class="plugins__section">{{ t('settings.rulesSectionPacks') }}</h4>
       <!-- 插件卡片 -->
       <div v-for="p in plugins" :key="p.name" class="plugins__card">
         <div class="plugins__head">
           <div class="plugins__title">
             <span class="plugins__name">{{ p.name }}</span>
             <span v-if="p.version" class="plugins__ver">v{{ p.version }}</span>
+            <span v-if="p.builtin" class="plugins__tag plugins__tag--builtin"
+                  :title="t('settings.pluginBuiltinRemove')">
+              {{ t('settings.pluginBuiltinTag') }}
+            </span>
             <span v-if="p.broken" class="plugins__broken">{{ t('settings.pluginBroken') }}</span>
           </div>
           <button
+            v-if="!p.builtin"
             class="plugins__remove"
             :class="{ 'plugins__remove--confirm': confirmRemove[p.name] }"
             @click="onRemove(p.name)"
@@ -211,6 +230,55 @@ async function runTest(p: PluginInfo) {
       </div>
 
       <div v-if="!plugins.length" class="plugins__empty">{{ t('settings.pluginsEmpty') }}</div>
+
+      <!-- 内置 Python 规则：与上面的规则包是同一件事的两份实现，这里能关掉兜底 -->
+      <template v-if="inv.builtin.length">
+        <h4 class="plugins__section">{{ t('settings.rulesSectionBuiltin') }}</h4>
+        <p class="plugins__hint">{{ t('settings.rulesBuiltinHint') }}</p>
+        <div class="plugins__card">
+          <div v-for="b in inv.builtin" :key="b.name" class="plugins__rule">
+            <div class="plugins__rule-info">
+              <span class="plugins__rule-name">{{ b.name }}</span>
+              <span class="plugins__rule-meta">
+                {{ b.stage }} · {{ t('settings.rulesPriority') }} {{ b.priority }}
+                <template v-if="b.hosts.length"> · {{ b.hosts.join(' ') }}</template>
+              </span>
+            </div>
+            <label class="plugins__toggle">
+              <input
+                type="checkbox"
+                :checked="b.enabled"
+                @change="onToggleBuiltin(b.name, $event)"
+              />
+              <span class="plugins__toggle-slider" />
+            </label>
+          </div>
+        </div>
+      </template>
+
+      <!-- 声明式 JSON 规则：改文件即生效，写坏的那条也要露面 -->
+      <h4 class="plugins__section">{{ t('settings.rulesSectionJson') }}</h4>
+      <p class="plugins__hint">
+        {{ t('settings.rulesJsonHint') }}
+        <code v-if="inv.rules_dir" class="plugins__dir">{{ inv.rules_dir }}</code>
+      </p>
+      <div v-if="inv.declarative.length" class="plugins__card">
+        <div v-for="(d, i) in inv.declarative" :key="d.file + i" class="plugins__rule">
+          <div class="plugins__rule-info">
+            <span class="plugins__rule-name">
+              {{ d.name }}
+              <span v-if="d.error" class="plugins__broken">{{ t('settings.ruleBroken') }}</span>
+              <span v-else-if="!d.enabled" class="plugins__tag">{{ t('settings.ruleDisabled') }}</span>
+            </span>
+            <span class="plugins__rule-meta">
+              {{ d.stage }}
+              <template v-if="d.hosts.length"> · {{ d.hosts.join(' ') }}</template>
+              · {{ d.file.split('/').pop() }}
+            </span>
+          </div>
+        </div>
+      </div>
+      <div v-else class="plugins__empty">{{ t('settings.rulesJsonEmpty') }}</div>
     </template>
 
     <!-- 导入区 -->
@@ -260,6 +328,34 @@ async function runTest(p: PluginInfo) {
   color: var(--text-tertiary);
   text-align: center;
   padding: var(--sp-sm) 0;
+}
+
+.plugins__section {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin: var(--sp-sm) 0 0;
+}
+
+.plugins__tag {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  padding: 1px 6px;
+  flex-shrink: 0;
+}
+
+.plugins__tag--builtin {
+  color: var(--primary);
+  background: rgba(59, 130, 246, 0.1);
+  border-color: transparent;
+}
+
+.plugins__dir {
+  font-size: 11px;
+  word-break: break-all;
 }
 
 .plugins__card {

@@ -280,6 +280,27 @@ async fn plugin_list(sidecar: State<'_, SidecarManager>) -> Result<serde_json::V
     sidecar.send_command("plugin_list", serde_json::json!({})).await
 }
 
+/// 规则总览：脚本包 + 声明式 JSON + 内置 Python 规则，一屏列全
+#[tauri::command]
+async fn rule_inventory(sidecar: State<'_, SidecarManager>) -> Result<serde_json::Value, String> {
+    sidecar.send_command("rule_inventory", serde_json::json!({})).await
+}
+
+/// 开/关某条内置 Python 规则（它的脚本包版本跑通后，用户能关掉这份兜底）
+#[tauri::command]
+async fn rule_set_builtin_enabled(
+    sidecar: State<'_, SidecarManager>,
+    rule: String,
+    enabled: bool,
+) -> Result<serde_json::Value, String> {
+    sidecar
+        .send_command(
+            "rule_set_builtin_enabled",
+            serde_json::json!({"rule": rule, "enabled": enabled}),
+        )
+        .await
+}
+
 /// 导入插件 ZIP：file_path 本地路径 / data_base64 原始字节 / url 远程地址，三选一
 #[tauri::command]
 async fn plugin_import(
@@ -1251,6 +1272,8 @@ pub fn run() {
             resolve_share,
             get_resolve_result,
             plugin_list,
+            rule_inventory,
+            rule_set_builtin_enabled,
             plugin_import,
             plugin_remove,
             plugin_set_rule_enabled,

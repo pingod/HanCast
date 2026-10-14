@@ -241,4 +241,41 @@ def load_rules_dir(rules_dir: str) -> list:
     return rules
 
 
+def declarative_inventory(rules_dir: str) -> list:
+    """列出目录里的声明式规则（含停用与写坏的），给设置页的「规则总览」用
+
+    这里只读 JSON、不构建规则，所以写坏的那条也会露面——用户加完规则
+    发现没生效时，得看得见是自己哪条写错了，而不是靠猜。
+    """
+    out: list = []
+    try:
+        names = sorted(n for n in os.listdir(rules_dir)
+                       if n.lower().endswith(".json"))
+    except OSError:
+        return out
+    for name in names:
+        path = os.path.join(rules_dir, name)
+        try:
+            with open(path, "r", encoding="utf-8-sig") as f:
+                data = json.load(f)
+        except (OSError, ValueError) as e:
+            out.append({"name": name, "file": path, "hosts": [], "stage": "",
+                        "enabled": False, "error": str(e)})
+            continue
+        for spec in (data if isinstance(data, list) else [data]):
+            if not isinstance(spec, dict):
+                out.append({"name": name, "file": path, "hosts": [], "stage": "",
+                            "enabled": False, "error": "条目不是对象"})
+                continue
+            out.append({
+                "name": str(spec.get("name") or name.rsplit(".", 1)[0]),
+                "file": path,
+                "hosts": [str(h) for h in (spec.get("hosts") or [])],
+                "stage": str(spec.get("stage") or "page"),
+                "enabled": spec.get("enabled") is not False,
+                "steps": len(spec.get("steps") or []),
+            })
+    return out
+
+
 set_external_loader(load_rules_dir)

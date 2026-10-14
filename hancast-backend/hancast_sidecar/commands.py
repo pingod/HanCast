@@ -178,6 +178,10 @@ class CommandHandler:
             "plugin_set_rule_enabled": self._plugin_set_rule_enabled,
             "plugin_test": self._plugin_test,
 
+            # 规则总览（脚本包 + 声明式 JSON + 内置 Python，三处一屏）
+            "rule_inventory": self._rule_inventory,
+            "rule_set_builtin_enabled": self._rule_set_builtin_enabled,
+
             # 设置
             "get_settings": self._get_settings,
             "save_settings": self._save_settings,
@@ -673,6 +677,18 @@ class CommandHandler:
         mgr = self.share_resolver.plugin_mgr
         mgr.refresh()
         return {"plugins": mgr.list_info()}
+
+    def _rule_inventory(self, params: dict) -> dict:
+        """三种来源的规则一处列全（脚本包 / 声明式 JSON / 内置 Python）"""
+        return self.share_resolver.rule_inventory()
+
+    def _rule_set_builtin_enabled(self, params: dict) -> dict:
+        name = str(params.get("rule") or "")
+        if not name:
+            raise ValueError("缺少规则名")
+        self.share_resolver.plugin_mgr.set_builtin_enabled(
+            name, bool(params.get("enabled")))
+        return self.share_resolver.rule_inventory()
 
     def _plugin_import(self, params: dict) -> dict:
         """导入插件包。来源三选一：path（本机 zip）/ data_base64（拖拽）/ url"""

@@ -11,7 +11,12 @@
     ├── _cache/<plugin>/…              ← host.readCache/writeCache 落点
     └── <plugin_name>/
         ├── manifest.json
+        ├── .hancast-builtin           ← 内置包标记（内容是随包的版本号）
         └── *.js
+
+内置包住在包里（``hancast_sidecar/rule_plugins/``），随 bundle 出货，
+启动时按版本播种进上面的目录——这样「内置规则」和「用户导入的规则」
+是同一份清单、同一套开关，不再有代码里的黑箱规则。
 
 插件规则经 ``base.set_plugin_rules`` 整体替换进注册表，
 priority 缺省 5（与外置声明式规则同层，先于内置规则命中）。
@@ -30,7 +35,8 @@ from urllib.parse import urlparse
 import requests
 
 from .base import (SiteRule, RuleContext, set_plugin_rules, normalize_text,
-                   absolutize, title_from_html, guess_mime)
+                   absolutize, title_from_html, guess_mime,
+                   set_builtin_disabled)
 from .jsruntime import JsRuntime
 
 logger = logging.getLogger("hancast.media.jsplugin")
@@ -42,6 +48,26 @@ _MAX_FILE_BYTES = 2 * 1024 * 1024
 _NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 # zip 内只收「一层目录（可选）下的 manifest.json / *.js」，其余一律拒收
 _ENTRY_RE = re.compile(r"^(?:[^/\\]+/)?(?:manifest\.json|[A-Za-z0-9._-]+\.js)$")
+
+# 内置包标记文件名（由播种写入，zip 导入永远造不出它）
+BUILTIN_MARKER = ".hancast-builtin"
+
+
+def bundled_plugins_dir() -> str:
+    """随包的内置规则包目录。
+
+    锚点与 ``protocol/xml`` 同款（``__file__`` 相对），Nuitka 用
+    ``--include-data-dir`` 把整个目录放到可执行文件旁边的同名路径下。
+    """
+    return os.path.normpath(os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", "..", "rule_plugins"))
+
+
+def _version_key(version: str) -> tuple:
+    """``1.2.3`` → 可比较的元组；非数字段按 0 处理，缺段不报错"""
+    parts = re.split(r"[._-]+", str(version or "").strip())
+    nums = tuple(int(p) if p.isdigit() else 0 for p in parts)
+    return nums or (0,)
 
 
 class PluginError(ValueError):
@@ -85,7 +111,9 @@ class JsRule(SiteRule):
                                      extra_headers=extra_headers)
         title = str(ret.get("title") or "").strip() or \
             title_from_html(html or "") or urlparse(cand).netloc
-        return ctx.info(uri, mime, title[:80], via, source_url=ctx.source_url)
+        thumb = str(ret.get("thumbnail") or "").strip()
+        return ctx.info(uri, mime, title[:80], via, source_url=ctx.source_url,
+                        thumbnail=absolutize(thumb, referer) if thumb else None)
 
     def _via(self) -> str:
         return f"{self.plugin_name}/{self.name}"
@@ -112,8 +140,24 @@ class JsPlugin:
         self.version = str(self.manifest.get("version") or "")
         self.author = str(self.manifest.get("author") or "")
         self.description = str(self.manifest.get("description") or "")
+        # 非空 = 这个目录是随包内置的，内容是随包的版本号（不可删，只能停用）
+        self.bundled_version = self._read_marker_version()
         self.runtime: JsRuntime | None = None
         self._runtime_lock = threading.Lock()
+
+    def _marker_path(self) -> str:
+        return os.path.join(self.dir, BUILTIN_MARKER)
+
+    def _read_marker_version(self) -> str:
+        try:
+            with open(self._marker_path(), "r", encoding="utf-8") as f:
+                return f.read().strip()
+        except OSError:
+            return ""
+
+    @property
+    def builtin(self) -> bool:
+        return bool(self.bundled_version)
 
     @classmethod
     def _placeholder(cls, manager: "PluginManager", plugin_dir: str,
@@ -125,6 +169,7 @@ class JsPlugin:
         obj.name = name
         obj.manifest = {}
         obj.version = obj.author = obj.description = ""
+        obj.bundled_version = obj._read_marker_version()
         obj.error = error
         obj.runtime = None
         obj._runtime_lock = threading.Lock()
@@ -189,6 +234,7 @@ class JsPlugin:
     def info(self) -> dict:
         info = {"name": self.name, "version": self.version,
                 "author": self.author, "description": self.description,
+                "builtin": self.builtin, "bundled_version": self.bundled_version,
                 "error": self.error, "rules": []}
         try:
             for _index, meta in self.rules_meta():
@@ -208,13 +254,22 @@ class JsPlugin:
 class PluginManager:
     """插件目录的加载、导入、启停、删除；指纹变化即热重载"""
 
-    def __init__(self, plugins_root: str):
+    def __init__(self, plugins_root: str, bundled_dir: str | None = None):
         self.root = plugins_root
+        self.bundled_dir = bundled_dir if bundled_dir is not None \
+            else bundled_plugins_dir()
         self.state_path = os.path.join(plugins_root, "state.json")
         self._plugins: dict[str, JsPlugin] = {}
         self._fingerprint: tuple | None = None
         self._lock = threading.Lock()
         self._state = self._read_state()
+        # 关掉内置规则的决定存在同一个 state.json 里，进程重启要跟着恢复
+        set_builtin_disabled(self._state["disabled_builtin"])
+        # 播种失败绝不能拖坏解析管线，内置包坏了自己会显示在插件页上
+        try:
+            self.seed_bundled()
+        except Exception as e:
+            logger.warning("内置解析包播种异常: %s", e)
 
     # ── 状态（停用清单 + prefs） ──
 
@@ -225,10 +280,11 @@ class PluginManager:
             if isinstance(state, dict):
                 state.setdefault("disabled", [])
                 state.setdefault("prefs", {})
+                state.setdefault("disabled_builtin", [])
                 return state
         except (OSError, ValueError):
             pass
-        return {"disabled": [], "prefs": {}}
+        return {"disabled": [], "prefs": {}, "disabled_builtin": []}
 
     def save_state(self) -> None:
         with self._lock:
@@ -258,6 +314,82 @@ class PluginManager:
         # 目录指纹没变，但注册表里的启用集合要跟着重建
         self._fingerprint = None
         self.refresh()
+
+    # ── 内置 Python 规则的开关（和包规则共用这一份状态） ──
+
+    def set_builtin_enabled(self, rule_name: str, enabled: bool) -> None:
+        key = str(rule_name)
+        disabled = self._state["disabled_builtin"]
+        if enabled and key in disabled:
+            disabled.remove(key)
+        elif not enabled and key not in disabled:
+            disabled.append(key)
+        set_builtin_disabled(disabled)
+        self.save_state()
+
+    def builtin_enabled(self, rule_name: str) -> bool:
+        return rule_name not in self._state["disabled_builtin"]
+
+    # ── 内置包播种 ──
+
+    def seed_bundled(self) -> list[dict]:
+        """把随包的规则包装进插件目录：缺失即装，随包版本更高即升级
+
+        用户自己导入的同名包不覆盖（升级不是他的义务）；停用清单和 prefs 存在
+        根目录的 state.json 里，覆盖升级不会丢。
+        """
+        actions: list[dict] = []
+        if not os.path.isdir(self.bundled_dir):
+            return actions
+        os.makedirs(self.root, exist_ok=True)
+        for entry in sorted(os.listdir(self.bundled_dir)):
+            src = os.path.join(self.bundled_dir, entry)
+            if not os.path.isdir(src) or not os.path.isfile(
+                    os.path.join(src, "manifest.json")):
+                continue
+            try:
+                with open(os.path.join(src, "manifest.json"),
+                          "r", encoding="utf-8-sig") as f:
+                    manifest = json.load(f)
+                name = str(manifest.get("name") or "")
+                version = str(manifest.get("version") or "")
+                if not _NAME_RE.match(name):
+                    raise PluginError(f"内置包 manifest.name 不合法: {name!r}")
+                target = os.path.join(self.root, name)
+                marker = os.path.join(target, BUILTIN_MARKER)
+                installed = ""
+                if os.path.isfile(marker):
+                    with open(marker, "r", encoding="utf-8") as f:
+                        installed = f.read().strip()
+                elif os.path.exists(target):
+                    actions.append({"name": name, "action": "skipped",
+                                    "reason": "已有同名用户包，不覆盖"})
+                    continue
+                if installed and _version_key(version) <= _version_key(installed):
+                    continue
+                self._copy_pack(src, target, version)
+                actions.append({"name": name, "version": version,
+                                "action": "upgraded" if installed else "installed"})
+            except Exception as e:
+                logger.warning("内置解析包播种失败 %s: %s", entry, e)
+        if any(a["action"] != "skipped" for a in actions):
+            self._fingerprint = None
+            logger.info("内置解析包播种: " + "，".join(
+                f"{a['name']} {a['action']} {a.get('version', '')}".rstrip()
+                for a in actions if a["action"] != "skipped"))
+        return actions
+
+    def _copy_pack(self, src: str, target: str, version: str) -> None:
+        names = [n for n in os.listdir(src)
+                 if n == "manifest.json" or n.endswith(".js")]
+        if os.path.isdir(target):
+            shutil.rmtree(target)
+        os.makedirs(target, exist_ok=True)
+        for n in names:
+            shutil.copy2(os.path.join(src, n), os.path.join(target, n))
+        with open(os.path.join(target, BUILTIN_MARKER),
+                  "w", encoding="utf-8") as f:
+            f.write(version)
 
     # ── 指纹热载 ──
 
@@ -316,10 +448,16 @@ class PluginManager:
         return rules
 
     def get(self, name: str) -> JsPlugin:
+        self._ensure_loaded()
         plugin = self._plugins.get(name)
         if plugin is None:
             raise PluginError(f"插件不存在: {name}")
         return plugin
+
+    def _ensure_loaded(self) -> None:
+        """刚播种完、或进程刚起来时，读视图/取插件不必等第一次解析"""
+        if not self._plugins:
+            self.refresh()
 
     # ── 导入 ──
 
@@ -370,6 +508,10 @@ class PluginManager:
 
             target = os.path.join(self.root, name)
             os.makedirs(self.root, exist_ok=True)
+            if os.path.isfile(os.path.join(target, BUILTIN_MARKER)):
+                raise PluginError(
+                    f"「{name}」是内置解析包，导入不会覆盖它；"
+                    "想改这份规则请换一个 name，或先在规则页停用内置包")
             if os.path.exists(target):
                 shutil.rmtree(target)      # 同名覆盖（ssts 同款语义）
             os.makedirs(target, exist_ok=True)
@@ -398,7 +540,9 @@ class PluginManager:
         return self.import_zip_bytes(data)
 
     def remove(self, name: str) -> None:
-        self.get(name)
+        plugin = self.get(name)
+        if plugin.builtin:
+            raise PluginError(f"内置解析包不可删除，可在规则页停用: {name}")
         shutil.rmtree(os.path.join(self.root, name), ignore_errors=True)
         self._state["prefs"].pop(name, None)
         self._state["disabled"] = [d for d in self._state["disabled"]
@@ -410,6 +554,7 @@ class PluginManager:
     # ── 前端视图 ──
 
     def list_info(self) -> list[dict]:
+        self._ensure_loaded()
         out = []
         for name in sorted(self._plugins):
             plugin = self._plugins[name]

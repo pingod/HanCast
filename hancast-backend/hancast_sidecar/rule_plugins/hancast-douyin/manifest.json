@@ -1,0 +1,7 @@
+{
+  "name": "hancast-douyin",
+  "version": "1.0.0",
+  "author": "HanCast",
+  "description": "抖音分享页解析（内置规则移植版）：分享页内嵌 JSON 比通用正文提取可靠。",
+  "scripts": ["main.js"]
+}

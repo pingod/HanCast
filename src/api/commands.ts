@@ -38,11 +38,15 @@ async function initInvoke() {
 
 // ── Mock fallback for browser dev ──
 
-/** 浏览器 dev 的插件仓库（plugin_* 命令的内存态） */
+/** 浏览器 dev 的插件仓库（plugin_* 命令的内存态）
+ *
+ * 内置包按真实播种结果模拟：`builtin: true` 的卡片不带删除按钮，
+ * 这样「内置包只能逐条停用」这条分支在 dev 里也看得见。
+ */
 const mockPlugins: PluginInfo[] = [
   {
     name: 'demo-site',
-    version: '2.3.1',
+    version: '2.3.2',
     author: 'example',
     description: '演示插件：页面阶段提取 m3u8',
     rules: [
@@ -50,7 +54,67 @@ const mockPlugins: PluginInfo[] = [
       { id: 'legacy', name: 'legacy', hosts: ['old.example'], stage: 'url', enabled: false },
     ],
   },
+  {
+    name: 'hancast-bilibili',
+    version: '2.3.2',
+    author: 'HanCast',
+    description: '内置包：B 站视频页/分享链接取播放地址',
+    builtin: true,
+    bundled_version: '2.3.2',
+    rules: [
+      { id: 'bilibili-playurl', name: 'B 站 playurl', hosts: ['bilibili.com', 'b23.tv'], stage: 'url', enabled: true },
+    ],
+  },
+  {
+    name: 'hancast-douyin',
+    version: '2.3.2',
+    author: 'HanCast',
+    description: '内置包：抖音分享页取播放地址',
+    builtin: true,
+    bundled_version: '2.3.2',
+    rules: [
+      { id: 'douyin-share', name: '抖音分享页', hosts: ['douyin.com', 'iesdouyin.com'], stage: 'page', enabled: true },
+    ],
+  },
 ]
+
+const mockBuiltinRules: BuiltinRuleInfo[] = [
+  {
+    name: 'bilibili',
+    hosts: ['bilibili.com', 'b23.tv'],
+    stage: 'url',
+    priority: 10,
+    enabled: true,
+  },
+  {
+    name: 'douyin',
+    hosts: ['douyin.com', 'iesdouyin.com'],
+    stage: 'page',
+    priority: 20,
+    enabled: true,
+  },
+]
+
+const mockDeclarative: DeclarativeRuleInfo[] = [
+  {
+    name: 'maccms-box',
+    file: '~/Library/Application Support/HanCast/share_rules/maccms-box.json',
+    hosts: ['dyrsxm.cc'],
+    stage: 'page',
+    enabled: true,
+    steps: 4,
+  },
+]
+
+/** 清单的两个命令共用同一份内存态：切换内置开关不能把 JSON 段清空 */
+function mockInventory(): RuleInventory {
+  return {
+    rules_dir: '~/Library/Application Support/HanCast/share_rules',
+    script_packs: mockPlugins.map((p) => ({ ...p, rules: p.rules.map((r) => ({ ...r })) })),
+    declarative: mockDeclarative.map((d) => ({ ...d })),
+    builtin: mockBuiltinRules.map((r) => ({ ...r })),
+  }
+}
 
 const MOCK_DEVICES: Device[] = [
   {
@@ -106,7 +170,7 @@ const MOCK_DEVICES: Device[] = [
 const MOCK_SETTINGS: AppSettings = {
   usn: 'hancast-uuid-001',
   friendly_name: 'HanCast',
-  version: '2.3.1',
+  version: '2.3.2',
   media_port: 8080,
   default_device: null,
   network_interface: '',
@@ -276,6 +340,13 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
     }
     case 'plugin_list':
       return { plugins: mockPlugins.map((p) => ({ ...p, rules: p.rules.map((r) => ({ ...r })) })) } as T
+    case 'rule_inventory':
+      return mockInventory() as T
+    case 'rule_set_builtin_enabled': {
+      const rule = mockBuiltinRules.find((r) => r.name === String(args?.rule ?? ''))
+      if (rule) rule.enabled = Boolean(args?.enabled)
+      return mockInventory() as T
+    }
     case 'plugin_import': {
       const name = args?.url
         ? decodeURIComponent(String(args.url).split('/').pop() || 'plugin').replace(/\.zip$/i, '')
@@ -283,7 +354,7 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
       const existing = mockPlugins.find((p) => p.name === name)
       const plugin: PluginInfo = existing ?? {
         name,
-        version: '2.3.1',
+        version: '2.3.2',
         author: 'mock',
         description: '',
         rules: [],
@@ -354,8 +425,8 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
     case 'check_update':
       return {
         has_update: false,
-        current: '2.3.1',
-        latest: '2.3.1',
+        current: '2.3.2',
+        latest: '2.3.2',
         url: '',
         body: '',
         source: 'github',
@@ -556,6 +627,35 @@ export interface PluginInfo {
   rules: PluginRuleInfo[]
   broken?: boolean
   error?: string
+  builtin?: boolean
+  bundled_version?: string
+}
+
+/** 内置 Python 规则（随包编译，脚本包跑通后可以在同一处关掉） */
+export interface BuiltinRuleInfo {
+  name: string
+  hosts: string[]
+  stage: 'url' | 'page'
+  priority: number
+  enabled: boolean
+}
+
+/** 外置声明式 JSON 规则（<配置目录>/share_rules/*.json） */
+export interface DeclarativeRuleInfo {
+  name: string
+  file: string
+  hosts: string[]
+  stage: string
+  enabled: boolean
+  steps?: number
+  error?: string
+}
+
+export interface RuleInventory {
+  rules_dir: string
+  script_packs: PluginInfo[]
+  declarative: DeclarativeRuleInfo[]
+  builtin: BuiltinRuleInfo[]
 }
 
 export async function pluginList(): Promise<PluginInfo[]> {
@@ -600,6 +700,34 @@ export async function pluginSetRuleEnabled(
     enabled,
   })
   return resp.plugins ?? []
+}
+
+/**
+ * 规则总览：脚本包 / 声明式 JSON / 内置 Python 规则三种来源一屏列全。
+ */
+export async function ruleInventory(): Promise<RuleInventory> {
+  const invoke = await initInvoke()
+  const resp = await invoke<RuleInventory>('rule_inventory', {})
+  return {
+    rules_dir: resp.rules_dir ?? '',
+    script_packs: resp.script_packs ?? [],
+    declarative: resp.declarative ?? [],
+    builtin: resp.builtin ?? [],
+  }
+}
+
+export async function ruleSetBuiltinEnabled(
+  rule: string,
+  enabled: boolean,
+): Promise<RuleInventory> {
+  const invoke = await initInvoke()
+  const resp = await invoke<RuleInventory>('rule_set_builtin_enabled', { rule, enabled })
+  return {
+    rules_dir: resp.rules_dir ?? '',
+    script_packs: resp.script_packs ?? [],
+    declarative: resp.declarative ?? [],
+    builtin: resp.builtin ?? [],
+  }
 }
 
 /**

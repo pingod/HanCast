@@ -245,7 +245,9 @@ class JsRuntime:
         if not url.lower().startswith(("http://", "https://")):
             raise ValueError("只允许 http(s) 请求")
         timeout = _clamp(self._remaining(self._deadline), 1.0, _FETCH_TIMEOUT_CAP)
-        headers = {"User-Agent": MOBILE_UA if opts.get("desktop") else DESKTOP_UA,
+        # UA 开关按字面意思走：默认桌面 UA，要手机 UA 显式传 {mobile: true}
+        # （以前这个键叫 desktop，语义正好是反的——写第一个内置包时就踩中了）
+        headers = {"User-Agent": MOBILE_UA if opts.get("mobile") else DESKTOP_UA,
                    "Accept": "*/*"}
         if opts.get("referer"):
             headers["Referer"] = str(opts["referer"])

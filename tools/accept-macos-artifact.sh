@@ -35,7 +35,10 @@ for rel in ssdp.py commands.py params.py security/guard.py protocol/dlna.py prot
            screencast/macos_tap.py utils/logger.py utils/config.py main.py \
            media/server.py media/share_resolver.py media/rules/__init__.py media/rules/base.py \
            media/rules/bili.py media/rules/douyin.py media/rules/declarative.py \
-           media/rules/jsplugins.py media/rules/jsruntime.py; do
+           media/rules/jsplugins.py media/rules/jsruntime.py \
+           rule_plugins/hancast-template/manifest.json rule_plugins/hancast-template/main.js \
+           rule_plugins/hancast-douyin/manifest.json rule_plugins/hancast-douyin/main.js \
+           rule_plugins/hancast-bilibili/manifest.json rule_plugins/hancast-bilibili/main.js; do
   want=$(git show "$TAG:hancast-backend/hancast_sidecar/$rel" | shasum -a 256 | cut -d' ' -f1)
   got=$(shasum -a 256 "$RES/$rel" 2>/dev/null | cut -d' ' -f1)
   chk "sha256 $rel" "${got:0:12}" "${want:0:12}"
@@ -139,6 +142,18 @@ if echo "$PLUGIN_LINE" | grep -q '"success": true'; then
   say "PASS plugin_list 在打包 sidecar 里答得上来（quickjs 宿主可用）"
 else
   say "FAIL plugin_list 没成功，产物里 JS 插件宿主多半起不来: ${PLUGIN_LINE:0:200}"; fails=$((fails+1))
+fi
+# 随包内置规则包必须真在冻结产物里被播种出来：源码树跑测试永远绿，
+# Nuitka 少一行 --include-data-dir 的话 bundled_plugins_dir() 指到空目录，
+# 用户界面上就一个内置包都看不见。
+SEED_OK=1
+for pack in hancast-template hancast-douyin hancast-bilibili; do
+  echo "$PLUGIN_LINE" | grep -q "\"name\": \"$pack\"" || SEED_OK=0
+done
+if [ "$SEED_OK" = 1 ] && echo "$PLUGIN_LINE" | grep -q '"builtin": true'; then
+  say "PASS 内置规则包已随包播种（3 个，标为内置）"
+else
+  say "FAIL 打包产物没播种出内置规则包（查 --include-data-dir=rule_plugins）: ${PLUGIN_LINE:0:200}"; fails=$((fails+1))
 fi
 open -a HanCast
 

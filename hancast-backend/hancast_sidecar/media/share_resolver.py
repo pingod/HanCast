@@ -408,6 +408,22 @@ class ShareResolver:
 
     # ── 路由 ──
 
+    def rule_inventory(self) -> dict:
+        """三种来源的规则一处列全：脚本包 / 声明式 JSON / 随包编译的 Python 规则
+
+        设置页靠它把「这台机器现在到底认哪些站」摊开给用户看，
+        顺带告诉他规则目录在哪（改 JSON 不用重启、不用重新打包）。
+        """
+        self._load_external_rules()
+        from .rules.base import builtin_rules_info
+        from .rules.declarative import declarative_inventory
+        return {
+            "rules_dir": self.rules_dir,
+            "script_packs": self.plugin_mgr.list_info(),
+            "declarative": declarative_inventory(self.rules_dir),
+            "builtin": builtin_rules_info(),
+        }
+
     def _load_external_rules(self) -> None:
         """按目录指纹重载外置规则与 JS 插件；规则目录有问题不能连累解析本身"""
         try:
