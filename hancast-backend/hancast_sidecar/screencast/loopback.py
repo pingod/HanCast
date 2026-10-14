@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from typing import Dict, List, Optional
 
 logger = logging.getLogger("hancast.screencast.loopback")
@@ -103,6 +104,13 @@ class LoopbackStream:
         if not pyaudio:
             raise RuntimeError("PortAudio(WASAPI loopback) 不可用")
         self.device = dict(device)
+        # PortAudio 的 C 调用不允许并发，也不允许重入关闭：read() 阻塞时另一个
+        # 线程 stop/close/terminate，pyd 会踩已释放的 stream——.68 实测异常代码
+        # 0xc0000005、出错模块 ntdll.dll，整个 sidecar 进程直接没了（表现为
+        # 「选系统声音后投屏崩了」）。调用方（capture._feed_loopback）因此把
+        # 关闭权交给读线程自己；这里的锁和 _closed 只兜「同一线程重复关」。
+        self._lock = threading.Lock()
+        self._closed = False
         self._pa = pyaudio.PyAudio()
         try:
             self._stream = self._pa.open(
@@ -125,17 +133,24 @@ class LoopbackStream:
     def channels(self) -> int:
         return self.device["channels"]
 
-    def read(self) -> bytes:
+    def read(self) -> Optional[bytes]:
         # exception_on_overflow=False：读慢了一点（GIL/管道堵塞）时丢掉溢出帧，
         # 也不要抛异常把整条投屏打断——丢 21ms 音频远比投屏中断好
-        return self._stream.read(CHUNK_FRAMES, exception_on_overflow=False)
+        with self._lock:
+            if self._closed:
+                return None      # 已关闭：调用方据此收尾，不是「这帧没数据」
+            return self._stream.read(CHUNK_FRAMES, exception_on_overflow=False)
 
     def close(self):
-        for fn in (self._stream.stop_stream, self._stream.close, self._pa.terminate):
-            try:
-                fn()
-            except Exception as e:  # noqa: BLE001
-                logger.debug(f"[ScreenCast] loopback close: {e}")
+        with self._lock:
+            if self._closed:
+                return
+            for fn in (self._stream.stop_stream, self._stream.close, self._pa.terminate):
+                try:
+                    fn()
+                except Exception as e:  # noqa: BLE001
+                    logger.debug(f"[ScreenCast] loopback close: {e}")
+            self._closed = True
 
 
 def open_stream(name: Optional[str]) -> Optional[LoopbackStream]:

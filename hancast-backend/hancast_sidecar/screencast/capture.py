@@ -218,6 +218,10 @@ class FfmpegCapture:
 
         PortAudio 的读是阻塞的，且实测按实时节奏交付（静音期也给零块），
         所以不需要按单调时钟补零；写失败只意味着 FFmpeg 已经退了。
+
+        流的关闭归本线程：设备静音时 read() 可以阻塞远超 stop() 的 join 时限，
+        那时另一个线程去 close 就是在已释放的 PaStream 上踩内存（.68 实测
+        0xc0000005 / ntdll.dll，整个 sidecar 进程没了）。
         """
         lb = self._loopback
         if lb is None:
@@ -225,6 +229,8 @@ class FfmpegCapture:
         try:
             while not self._stop_requested:
                 data = lb.read()
+                if data is None:
+                    break          # 流已被（本线程）关闭，正常收尾
                 if data:
                     proc.stdin.write(data)
         except (BrokenPipeError, ValueError, OSError):
@@ -236,6 +242,9 @@ class FfmpegCapture:
                 proc.stdin.close()
             except Exception:
                 pass
+            lb.close()
+            if self._loopback is lb:
+                self._loopback = None
 
     def _close_loopback(self):
         lb, self._loopback = self._loopback, None
@@ -329,10 +338,16 @@ class FfmpegCapture:
                         pass
             self._running = False
             # 先等 feeder 退出再关 PortAudio 流：在 read() 进行中关掉流会在
-            # C 扩展里踩到已释放的 stream
+            # C 扩展里踩到已释放的 stream。等不到就把关闭权留给它自己——
+            # 这里硬关等于让 sidecar 整个进程 0xc0000005（.68 实测）
             if feeder is not None:
                 feeder.join(timeout=2)
-            self._close_loopback()
+                if feeder.is_alive():
+                    logger.info("[ScreenCast] 环回线程仍在读取，流由它自己关闭")
+                else:
+                    self._close_loopback()
+            else:
+                self._close_loopback()
 
     @property
     def running(self) -> bool:

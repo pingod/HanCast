@@ -210,5 +210,17 @@ else
   say "FAIL 视频滤镜还夹在输入段里（选麦克风/系统声音必崩）"; fails=$((fails+1))
 fi
 
+# ── v2.2.24 本轮契约：环回流的关闭权归读线程 ──
+# v2.2.23 及以前，stop() 在 feeder 仍阻塞于 read() 时直接 close 流；PortAudio 的
+# C 调用不允许并发，.68 事件日志是「异常代码 0xc0000005 / ntdll.dll」，sidecar
+# 整个进程没了——用户看到的「选系统声音后崩溃」有两段，这段是第二段。
+if grep -q 'lb.close()' "$RES/screencast/capture.py" \
+   && grep -q 'is_alive()' "$RES/screencast/capture.py" \
+   && grep -q 'self._closed' "$RES/screencast/loopback.py"; then
+  say "PASS 环回流由读线程关闭（停止链路不再踩内存）"
+else
+  say "FAIL 环回流仍可能被别的线程关掉（停止/早退会打崩 sidecar）"; fails=$((fails+1))
+fi
+
 say "--- $([ $fails -eq 0 ] && echo 'ALL PASS' || echo "$fails FAIL") ---"
 exit $fails

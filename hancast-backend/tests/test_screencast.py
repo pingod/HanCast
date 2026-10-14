@@ -11,6 +11,7 @@ import os
 import sys
 import time
 import asyncio
+import threading
 import unittest
 import tempfile
 from unittest.mock import MagicMock, patch
@@ -466,6 +467,101 @@ class TestHlsEncode(unittest.TestCase):
         cap.stop()
         self.assertTrue(result["ok"])
         self.assertTrue(seen["gone"])
+
+
+class TestLoopbackOwnership(unittest.TestCase):
+    """WASAPI 环回流的生命周期：跨线程关流会把 sidecar 整个进程打崩
+
+    .68 实测（v2.2.22）：ffmpeg 因参数早退 → 停止链路在 feeder 还阻塞于
+    read() 时 close 流 → 事件日志「异常代码 0xc0000005 / ntdll.dll」，
+    sidecar 直接没了。这就是「选系统声音后崩溃」的第二段。
+    """
+
+    class _FakePa:
+        """只够 LoopbackStream 用的假 pyaudiowpatch：记录每个 Pa 调用发生在哪个线程"""
+
+        paInt16 = 1
+
+        def __init__(self):
+            self.calls = []
+            self.thread = {}
+
+        def PyAudio(self):
+            # 生产代码是 pyaudio.PyAudio() 再 open/terminate：这里一个对象兼任
+            return self
+
+        def open(self, **_kw):
+            outer = self
+
+            class _Stream:
+                def __init__(self):
+                    self.block = threading.Event()
+                    self.released = threading.Event()
+
+                def read(self, _frames, exception_on_overflow=False):
+                    outer.calls.append("read")
+                    outer.thread.setdefault("read", threading.current_thread().name)
+                    # 模拟静音设备上一直不返回的阻塞读：调用方等不到就只能放弃关闭权
+                    self.block.set()
+                    self.released.wait(5)
+                    return b"\x00" * 4096
+
+                def stop_stream(self):
+                    outer.calls.append("stop_stream")
+
+                def close(self):
+                    outer.calls.append("close")
+                    outer.thread["close"] = threading.current_thread().name
+
+            self.stream = _Stream()
+            return self.stream
+
+        def terminate(self):
+            self.calls.append("terminate")
+
+    def _stream(self):
+        from hancast_sidecar.screencast import loopback as lb_mod
+        pa = self._FakePa()
+        with patch.object(lb_mod, "_import_pyaudio", return_value=pa):
+            stream = lb_mod.LoopbackStream({"name": "x", "index": 0,
+                                            "rate": 48000, "channels": 2})
+        return pa, stream
+
+    def test_read_after_close_returns_none_and_close_idempotent(self):
+        pa, stream = self._stream()
+        stream.close()
+        stream.close()                     # 重复关不许再碰 C 层
+        self.assertEqual(pa.calls.count("close"), 1)
+        self.assertEqual(pa.calls.count("terminate"), 1)
+        self.assertIsNone(stream.read())   # feeder 据此退出，不空转
+
+    def test_feeder_own_thread_closes_the_stream(self):
+        """stop() 等不到 feeder 时，不许自己关流"""
+        pa, stream = self._stream()
+        cap = FfmpegCapture("ffmpeg")
+        cap._loopback = stream
+        cap._running = True
+        proc = _fake_proc()
+        proc.stdin = io.BytesIO()
+
+        feeder = threading.Thread(target=cap._feed_loopback, args=(proc,),
+                                  name="ffmpeg-hls-loopback")
+        cap._feeder = feeder
+        feeder.start()
+        deadline = time.time() + 2
+        while "read" not in pa.calls and time.time() < deadline:
+            time.sleep(0.01)
+        self.assertIn("read", pa.calls, "feeder 没进到阻塞读，用例前提不成立")
+
+        cap.stop()                      # join(2) 超时：主线程不许碰这条流
+        self.assertNotIn("close", pa.calls)
+        self.assertEqual(pa.thread.get("read"), "ffmpeg-hls-loopback")
+
+        pa.stream.released.set()        # read 返回，feeder 自己收尾
+        feeder.join(3)
+        self.assertFalse(feeder.is_alive())
+        self.assertEqual(pa.thread.get("close"), "ffmpeg-hls-loopback")
+        self.assertIsNone(cap._loopback)
 
 
 class TestHttpdPullEvidence(unittest.TestCase):
