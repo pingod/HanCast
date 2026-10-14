@@ -41,11 +41,13 @@ if not exist "%WORK%" mkdir "%WORK%"
 del "%OUT%" >nul 2>&1
 del "%WORK%\seg*.txt" >nul 2>&1
 
-REM Snapshot the HLS dir every ~5s for 60s, stamped with the wall clock: three
-REM rounds run back to back (mic+system, system only, mic only), so a bare
-REM "before/after" listing cannot tell which round made which segments. Stop and
-REM cleanup delete the session dir, hence sampling WHILE the capture runs.
-start /b cmd /c "for /l %%i in (1,1,12) do (ping -n 6 127.0.0.1 >nul & call echo SNAP %%TIME%% & dir /b %HLS%)" > "%WORK%\seg.txt" 2>&1
+REM Snapshot the HLS dir every ~5s for ~100s, stamped with the wall clock: three
+REM rounds run back to back (mic+system, system only, mic only) and each round
+REM blocks in start_hls until its playlist lands, so a 60s window can stop before
+REM the last round produces segments. A bare "before/after" listing cannot tell
+REM which round made which segments; stop and cleanup delete the session dir,
+REM hence sampling WHILE the capture runs.
+start /b cmd /c "for /l %%i in (1,1,20) do (ping -n 6 127.0.0.1 >nul & call echo SNAP %%TIME%% & dir /b %HLS%)" > "%WORK%\seg.txt" 2>&1
 
 REM 3s after each request. start_hls blocks until the playlist exists, so an
 REM "ok" response already means ffmpeg produced output with the audio input

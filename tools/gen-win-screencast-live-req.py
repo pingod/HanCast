@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 
 FFMPEG = r"C:\Users\Administrator\AppData\Local\HanCast\ffmpeg\ffmpeg.exe"
@@ -57,6 +58,19 @@ def pick(devices, idx: int, what: str) -> str:
     return devices[idx]["name"]
 
 
+def pick_matching(devices, pattern: str, what: str,
+                  only_loopback: bool = False) -> str:
+    """按名字正则选设备：换一台机器/换一副声卡序号就变了，验收脚本不该硬背数字"""
+    rx = re.compile(pattern)
+    for d in devices:
+        if only_loopback and not d.get("loopback"):
+            continue
+        if rx.search(d["name"]):
+            print(f"    {what} ← {d['name']}")
+            return d["name"]
+    raise SystemExit(f"{what} 没有名字匹配 {pattern!r} 的设备（先跑 devices 子命令看清单）")
+
+
 def cmd_devices(out_path: str) -> int:
     devices = audio_inputs(out_path)
     if not devices:
@@ -77,8 +91,12 @@ def cmd_req(args) -> int:
     if not devices:
         raise SystemExit(f"{args.from_out} 里没有 audio_inputs")
 
-    mic = pick(devices, args.mic, "--mic") if args.mic >= 0 else None
-    sysdev = pick(devices, args.sys, "--sys") if args.sys >= 0 else None
+    mic = (pick_matching(devices, args.mic_match, "--mic-match")
+           if args.mic_match else
+           (pick(devices, args.mic, "--mic") if args.mic >= 0 else None))
+    sysdev = (pick_matching(devices, args.sys_match, "--sys-match", only_loopback=True)
+              if args.sys_match else
+              (pick(devices, args.sys, "--sys") if args.sys >= 0 else None))
     if not mic and not sysdev:
         raise SystemExit("至少要给 --mic 或 --sys")
 
@@ -110,10 +128,15 @@ def cmd_req(args) -> int:
             {"id": rid, "cmd": "start_screen_cast", "params": {
                 "target": "browser", "source": source,
                 "audio": audio(mic_name, sys_name), "video": video}},
-            {"id": rid + 1, "cmd": "screen_cast_status", "params": {}},
-            {"id": rid + 2, "cmd": "stop_screen_cast", "params": {}},
         ]
-        rid += 3
+        rid += 1
+        # 每两条请求之间批处理等 3s，所以 --dwell N 次状态 ≈ 3N 秒驻留：
+        # 「进程活着」和「分片还在往前走」是两件事，会话拉长才分得开
+        for _ in range(max(1, args.dwell)):
+            req.append({"id": rid, "cmd": "screen_cast_status", "params": {}})
+            rid += 1
+        req.append({"id": rid, "cmd": "stop_screen_cast", "params": {}})
+        rid += 1
     req += [{"id": rid, "cmd": "get_logs", "params": {"limit": 400}},
             {"id": rid + 1, "cmd": "exit", "params": {}}]
 
@@ -160,8 +183,12 @@ def main(argv) -> int:
         ap.add_argument("from_out", help="phase-1 的 out.txt")
         ap.add_argument("--mic", type=int, default=-1, help="麦克风序号")
         ap.add_argument("--sys", type=int, default=-1, help="系统声音（loopback）序号")
+        ap.add_argument("--mic-match", help="按名字正则选麦克风，免得硬背序号")
+        ap.add_argument("--sys-match", help="按名字正则选 WASAPI 环回设备")
         ap.add_argument("--second", choices=["mic", "system"], action="append",
                         help="第一轮（两路组合）之后再单独跑这一路，可重复给")
+        ap.add_argument("--dwell", type=int, default=1,
+                        help="每轮问几次状态（≈3 秒/次），用来把会话拉长到能观察分片增长")
         ap.add_argument("-o", "--output")
         return cmd_req(ap.parse_args(argv[2:]))
     raise SystemExit(__doc__)
