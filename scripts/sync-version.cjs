@@ -36,9 +36,11 @@ if (process.argv[2]) {
 }
 
 // ── 同步目标 ──
+// read() 只为下面的「SSOT 滞后」闸门服务：读回该处当前写的版本。
 const targets = [
   {
     file: 'src-tauri/tauri.conf.json',
+    read: (c) => c.match(/"version"\s*:\s*"([\d.]+)"/)?.[1],
     replace: (content) => content.replace(
       /("version"\s*:\s*")[\d.]+(")/,
       `$1${newVersion}$2`
@@ -46,6 +48,7 @@ const targets = [
   },
   {
     file: 'src-tauri/Cargo.toml',
+    read: (c) => c.match(/^(version\s*=\s*")([\d.]+)/m)?.[2],
     replace: (content) => content.replace(
       /^(version\s*=\s*")[\d.]+(")/m,
       `$1${newVersion}$2`
@@ -53,6 +56,7 @@ const targets = [
   },
   {
     file: 'hancast-backend/pyproject.toml',
+    read: (c) => c.match(/^version\s*=\s*"([\d.]+)"/m)?.[1],
     replace: (content) => content.replace(
       /^(version\s*=\s*")[\d.]+(")/m,
       `$1${newVersion}$2`
@@ -60,6 +64,7 @@ const targets = [
   },
   {
     file: 'hancast-backend/hancast_sidecar/utils/config.py',
+    read: (c) => c.match(/self\.version\s*=\s*"([\d.]+)"/)?.[1],
     replace: (content) => content.replace(
       /(self\.version\s*=\s*")[\d.]+(")/,
       `$1${newVersion}$2`
@@ -67,6 +72,7 @@ const targets = [
   },
   {
     file: 'src/api/commands.ts',
+    read: (c) => c.match(/const MOCK_SETTINGS: AppSettings = \{[\s\S]*?version:\s*'([\d.]+)'/)?.[1],
     replace: (content) => {
       // 只改 MOCK_SETTINGS 的 version（那是 dev 模式下应用自报的版本）。
       // 这里曾经用全局 /version:\s*'x\.y\.z'/g，每次发布把同一文件里的「规则包版本」
@@ -94,12 +100,45 @@ const targets = [
   },
   {
     file: 'src/stores/settings.ts',
+    read: (c) => c.match(/version:\s*'([\d.]+)'/)?.[1],
     replace: (content) => content.replace(
       /(version:\s*')[\d.]+(')/,
       `$1${newVersion}$2`
     ),
   },
 ]
+
+// ── SSOT 滞后闸门（CI 的 beforeBuildCommand 走的就是无参数这条路）──
+// v2.3.3 就是这么毁的：tag 里 package.json 停在 2.3.2、其余 6 处已写对 2.3.3，
+// 钩子忠实地把「SSOT 的 2.3.2」刷回全部契约点，产物内部版本当场变错
+// （Info.plist CFBundleShortVersionString=2.3.2，Windows 连文件名都露出来
+//  HanCast_2.3.2_x64-setup.exe），只有 workflow 自己按 tag ref 拼的 artifact 名是 2.3.3。
+// 无参数模式下任何一处比 package.json 新，唯一解释就是 SSOT 忘了 bump —— 直接失败，
+// 让 CI 在毫秒级炸掉，好过安静地发一版自报错误版本的包。
+if (!process.argv[2]) {
+  const cmpVer = (a, b) => {
+    const pa = a.split('.').map(Number), pb = b.split('.').map(Number)
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+      const d = (pa[i] || 0) - (pb[i] || 0)
+      if (d) return d
+    }
+    return 0
+  }
+  const ahead = []
+  for (const target of targets) {
+    const filePath = path.join(ROOT, target.file)
+    if (!fs.existsSync(filePath) || !target.read) continue
+    const cur = target.read(fs.readFileSync(filePath, 'utf-8'))
+    if (cur && cmpVer(cur, newVersion) > 0) ahead.push(`${target.file}=${cur}`)
+  }
+  if (ahead.length) {
+    console.error(`❌ package.json 是 ${newVersion}，但这些契约点已经写着更高的版本：`)
+    ahead.forEach((s) => console.error(`   ${s}`))
+    console.error('   说明这次发布漏 bump 了 SSOT（package.json）。跑 `npm run version:set <x.y.z>`，'
+      + '别指望钩子把它刷低。')
+    process.exit(1)
+  }
+}
 
 let changed = 0
 let missed = 0

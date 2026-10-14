@@ -28,12 +28,27 @@ class TestDefaults(unittest.TestCase):
         self.assertEqual(params.get("screencast.dlna_segment_seconds"), 2)
 
     def test_every_spec_is_self_describing(self):
-        """登记表即 UI 契约：设置页只靠这张表渲染，字段缺一个就是一块空白"""
+        """登记表即 UI 契约：设置页只靠这张表渲染，字段缺一个就是一块空白
+
+        分组名不写死清单：v2.3.3 加 rules 段时这里的白名单没跟着改，
+        契约测试当场变红（而设置页其实已经渲染了）。改成直接查前端两份语言文件
+        里有没有 `settings.paramsGroup.<section>`——缺文案才是真会在界面上出问题的东西。
+        """
+        import json as _json
+        locales = []
+        for name in ("zh-CN", "en-US"):
+            p = os.path.join(os.path.dirname(__file__), "..", "..",
+                             "src", "locales", f"{name}.json")
+            with open(p, encoding="utf-8") as f:
+                locales.append(_json.load(f))
+        # 与 SettingsView.vue 的分支保持一致：text / number / enum / bool
+        rendered = ("text", "number", "enum", "bool")
         for spec in params.PARAM_SPECS:
-            self.assertIn(spec["type"], ("number", "bool", "enum"))
+            self.assertIn(spec["type"], rendered)
             self.assertTrue(spec["label_zh"] and spec["label_en"], spec["key"])
-            self.assertIn(spec["section"],
-                          ("screencast", "player", "discovery", "media", "logs"))
+            key = f"settings.paramsGroup.{spec['section']}"
+            for doc in locales:
+                self.assertIn(key, doc, f"{spec['key']} 的分组 {key} 缺文案")
             if spec["type"] == "number":
                 self.assertLessEqual(spec["min"], spec["default"])
                 self.assertGreaterEqual(spec["max"], spec["default"])

@@ -140,6 +140,14 @@ PARAM_SPECS: List[Dict] = [
      "help_en": "Index read by 'check for pack updates'; every pack URL it lists must "
                 "be https. Point it at a mirror if raw.githubusercontent.com is "
                 "unreachable; keep the sha256s"},
+    # 实测（2026-10-14，本机走 9565 代理）：同一条索引冷启动首次 15s 直接 ReadTimeout，
+    # 隧道热起来才 5.7–11.2s。默认卡在 15s 等于「检查规则包更新」在墙内点了必失败，
+    # 而这个失败看起来像「没有更新」，用户不会怀疑是超时。
+    {"key": "rules.index_timeout_s", "section": "rules",
+     "type": "number", "default": 40, "min": 5, "max": 120, "unit": "s",
+     "label_zh": "规则包索引超时", "label_en": "Rule pack index timeout",
+     "help_zh": "拉索引和查更新时单次网络请求的等待上限",
+     "help_en": "Per-request wait limit for fetching the index and update checks"},
 ]
 
 _SPECS_BY_KEY = {s["key"]: s for s in PARAM_SPECS}

@@ -61,6 +61,15 @@ def index_url() -> str:
         return ""
 
 
+def index_timeout() -> float:
+    """拉索引的单次等待上限（唯一来源：后台参数 rules.index_timeout_s）"""
+    try:
+        from ...params import get
+        return float(get("rules.index_timeout_s"))
+    except Exception:
+        return 40.0
+
+
 def _version_key(version: str) -> tuple:
     """``1.2.3`` → 可比较的元组；非数字段按 0 处理，缺段不报错"""
     parts = re.split(r"[._-]+", str(version or "").strip())
@@ -292,13 +301,18 @@ class PluginManager:
 
     # ── 官方索引：检查更新 / 一键安装 ──
 
-    def fetch_index(self, url: str = "", timeout: float = 15.0) -> dict:
+    def fetch_index(self, url: str = "", timeout: float | None = None) -> dict:
         """拉规则包索引 ``{"packs": [{name, version, url, sha256, …}]}``
 
         name 不合法或地址不是 https 的条目直接丢掉：一个坏条目不该拖垮整页
         检查更新，而索引是「下载来就要执行里面 JS」的入口，不给明文地址留门。
+
+        不显式传 timeout 时按后台参数 ``rules.index_timeout_s`` 走：写死 15s 的话，
+        墙内冷启动点「检查规则包更新」必然失败，而失败看起来像「没有更新」。
         """
         target = (url or index_url()).strip()
+        if timeout is None:
+            timeout = index_timeout()
         if not target.lower().startswith(("http://", "https://")):
             raise PluginError(f"索引地址必须是 http(s)（当前：{target or '未设置'}）")
         try:

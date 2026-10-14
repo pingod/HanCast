@@ -100,6 +100,7 @@ class FakeNet:
     def __init__(self, routes: dict):
         self.routes = routes
         self.calls: list[str] = []
+        self.kw: list[dict] = []
 
     def new_session(self):
         return self
@@ -112,6 +113,7 @@ class FakeNet:
 
     def get(self, url, **kw):
         self.calls.append(url)
+        self.kw.append(kw)
         if url not in self.routes:
             raise AssertionError(f"用例未桩掉该地址（保持离线）: {url}")
         doc = self.routes[url]
@@ -444,6 +446,30 @@ class TestPackDistribution(unittest.TestCase):
             idx = self._manager().fetch_index()      # 不传 url，也必须落到参数配的地址
         self.assertEqual(net.calls, ["https://mirror.example/index.json"])
         self.assertEqual(idx["packs"], {})
+
+    def test_fetch_index_timeout_follows_background_param(self):
+        """单次索引请求的等待上限读 rules.index_timeout_s，不写死 15s：
+        墙内冷启动 15s 必超时，而失败在界面上看起来像「没有更新」，没人会怀疑超时"""
+        from hancast_sidecar import params
+        net = FakeNet({INDEX_URL: {"packs": []}})
+        with patch.object(params, "get",
+                          lambda k: 40 if k == "rules.index_timeout_s" else None), \
+             patch.object(jsplugins_mod.requests, "Session", net.new_session):
+            self._manager().fetch_index(INDEX_URL)
+        self.assertEqual(net.kw[0]["timeout"], 40)
+
+        # 显式传参说话（调用方要重试或缩短时不该被登记表绑住）
+        net2 = FakeNet({INDEX_URL: {"packs": []}})
+        with patch.object(jsplugins_mod.requests, "Session", net2.new_session):
+            self._manager().fetch_index(INDEX_URL, timeout=3)
+        self.assertEqual(net2.kw[0]["timeout"], 3)
+
+    def test_index_timeout_default_replaces_the_old_15s(self):
+        """登记表默认值本身也是契约：写死 15s 时墙内冷启动点「检查更新」必失败，
+        而界面只说「没有可用更新」，没人会怀疑是超时"""
+        from hancast_sidecar import params
+        self.assertEqual(params.get("rules.index_timeout_s"), 40)
+        self.assertEqual(jsplugins_mod.index_timeout(), 40)
 
     def test_check_updates_buckets(self):
         mgr = self._manager()

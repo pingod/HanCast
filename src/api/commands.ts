@@ -145,7 +145,7 @@ const MOCK_DEVICES: Device[] = [
 const MOCK_SETTINGS: AppSettings = {
   usn: 'hancast-uuid-001',
   friendly_name: 'HanCast',
-  version: '2.3.3',
+  version: '2.3.4',
   media_port: 8080,
   default_device: null,
   network_interface: '',
@@ -182,6 +182,13 @@ function mockParamSpecs(): ParamSpec[] {
       label_zh: '规则包索引地址', label_en: 'Rule pack index URL',
       help_zh: '「检查规则包更新」读取的清单；清单里每个包的下载地址只认 https',
       help_en: 'Index read by "check for pack updates"; listed pack URLs must be https',
+    },
+    {
+      key: 'rules.index_timeout_s', section: 'rules', type: 'number',
+      default: 40, min: 5, max: 120, unit: 's',
+      label_zh: '规则包索引超时', label_en: 'Rule pack index timeout',
+      help_zh: '拉索引和查更新时单次网络请求的等待上限',
+      help_en: 'Per-request wait limit for fetching the index and update checks',
     },
   ]
   return base.map((s) => ({
@@ -439,8 +446,8 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
     case 'check_update':
       return {
         has_update: false,
-        current: '2.3.3',
-        latest: '2.3.3',
+        current: '2.3.4',
+        latest: '2.3.4',
         url: '',
         body: '',
         source: 'github',
