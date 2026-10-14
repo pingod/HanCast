@@ -181,7 +181,10 @@ class FfmpegCapture:
                 _err(f"FFmpeg 提前退出（退出码 {proc.returncode}）"
                      + self._stderr_hint())
             else:
-                _err("HLS 输出超时未生成（屏幕捕获失败，可能是窗口不存在/权限未授予）")
+                # ffmpeg 还活着却没落播放列表，几乎都是某一路输入把管线饿住
+                # （amix 要凑齐每路帧），stderr 里那句 buffer/queue 警告就是线索
+                _err("HLS 输出超时未生成（屏幕捕获失败，可能是窗口不存在/"
+                     "权限未授予）" + self._stderr_hint())
             self.stop()
             return {"ok": False, "error": self._error}
 
@@ -216,12 +219,11 @@ class FfmpegCapture:
     def _feed_loopback(self, proc: subprocess.Popen):
         """把 WASAPI 环回 PCM 持续写进 FFmpeg 的 stdin。
 
-        PortAudio 的读是阻塞的，且实测按实时节奏交付（静音期也给零块），
-        所以不需要按单调时钟补零；写失败只意味着 FFmpeg 已经退了。
+        LoopbackStream 自己按单调时钟补静音（见 loopback.py），所以这里拿到手
+        的一直是实时节奏的字节流；返回 b"" 只是「这会儿不欠数据」，None 才是
+        流收尾。写失败只意味着 FFmpeg 已经退了。
 
-        流的关闭归本线程：设备静音时 read() 可以阻塞远超 stop() 的 join 时限，
-        那时另一个线程去 close 就是在已释放的 PaStream 上踩内存（.68 实测
-        0xc0000005 / ntdll.dll，整个 sidecar 进程没了）。
+        流的关闭仍归采集线程：本线程只把「该收尾了」告诉它。
         """
         lb = self._loopback
         if lb is None:
@@ -230,7 +232,7 @@ class FfmpegCapture:
             while not self._stop_requested:
                 data = lb.read()
                 if data is None:
-                    break          # 流已被（本线程）关闭，正常收尾
+                    break          # 采集线程已收尾，正常结束
                 if data:
                     proc.stdin.write(data)
         except (BrokenPipeError, ValueError, OSError):

@@ -222,5 +222,28 @@ else
   say "FAIL 环回流仍可能被别的线程关掉（停止/早退会打崩 sidecar）"; fails=$((fails+1))
 fi
 
+# ── v2.2.25 本轮契约：环回交付节奏自己撑 ──
+# PortAudio 的 WASAPI 环回在「没人出声」的渲染端点上可以整场零字节交付
+# （.68 实测：扬声器 (Realtek(R) Audio) 的环回 read() 一直阻塞），而 amix 要
+# 凑齐每一路输入才出帧——stdin 一断供，ffmpeg 停在 0.42 秒、8 秒内不落播放
+# 列表，表现是「一选系统声音屏幕投屏就起不来」。修复形态是采集放独立线程、
+# 消费侧按单调时钟补欠账的静音（上限一块的 4 倍，免得把音频冲到视频前面）。
+if grep -q 'def _pad' "$RES/screencast/loopback.py" \
+   && grep -q 'MAX_PAD_CHUNKS' "$RES/screencast/loopback.py" \
+   && grep -q 'loopback-pump' "$RES/screencast/loopback.py"; then
+  say "PASS 环回按单调时钟补静音（设备零交付不再憋死整条管线）"
+else
+  say "FAIL 环回仍直连 ffmpeg stdin（静音设备会把投屏饿死）"; fails=$((fails+1))
+fi
+
+# 「ffmpeg 活着却没落播放列表」必须说清楚为什么：这一类全是某路输入把管线
+# 憋住，ffmpeg 自己在 stderr 里就喊了 buffer/queue 警告，不带上就等于让下一个人
+# 从头猜。
+if grep -q '权限未授予）" + self._stderr_hint()' "$RES/screencast/capture.py"; then
+  say "PASS 超时未生成带 ffmpeg stderr 线索"
+else
+  say "FAIL 超时未生成还是那句没用的「可能是权限未授予」"; fails=$((fails+1))
+fi
+
 say "--- $([ $fails -eq 0 ] && echo 'ALL PASS' || echo "$fails FAIL") ---"
 exit $fails

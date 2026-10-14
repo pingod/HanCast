@@ -470,11 +470,14 @@ class TestHlsEncode(unittest.TestCase):
 
 
 class TestLoopbackOwnership(unittest.TestCase):
-    """WASAPI 环回流的生命周期：跨线程关流会把 sidecar 整个进程打崩
+    """WASAPI 环回的两条命门：不许饿死管线，也不许跨线程关流
 
-    .68 实测（v2.2.22）：ffmpeg 因参数早退 → 停止链路在 feeder 还阻塞于
-    read() 时 close 流 → 事件日志「异常代码 0xc0000005 / ntdll.dll」，
-    sidecar 直接没了。这就是「选系统声音后崩溃」的第二段。
+    .68 实测（v2.2.22/.2.2.23）：
+      1) 「扬声器 (Realtek(R) Audio)」的环回在没人出声时 read() 一个字节都不给，
+         amix 要凑齐每路输入才出帧 → 整条管线停在 0.42 秒、8 秒内不落播放列表，
+         表现是「一选系统声音屏幕投屏就起不来」；
+      2) 停止链路在采集线程还阻塞于 read() 时 close 流 → 事件日志
+         「异常代码 0xc0000005 / ntdll.dll」，sidecar 整个进程没了。
     """
 
     class _FakePa:
@@ -501,10 +504,10 @@ class TestLoopbackOwnership(unittest.TestCase):
                 def read(self, _frames, exception_on_overflow=False):
                     outer.calls.append("read")
                     outer.thread.setdefault("read", threading.current_thread().name)
-                    # 模拟静音设备上一直不返回的阻塞读：调用方等不到就只能放弃关闭权
+                    # 模拟静音设备上一直不返回的阻塞读：交付节奏只能自己撑
                     self.block.set()
-                    self.released.wait(5)
-                    return b"\x00" * 4096
+                    self.released.wait(10)
+                    return b"\x11" * 4096
 
                 def stop_stream(self):
                     outer.calls.append("stop_stream")
@@ -527,16 +530,53 @@ class TestLoopbackOwnership(unittest.TestCase):
                                             "rate": 48000, "channels": 2})
         return pa, stream
 
-    def test_read_after_close_returns_none_and_close_idempotent(self):
+    def _wait_pump_reading(self, pa, stream):
+        """等采集线程真正进到 read()，否则用例前提不成立"""
+        deadline = time.time() + 2
+        while "read" not in pa.calls and time.time() < deadline:
+            time.sleep(0.01)
+        self.assertIn("read", pa.calls)
+
+    def test_starved_device_still_feeds_realtime_silence(self):
+        """设备零交付时 read() 必须按实时节奏给静音，且不许冲到实时前面"""
         pa, stream = self._stream()
+        self._wait_pump_reading(pa, stream)
+
+        start = time.monotonic()
+        delivered = 0
+        while time.monotonic() - start < 0.5:
+            data = stream.read()
+            self.assertIsNotNone(data, "设备只是没数据，不是流结束了")
+            if data:
+                self.assertEqual(data, b"\x00" * len(data))
+                delivered += len(data)
+        elapsed = time.monotonic() - start
         stream.close()
-        stream.close()                     # 重复关不许再碰 C 层
+
+        # 欠账补齐 → 至少到实时的一半；补太多 → 音频会冲到视频前面憋死交织器
+        self.assertGreater(delivered, elapsed * 192000 * 0.5)
+        self.assertLessEqual(delivered, elapsed * 192000 * 1.2)
+
+    def test_close_is_executed_by_the_pump_thread_only(self):
+        """主线程 close() 只发通知；碰 C 层的必须是采集线程，且只碰一次"""
+        pa, stream = self._stream()
+        self._wait_pump_reading(pa, stream)
+
+        stream.close()
+        stream.close()                     # 重复关不许再走一遍
+        self.assertNotIn("close", pa.calls, "主线程踩了已阻塞的 PaStream")
+
+        pa.stream.released.set()           # read 返回，采集线程自己收尾
+        deadline = time.time() + 3
+        while "close" not in pa.calls and time.time() < deadline:
+            time.sleep(0.01)
+        self.assertEqual(pa.thread.get("close"), "loopback-pump")
         self.assertEqual(pa.calls.count("close"), 1)
         self.assertEqual(pa.calls.count("terminate"), 1)
         self.assertIsNone(stream.read())   # feeder 据此退出，不空转
 
-    def test_feeder_own_thread_closes_the_stream(self):
-        """stop() 等不到 feeder 时，不许自己关流"""
+    def test_stop_leaves_the_wedged_stream_to_the_pump(self):
+        """capture.stop()：feeder 不被设备拖住，关流仍只发生在采集线程"""
         pa, stream = self._stream()
         cap = FfmpegCapture("ffmpeg")
         cap._loopback = stream
@@ -548,20 +588,20 @@ class TestLoopbackOwnership(unittest.TestCase):
                                   name="ffmpeg-hls-loopback")
         cap._feeder = feeder
         feeder.start()
-        deadline = time.time() + 2
-        while "read" not in pa.calls and time.time() < deadline:
-            time.sleep(0.01)
-        self.assertIn("read", pa.calls, "feeder 没进到阻塞读，用例前提不成立")
+        self._wait_pump_reading(pa, stream)
 
-        cap.stop()                      # join(2) 超时：主线程不许碰这条流
-        self.assertNotIn("close", pa.calls)
-        self.assertEqual(pa.thread.get("read"), "ffmpeg-hls-loopback")
-
-        pa.stream.released.set()        # read 返回，feeder 自己收尾
-        feeder.join(3)
+        cap.stop()
+        feeder.join(3)                     # 零交付只是静音，不该把 feeder 拖死
         self.assertFalse(feeder.is_alive())
-        self.assertEqual(pa.thread.get("close"), "ffmpeg-hls-loopback")
         self.assertIsNone(cap._loopback)
+        self.assertNotEqual(pa.thread.get("close"), "MainThread",
+                            "停止链路在主线程上关了 PaStream")
+
+        pa.stream.released.set()
+        deadline = time.time() + 3
+        while "close" not in pa.calls and time.time() < deadline:
+            time.sleep(0.01)
+        self.assertEqual(pa.thread.get("close"), "loopback-pump")
 
 
 class TestHttpdPullEvidence(unittest.TestCase):
