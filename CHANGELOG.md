@@ -1,6 +1,6 @@
 # Changelog
 
-> 最后校对：2026-10-15，对应版本 v2.3.9（`package.json:4`）
+> 最后校对：2026-10-15，对应版本 v2.3.10（`package.json:4`）
 
 本文件记录 HanCast 的版本历史。口径说明：
 
@@ -10,6 +10,18 @@
 - 新加版本时**同一次提交**里补这里，并按 [docs/README.md](docs/README.md) §4 的约定同步对应文档。
 
 ---
+
+## v2.3.10 — 2026-10-15（本轮发布提交）
+
+修的是**「解析失败」的判定口径**：随便粘一个视频站的 HTML 播放页（例：`https://www.lvsc168.com/play/14439-1-0.html`）也能点投屏，点了却毫无动作。
+
+- **根因不在后端**：`ShareResolver.resolve()` 对这类页面已经如实抛「页面中未找到可播放的视频源」并记进台账（`share_resolver.py:680-683`、`353-354`）。吞掉失败的是前端 `src/stores/media.ts` 的 catch —— 旧口径「只要从文本里抠得出链接就降级透传原始地址」，于是网页地址被当成可播媒体交给电视，电视拉到的是 HTML；顺带这条失败也再没人看得见。
+- **收紧**：新增媒体扩展名白名单 `MEDIA_FILE_RE`（`media.ts:15-19`，mp4/mkv/m3u8/mpd/音频图片类），catch 里只有**地址本身就是媒体文件**才透传，其余如实报错、投屏按钮保持禁用（`media.ts:142-182`）。
+- **台账入口就地可见**：报错下方新增一行提示「这条已记入解析失败台账：设置 → 解析插件 → 解析失败台账（按域名分组）」（`media.resolveLedgerHint`，`MediaInput.vue:522`；中英双份文案）。台账本身 v2.3.6 就有，只是入口藏在设置页折叠区底部，用户不知道去哪找他粘过的失败地址。
+- **dev mock 保真**：`src/api/commands.ts` 的 `resolve_share` 对网页地址同样抛「解不出可播源」。此前 mock 是无条件成功，浏览器模式下永远走不到真实报错分支，这类口径问题也就永远测不出来。
+- **测试不再污染用户数据**：新增 `hancast-backend/tests/conftest.py`（session 级 fixture 把 `failures.SETTING_DIR` 指进临时目录），`tools/share_resolve_probe.py` 默认同样重定向、`--keep-ledger` 才写真实台账。此前跑一次测试就往用户设置页那份台账里塞进 `b23.tv/AbCdEf`、`ads.example.com/lp` 之类的假域名，把真实失败冲淡。
+- **验收**：本机浏览器实测两条分支——网页地址 → 报错 + 台账提示、三台设备的投屏按钮全禁用；`…/movie.mp4` 直链 → 出预览卡片、按钮可用且不再误显示台账提示。`vue-tsc --noEmit` rc=0；定向 `pytest tests/test_share_resolver.py tests/test_jsplugins.py` 99 passed，且 `parse_failures.json` 跑前后 md5 逐字节一致。文档同步：[docs/HanCast-Frontend-API.md](docs/HanCast-Frontend-API.md) §4.3、[docs/HanCast-Frontend-Spec.md](docs/HanCast-Frontend-Spec.md) 链路 1 要点 3、[docs/故障排查.md](docs/故障排查.md) §7.4/§7.5、[docs/开发指南.md](docs/开发指南.md) §5.1、[tools/README.md](tools/README.md)。
+- **没动的地方**：`share_resolver.py:695-699` 候选地址验证遇网络层异常时「按原样交付」是刻意取舍（本机网络判定不稳，电视端反而可能拉得通），本轮不改；它和 `_publish` 预算见底、`_media_ok` 对未知 Content-Type 判 OK 一起，是后端侧仅剩的三类假成功来源。
 
 ## v2.3.9 — 2026-10-15（本轮发布提交）
 
