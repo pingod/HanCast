@@ -199,5 +199,16 @@ else
   say "FAIL 分片判型窗口还是固定长度（皮一长就又投哑）"; fails=$((fails+1))
 fi
 
+# 视频滤镜的位置：v2.2.22 及以前把 -vf 排在音频输入之前，ffmpeg 把它判给
+# 「下一个输入」（麦克风），EINVAL 直接退出——表现就是「一选麦克风/系统声音
+# 屏幕投屏就起不来」。修复形态是 build_video_input 只返回输入参数，-vf 由
+# start_hls 放到所有 -i 之后。
+if grep -q 'cmd += \["-vf", vf\]' "$RES/screencast/capture.py" \
+   && ! grep -q '"-vf", vf' "$RES/screencast/ffmpeg_manager.py"; then
+  say "PASS 视频滤镜排在所有输入之后（采音不再 EINVAL）"
+else
+  say "FAIL 视频滤镜还夹在输入段里（选麦克风/系统声音必崩）"; fails=$((fails+1))
+fi
+
 say "--- $([ $fails -eq 0 ] && echo 'ALL PASS' || echo "$fails FAIL") ---"
 exit $fails

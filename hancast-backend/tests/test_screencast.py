@@ -172,18 +172,19 @@ class TestFfmpegManager(unittest.TestCase):
             self.assertIsNone(fm.audio_input_silent("0:Mic"))
 
     def test_build_video_input_screen(self):
-        args = FfmpegManager.build_video_input(
+        args, vf = FfmpegManager.build_video_input(
             {"type": "screen", "id": "desktop"}, 15,
             FfmpegManager.build_scale_filter(1280, 720))
         self.assertIn("-f", args)
+        # 滤镜不再混在输入参数里：-i 之前的选项会被判给「下一个输入」
+        self.assertNotIn("-vf", args)
+        self.assertIn("scale=1280:720", vf)
         if os.name == "nt":
             self.assertIn("gdigrab", args)
             self.assertIn("desktop", args)
-            self.assertIn("scale=1280:720:force_original_aspect_ratio=decrease"
-                          ":force_divisible_by=2", args)
 
     def test_build_video_input_window(self):
-        args = FfmpegManager.build_video_input(
+        args, _vf = FfmpegManager.build_video_input(
             {"type": "window", "title": "记事本"}, 10, "")
         if os.name == "nt":
             self.assertIn("title=记事本", args)
@@ -216,7 +217,7 @@ class TestFfmpegManager(unittest.TestCase):
         old = os.name
         try:
             os.name = "nt"
-            args = FfmpegManager.build_video_input(
+            args, _vf = FfmpegManager.build_video_input(
                 {"type": "screen", "id": "screen:1920,0,1920,1080"}, 15, "")
         finally:
             os.name = old
@@ -233,7 +234,7 @@ class TestFfmpegManager(unittest.TestCase):
         old = os.name
         try:
             os.name = "nt"
-            args = FfmpegManager.build_video_input(
+            args, _vf = FfmpegManager.build_video_input(
                 {"type": "screen", "id": "desktop"}, 15, "")
         finally:
             os.name = old
@@ -351,6 +352,27 @@ class TestHlsEncode(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["m3u8"], cmd[-1])
         self.assertEqual(result["fps"], 15)
+
+    def test_video_filter_sits_after_all_inputs(self):
+        """-vf 夹在两个 -i 之间时，ffmpeg 把它判给「下一个输入」（麦克风），报
+        Option vf cannot be applied to input url audio=… 后 EINVAL 退出。
+        .68 实测（v2.2.22）：选了麦克风或系统声音，屏幕投屏必然起不来。"""
+        cases = [
+            {"mic": True, "mic_device": "麦克风 (Realtek(R) Audio)"},
+            {"mic": True, "mic_device": "麦克风 (Realtek(R) Audio)",
+             "system": True, "system_device": "立体声混音 (Realtek(R) Audio)"},
+        ]
+        for audio in cases:
+            with patch.object(os, "name", "nt"):
+                result, cmd = self._cmd(audio_cfg=audio)
+            self.assertTrue(result["ok"], audio)
+            self.assertIn("-vf", cmd, audio)
+            last_input = max(i for i, a in enumerate(cmd) if a == "-i")
+            self.assertGreater(cmd.index("-vf"), last_input, audio)
+            if "system" in audio:
+                # 双路必须真的混音，否则只有一路有声
+                self.assertIn("-filter_complex", cmd, audio)
+                self.assertIn("amix", cmd[cmd.index("-filter_complex") + 1])
 
     def test_main_profile_for_tv_decoders(self):
         _, cmd = self._cmd()

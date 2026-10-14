@@ -15,7 +15,7 @@ import ctypes
 import logging
 import threading
 import subprocess
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from ..params import get as param
 
@@ -934,19 +934,25 @@ class FfmpegManager:
                 ":force_divisible_by=2")
 
     @staticmethod
-    def build_video_input(source: Dict, fps: int, vf: str = "",
-                          ffmpeg_path: str = "") -> List[str]:
+    def build_video_input(source: Dict, fps: int, scale_vf: str = "",
+                          ffmpeg_path: str = "") -> Tuple[List[str], str]:
         """构造视频捕获输入参数（gdigrab / avfoundation / x11grab）
 
         source: {"type": "screen"|"window",
                  "id": "desktop"|"screen:x,y,w,h"|"window:<title>", "title": str}
         fps: 目标帧率
-        vf: 完整 -vf 滤镜串（见 build_scale_filter）
+        scale_vf: 缩放滤镜串（见 build_scale_filter），窗口抓取时 crop 排在它前面
         ffmpeg_path: 用于 macOS 动态枚举屏幕设备索引
-        返回参数列表，不包含输出/编码段。
+
+        返回 (输入参数, 视频滤镜串)。滤镜串**必须由调用方放到所有 -i 之后**
+        当输出选项下发：ffmpeg 把 `-i` 之前的选项判给「下一个输入」，夹在中间的
+        -vf 会落到麦克风输入上，直接
+        「Option vf cannot be applied to input url audio=…」EINVAL 退出——
+        这正是选了麦克风/系统声音就投不起来的原因（2026-10-14 .68 实据）。
         """
         fps = int(fps or 15)
         args: List[str] = []
+        vf = scale_vf
         if os.name == "nt":
             args += ["-f", "gdigrab"]
             if source.get("type") == "window":
@@ -987,9 +993,7 @@ class FfmpegManager:
             args += ["-f", "x11grab", "-framerate", str(fps),
                      "-i", os.environ.get("DISPLAY", ":0")]
 
-        if vf:
-            args += ["-vf", vf]
-        return args
+        return args, vf
 
     @staticmethod
     def _mix_filter(labels: List[str]) -> List[str]:

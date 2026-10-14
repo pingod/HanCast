@@ -14,7 +14,7 @@ import logging
 import threading
 import subprocess
 from collections import deque
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 from ..params import get as param
 
@@ -76,11 +76,16 @@ class FfmpegCapture:
 
         started_at = time.time()
         cmd = [self.ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin"]
-        cmd += self._video_input_args(source, fps, vf)
+        video_args, vf = self._video_input_args(source, fps, vf)
+        cmd += video_args
         # 视频占输入 0，音频输入从 1 起（amix 标签需此偏移）
         audio_input = self._audio_input_args(audio_cfg, input_offset=1)
         if audio_input:
             cmd += audio_input
+        # 视频滤镜必须排在所有 -i 之后：ffmpeg 把 -i 之前的选项判给「下一个输入」，
+        # 夹在中间会落到麦克风上（EINVAL，选了音频就投不起来）
+        if vf:
+            cmd += ["-vf", vf]
         cmd += [
             "-c:v", "libx264", "-preset", str(preset), "-tune", "zerolatency",
             # 电视解码器普遍只认 Main profile（High 的 8x8 变换/CABAC 变长码
@@ -291,7 +296,9 @@ class FfmpegCapture:
                 self.stop()
                 return
 
-    def _video_input_args(self, source: Dict, fps: int, vf: str) -> List[str]:
+    def _video_input_args(self, source: Dict, fps: int,
+                          vf: str) -> Tuple[List[str], str]:
+        """返回 (视频输入参数, 视频滤镜串)，滤镜串由调用方放到所有 -i 之后"""
         from .ffmpeg_manager import FfmpegManager
         return FfmpegManager.build_video_input(source, fps, vf, self.ffmpeg)
 
