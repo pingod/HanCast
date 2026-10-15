@@ -2,7 +2,7 @@
 
 > 本文档回答：HanCast 桌面端（Tauri 2 + Vue 3）的界面层是怎么搭起来的——窗口壳层、路由视图、组件与 Store 全量清单、真实数据流时序、样式与国际化机制、浏览器 mock 模式，以及写代码前必须知道的约束与坑。
 >
-> 最后校对：2026-10-15，对应版本 v2.3.10（`package.json`，tag `v2.3.10`）
+> 最后校对：2026-10-15，对应版本 v2.3.11（`package.json`，tag `v2.3.11`）
 
 术语约定：**Sidecar** = Python 后台进程（`hancast-backend/`，打包为 `hancast-sidecar`）；**壳层** = Rust/Tauri 层（`src-tauri/`）；**规则包** = JS 解析插件 zip；**声明式规则** = JSON 站点规则；**屏幕投屏** = screencast（把电脑屏幕投出去）；**接收投屏** = 本机作为 DLNA 渲染端被别的设备投；**投屏确认** = Device Guard；**后台参数** = `params.py` 可调项。
 
@@ -124,7 +124,7 @@ default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src '
 ### 2.6 asset 协议与打包资源
 
 - assetProtocol：`enable: true`，scope `**/*`（`tauri.conf.json:35-40`）——本地文件缩略图/播放经 `asset:` 协议进 WebView。
-- `externalBin`：`hancast-sidecar/hancast-sidecar`（:46）；resources 含 mpv、ffmpeg、hancast_sidecar（:47-52）。
+- `externalBin`：`hancast-sidecar/hancast-sidecar`（:46）；base `resources` 只有三条——`mpv/*`、`mpv/portable_config/**/*`、`hancast_sidecar/**/*`（:47-51），依赖库 glob 由三份平台 conf 各自完整重写（数组整体替换，见 `AGENTS.md` 的 bundle.resources 一节）。**FFmpeg 曾在这张清单里（`ffmpeg/*`），v2.3.11 起删除**：不再随包，改为本机检测 + 缺失按需下载（[屏幕投屏.md](屏幕投屏.md) §5.8）。
 - Windows NSIS 安装器语言：SimpChinese + English（:53-57）。
 
 ### 2.7 capabilities（`src-tauri/capabilities/default.json`）

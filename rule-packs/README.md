@@ -369,7 +369,7 @@ v2.3.2（提交 `60f8432`「feat(plugins): 内置规则包随包播种 + 规则�
 | 旧状态键在读盘时就被丢弃 | `jsplugins.py:294` `state.pop("disabled_builtin", None)   # 内置规则这个概念已删` |
 | 规则总览只有两种来源 | `share_resolver.py:394-396` 返回 `{rules_dir, script_packs, declarative}`；`docs/解析插件开发指南.md:267-270` 说明单测断言过这个 key 集合 |
 | 界面文案照实说 | `src/locales/zh-CN.json:81`「解析能力全部来自规则包：程序本身不带任何站点规则」；`:89`「还没有规则包，所以现在任何站点链接都解析不了。用下面的『导入 ZIP』/『从 URL 导入』，或点『检查规则包更新』从官方索引安装」 |
-| 产物级验收反过来断言「退役干净」 | `tools/accept-macos-artifact.sh:43-54`：遍历 `media/rules/bili.py`、`media/rules/douyin.py`、`media/bili_resolver.py`、`rule_plugins`，**产物里有就 FAIL，tag 的 git 树里有也 FAIL**（防「提交漏了删除」）；`:169-183` 断言 `rule_inventory` 只报两种来源、`script_packs` 里不许出现 `"builtin"`、冻结 `commands.py` 里不许再注册 `rule_set_builtin_enabled` |
+| 产物级验收反过来断言「退役干净」 | `tools/accept-macos-artifact.sh:49-58`：遍历 `media/rules/bili.py`、`media/rules/douyin.py`、`media/bili_resolver.py`、`rule_plugins`，**产物里有就 FAIL，tag 的 git 树里有也 FAIL**（防「提交漏了删除」）；`:175-188` 断言 `rule_inventory` 只报两种来源、`script_packs` 里不许出现 `"builtin"`、冻结 `commands.py` 里不许再注册 `rule_set_builtin_enabled` |
 | 新包发布清单也照这个口径 | `docs/解析插件开发指南.md:335-338`（第 8 条）把上述断言列成发布前必过项 |
 
 ### 6.4 于是「装完首启」实际发生什么

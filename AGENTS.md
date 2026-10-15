@@ -151,7 +151,7 @@ HanCast/
 │   ├── index.json               # 官方索引；线上地址是 main 分支 raw 路径 `https://raw.githubusercontent.com/pingod/HanCast/main/rule-packs/index.json`（`params.py:21`）
 │   └── dist/                    # 打包 zip（CI 随 draft Release 发布）
 ├── scripts/                     # 壳层脚本：sync-version / check-version / sync-sidecar / check-resources（均为 .cjs）
-├── tools/                       # 40 个探针与验收脚本（.py/.sh/.ps1/.mjs），索引进 docs/开发指南.md
+├── tools/                       # 42 个探针与验收脚本（.py/.sh/.ps1/.mjs），索引与计数口径见 tools/README.md
 ├── mpv/                         # 本地放置的 MPV（`.gitignore:86-87` 只留 portable_config/）
 │   └── portable_config/mpv.conf # 入库：弹幕/OSD 脚本、着色器、字体
 ├── docs/                        # 设计文档，**入口是 docs/README.md**
@@ -605,7 +605,7 @@ node tools/verify-params-ui.mjs        # 参数表与 tag 源码逐键比对（U
 python3 tools/audit-doc-refs.py        # 文档引用的 文件:行号 是否还成立
 ```
 
-`tools/` 下 40 个探针/验收脚本按用途分类见 docs/开发指南.md；端到端验收脚本的判据写在
+`tools/` 下 42 个探针/验收脚本按用途分类见 tools/README.md（计数口径同那里）；端到端验收脚本的判据写在
 docs/构建与发布.md §6 与各专题文档，不要凭脚本退出码 0 就当作功能可用。
 
 ## 窗口配置

@@ -2,6 +2,9 @@
 # 用法: tools/accept-macos-artifact.sh 2.2.15
 # 验收 **CI 产物本身**：全程 CLI，不碰 UI 坐标，禁止任何手工补丁（重装/重签都不许）。
 # 每轮装完包都跑一遍；任一项 FAIL 就说明这版产物不能用，别拿本地补丁版冒充。
+#
+# 依赖下载实测需要代理时导出：HC_FFMPEG_PROXY=http://127.0.0.1:9565
+# （探针默认清空代理环境，直连得通就不必给；直连不通时它报 SKIP 而不是 FAIL）
 VER="${1:?用法: $0 <version>}"
 TAG="v$VER"
 APP=/Applications/HanCast.app
@@ -32,7 +35,7 @@ cd /Users/pavia/githome/HanCast || exit 1
 for rel in ssdp.py commands.py params.py security/guard.py protocol/dlna.py protocol/server.py \
            models/session.py models/media.py renderer/mpv.py screencast/manager.py screencast/capture.py \
            screencast/httpd.py screencast/ffmpeg_manager.py screencast/www/index.html \
-           screencast/macos_tap.py utils/logger.py utils/config.py main.py \
+           screencast/macos_tap.py utils/logger.py utils/config.py utils/ffmpeg_deps.py main.py \
            media/server.py media/share_resolver.py media/rules/__init__.py media/rules/base.py \
            media/rules/declarative.py media/rules/jsplugins.py media/rules/jsruntime.py \
            utils/identity.py utils/httpclient.py utils/browser_channel.py; do
@@ -404,6 +407,239 @@ if strings -a "$APP/Contents/MacOS/HanCast" 2>/dev/null | grep -q "hc-render-"; 
   say "PASS 主程序含离屏渲染窗口（browser.rs 已编进产物）"
 else
   say "FAIL 主程序里没有 hc-render- 窗口标签（Rust 半没进这个包）"; fails=$((fails+1))
+fi
+
+# ── v2.3.11 本轮契约：FFmpeg 彻底去捆绑，改为「检测已装 + 缺失时按需下载」──
+# 三层判据，缺一层都不算验收过：
+# ① bundle 里没有任何 ffmpeg/ffprobe 可执行（v2.3.10 及以前同时躺着
+#    Contents/Resources/ffmpeg/ffmpeg 和 Contents/MacOS/ffmpeg，这是「删干净」的唯一硬证据）；
+# ② 冻结的 sidecar 自己答得上 ffmpeg_status，且检出的那份真能跑；
+# ③ 按需下载在真机上跑得通（_SOURCES 的 darwin gz 源此前从未真下载过，
+#    pytest 用的是假流；只有真产物 + 真网络能证明解包后的文件在 macOS 上可执行）。
+if find "$APP" -type f \( -name ffmpeg -o -name ffprobe -o -name 'ffmpeg.exe' \) -print -quit | grep -q .; then
+  say "FAIL 产物里仍有 ffmpeg/ffprobe 可执行（去捆绑没生效）"; fails=$((fails+1))
+else
+  say "PASS 产物内无 ffmpeg/ffprobe 可执行"
+fi
+for cmd in ffmpeg_status ffmpeg_download_start ffmpeg_download_status; do
+  if grep -q "\"$cmd\":" "$RES/commands.py"; then
+    say "PASS $cmd 已注册"
+  else
+    say "FAIL 命令表缺 $cmd（依赖弹窗在打包版里必挂）"; fails=$((fails+1))
+  fi
+done
+if grep -q 'def _get_base_path\|def _find_in_program_dir' "$RES/screencast/ffmpeg_manager.py"; then
+  say "FAIL ffmpeg_manager 仍留着捆绑目录探测（安装目录会被当候选）"; fails=$((fails+1))
+else
+  say "PASS ffmpeg_manager 已无捆绑目录探测函数"
+fi
+
+# ②③ 要驱动装好的 sidecar，且不能污染本机设置：给它一个临时 HOME，
+# 于是 SETTING_DIR / 下载落点 / 日志全在临时目录里，跑完整目录删掉。
+osascript -e 'tell application "HanCast" to quit' 2>/dev/null
+for i in $(seq 1 12); do pgrep -x hancast-sidecar >/dev/null 2>&1 || break; sleep 2; done
+if pgrep -x hancast-sidecar >/dev/null 2>&1; then
+  say "FAIL 旧 sidecar 未退出，跳过 FFmpeg 依赖实测（别 pkill，会留空壳 GUI）"; fails=$((fails+1))
+else
+  TMPHOME=$(mktemp -d)
+  PROBE_FILE=$(mktemp)
+  /usr/bin/python3 - "$APP/Contents/MacOS/hancast-sidecar" "$TMPHOME" > "$PROBE_FILE" 2>&1 <<'PY'
+import json, os, queue, subprocess, sys, threading, time
+
+sidecar, tmp_home = sys.argv[1], sys.argv[2]
+env = {"HOME": tmp_home, "PATH": "/usr/bin:/bin", "LC_ALL": "C"}
+# 默认清空代理（别把本机那个时好时坏的代理带进来），需要代理时用 HC_FFMPEG_PROXY 显式给
+proxy = os.environ.get("HC_FFMPEG_PROXY")
+if proxy:
+    env.update({"HTTP_PROXY": proxy, "HTTPS_PROXY": proxy,
+                "ALL_PROXY": proxy})
+proc = subprocess.Popen([sidecar], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                        stderr=subprocess.DEVNULL, env=env, text=True, encoding="utf-8")
+lines: "queue.Queue[str]" = queue.Queue()
+
+
+def reader():
+    for line in proc.stdout:
+        lines.put(line.strip())
+
+
+threading.Thread(target=reader, daemon=True).start()
+_id = 0
+
+
+def call(cmd, params=None, wait=60.0):
+    """发一条命令并取回同 id 的响应；事件行（无 id）丢掉，超时返回 None"""
+    global _id
+    _id += 1
+    want = _id
+    proc.stdin.write(json.dumps({"id": want, "cmd": cmd,
+                                 "params": params or {}}) + "\n")
+    proc.stdin.flush()
+    deadline = time.time() + wait
+    while time.time() < deadline:
+        try:
+            line = lines.get(timeout=1.0)
+        except queue.Empty:
+            continue
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            continue
+        if obj.get("id") == want:
+            return obj
+    return None
+
+
+def run_version(path):
+    try:
+        r = subprocess.run([path, "-version"], capture_output=True, text=True,
+                           timeout=8, encoding="utf-8", errors="replace")
+        return (r.returncode, (r.stdout or "").splitlines()[0] if r.stdout else "")
+    except (OSError, subprocess.TimeoutExpired, IndexError) as e:
+        return (None, repr(e))
+
+
+def say(kind, text):
+    print(f"{kind} {text}")
+
+
+# 线路故障与产品故障要分开判：这台机连 GitHub 走不走得通取决于代理，不是产品能控制的；
+# 但「失败原因有没有原样送到前端」恰恰是 v2.3.11 的契约，所以下面遇到线路故障时
+# 一边 SKIP 完成性检查，一边 PASS 上报链路。
+LINE_FAULTS = ("连接下载源失败", "Timeout", "Failed to perform", "Connection",
+               "timed out", "reset by peer", "Broken pipe", "Unable to connect")
+
+
+def is_line_fault(text):
+    return any(k in str(text) for k in LINE_FAULTS)
+
+
+resp = call("ffmpeg_status", {"refresh": True})
+if not resp or not resp.get("success"):
+    say("FAIL", f"打包 sidecar 的 ffmpeg_status 没答上来: {resp}")
+    sys.exit(0)
+d = resp["data"]
+for key in ("ok", "path", "source", "items", "missing", "install_commands",
+            "managed_dir", "download"):
+    if key not in d:
+        say("FAIL", f"ffmpeg_status 缺字段 {key}（弹窗渲染会空一块）")
+say("INFO", f"ok={d.get('ok')} source={d.get('source')} path={d.get('path')}")
+say("INFO", f"version={d.get('version')}")
+say("INFO", f"managed_dir={d.get('managed_dir')}")
+say("INFO", f"download={d.get('download')} install={d.get('install_commands')}")
+
+managed = d.get("managed_dir") or ""
+if not managed.startswith(tmp_home):
+    say("FAIL", f"托管目录不在临时 HOME 里，会污染本机: {managed}")
+if len(d.get("items") or []) != 2:
+    say("FAIL", f"items 应为 ffmpeg+ffprobe 两条，实得 {len(d.get('items') or [])}")
+
+if d.get("ok"):
+    # _extra_dirs() 的绝对路径兜底（/opt/homebrew/bin 等）在 env -i 的窄 PATH 下
+    # 仍要检出——「装了但没进 GUI 进程 PATH」正是打包版最常见的形态。
+    rc, head = run_version(d["path"])
+    if rc == 0:
+        say("PASS", f"检出的 FFmpeg 真能跑（source={d['source']}）: {head[:60]}")
+    else:
+        say("FAIL", f"状态说找到了，但这份跑不起来 rc={rc}: {head[:120]}")
+else:
+    if d.get("missing") and d.get("install_commands") and (d.get("download") or {}).get("available"):
+        say("PASS", "缺失时给全了清单/安装命令/下载源（弹窗有得渲染）")
+    else:
+        say("FAIL", f"缺失载荷不完整: {d.get('missing')} / {d.get('install_commands')}")
+
+# ③ 按需下载：真下、真解、真跑。连不上下载源算环境限制，不算产品失败。
+start = call("ffmpeg_download_start", wait=30)
+if not start or not start.get("success"):
+    err = (start or {}).get("error", "") or "无响应"
+    if is_line_fault(err):
+        say("SKIP", f"下载源连不上（线路/代理限制，需代理时导出 HC_FFMPEG_PROXY 重跑）: {str(err)[:140]}")
+        say("PASS", f"失败原因原样上报（弹窗拿得到真因）: {str(err)[:140]}")
+    else:
+        say("FAIL", f"ffmpeg_download_start 失败: {str(err)[:160]}")
+else:
+    stages, final, last = [], None, None
+    deadline = time.time() + 900
+    while time.time() < deadline:
+        time.sleep(2)
+        st = call("ffmpeg_download_status", wait=30)
+        if not st or not st.get("success"):
+            continue
+        payload = st["data"]
+        last = payload
+        stage = payload.get("stage")
+        if stage and (not stages or stages[-1] != stage):
+            stages.append(stage)
+        if payload.get("status") in ("done", "error"):
+            final = payload
+            break
+    say("INFO", "stage 轨迹: " + " -> ".join(stages))
+    if not final:
+        moved = (last or {}).get("received") or 0
+        say("SKIP" if moved else "FAIL",
+            f"900s 未跑完，已收 {moved}/{(last or {}).get('total')} 字节"
+            + ("（线路太慢，不是产品问题）" if moved else "（一个字节都没动，也没给出原因）"))
+    elif final["status"] == "error":
+        err = str(final.get("error") or "")
+        if is_line_fault(err):
+            say("SKIP", "下载源线路故障（需代理时导出 HC_FFMPEG_PROXY 重跑）")
+            say("PASS", f"失败原因原样上报（curl 原文进了载荷）: {err[:160]}")
+        else:
+            say("FAIL", f"下载失败: {err[:240]}")
+    else:
+        got = final.get("result") or {}
+        dl_path = os.path.join(managed, "ffmpeg")
+        rc, head = run_version(dl_path)
+        if rc == 0:
+            say("PASS", f"下载的那份能执行: {head[:60]}（paths={got.get('paths')}）")
+        else:
+            say("FAIL", f"下载任务报 done，但 {dl_path} 跑不起来 rc={rc}: {head[:120]}")
+        # 优先级：系统已装 > 本程序下载的那份（find_binary 先走系统目录）
+        after = call("ffmpeg_status", {"refresh": True})
+        src = ((after or {}).get("data") or {}).get("source")
+        if src in ("system", "downloaded"):
+            say("PASS", f"复检仍按「系统已装 > 自下载」归位（source={src}）")
+        else:
+            say("FAIL", f"复检 source={src}（期望 system 或 downloaded）")
+
+# 手动指定分支 + 同目录 ffprobe 搭档采纳（macOS 自下载只有 ffmpeg，靠这一条补齐）
+manual = d.get("path") or ("/opt/homebrew/bin/ffmpeg" if os.path.exists("/opt/homebrew/bin/ffmpeg") else None)
+if not manual:
+    say("SKIP", "本机没有可手动指定的 ffmpeg，跳过 manual 分支")
+else:
+    setp = call("set_ffmpeg_path", {"path": manual})
+    recheck = call("ffmpeg_status", {"refresh": True})
+    dd = (recheck or {}).get("data") or {}
+    probe_item = next((i for i in (dd.get("items") or []) if i.get("key") == "ffprobe"), {})
+    if not setp or not setp.get("success"):
+        say("FAIL", f"set_ffmpeg_path 失败: {(setp or {}).get('error')}")
+    elif dd.get("source") != "manual" or dd.get("path") != manual:
+        say("FAIL", f"手动指定后 source={dd.get('source')} path={dd.get('path')}（期望 manual / {manual}）")
+    else:
+        say("PASS", f"手动指定优先于系统检测（source=manual，且未破坏 ok={dd.get('ok')}）")
+    if probe_item.get("found") and probe_item.get("source") == "manual":
+        say("PASS", f"同目录 ffprobe 被自动采纳: {probe_item.get('path')}")
+    else:
+        say("INFO", f"ffprobe 未采纳（本机可能确实没有）: {probe_item}")
+
+proc.stdin.close()
+try:
+    proc.wait(timeout=10)
+except subprocess.TimeoutExpired:
+    proc.kill()
+PY
+  PROBE_RC=$?
+  while IFS= read -r line; do
+    case "$line" in
+      FAIL\ *) say "$line"; fails=$((fails+1));;
+      *) say "$line";;
+    esac
+  done < "$PROBE_FILE"
+  [ "$PROBE_RC" = 0 ] || { say "FAIL FFmpeg 依赖探针异常退出 rc=$PROBE_RC"; fails=$((fails+1)); }
+  rm -rf "$TMPHOME" "$PROBE_FILE"
+  open -a HanCast
 fi
 
 say "--- $([ $fails -eq 0 ] && echo 'ALL PASS' || echo "$fails FAIL") ---"

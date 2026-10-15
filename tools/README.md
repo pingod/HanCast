@@ -4,7 +4,7 @@
 
 `tools/` 里放的是**可重复运行的验收 / 探针脚本**，不是一次性的 `/tmp` 手搓脚本。它们必须自适应当前机器——设备名、网卡、产物路径、参数条数都从现场现读，不写死。用法上的两条铁律：**修 bug 之前先跑它复现，修完之后再用它证明**。「证明」的对象是判据（退出码 / PASS-FAIL 行），不是截图，也不是「我点了一下看起来对」。
 
-当前分类表收录 **41 个顶层脚本 + 1 个目录型验收包**（`browser-channel-livecheck/`，4 个文件合写成 §1.7 的一行）。核对计数用 `git ls-files tools/`：现在是 47 项 = 42 个顶层脚本文件 + 验收包 4 个 + 本 README，其中 `audit-doc-refs.py` 是全仓文档体检工具，用法记在 `AGENTS.md:598` 与 [docs/README.md](../docs/README.md) §4，不进本索引的分类表。`ls tools/` 还多一个不入库的 `__pycache__/`。
+当前分类表收录 **42 个顶层脚本 + 1 个目录型验收包**（`browser-channel-livecheck/`，4 个文件合写成 §1.7 的一行）。核对计数用 `git ls-files tools/`：现在是 48 项 = 43 个顶层脚本文件 + 验收包 4 个 + 本 README，其中 `audit-doc-refs.py` 是全仓文档体检工具，用法记在 `AGENTS.md:598` 与 [docs/README.md](../docs/README.md) §4，不进本索引的分类表。`ls tools/` 还多一个不入库的 `__pycache__/`。
 
 ---
 
@@ -16,7 +16,7 @@
 
 | 脚本 | 一句话用途 | 运行方式 | 前置环境 |
 |------|-----------|---------|---------|
-| `accept-macos-artifact.sh` | macOS 产物验收总入口：版本、Info.plist 三条声明、签名身份、产物内文件 sha256 对齐 tag、参数表逐键比对、SSDP 心跳通道、跨机入站、JS 插件宿主、窗口/音频契约，逐项打 PASS/FAIL | `tools/accept-macos-artifact.sh <version>`（例 `tools/accept-macos-artifact.sh 2.3.5`） | 仅 macOS；`/Applications/HanCast.app` 已装 CI 产物；仓库里能 `git show v<version>`（tag 已 fetch）；局域网可达 |
+| `accept-macos-artifact.sh` | macOS 产物验收总入口：版本、Info.plist 三条声明、签名身份、产物内文件 sha256 对齐 tag、参数表逐键比对、SSDP 心跳通道、跨机入站、JS 插件宿主、窗口/音频契约、**FFmpeg 去捆绑与检测链**（`.app` 内 `ffmpeg`/`ffprobe` 零命中；一次性 `HOME` + 干净 PATH 起打包 sidecar 跑完「检出系统那份 → 真下载 → 复检归位 → 手填优先」四步），逐项打 PASS/FAIL | `tools/accept-macos-artifact.sh <version>`（例 `tools/accept-macos-artifact.sh 2.3.5`）<br>下载那一步要线路配合：`HC_FFMPEG_PROXY=http://127.0.0.1:9565 tools/accept-macos-artifact.sh <version>` | 仅 macOS；`/Applications/HanCast.app` 已装 CI 产物；仓库里能 `git show v<version>`（tag 已 fetch）；局域网可达；连不上下载源判 **SKIP**（环境限制）而不是 FAIL，但失败原文照进载荷那条仍算 PASS |
 | `install-macos-artifact.sh` | 把 CI 的 dmg 原样装进 `/Applications`，不做任何补丁；装完直接接 `accept-macos-artifact.sh` | `tools/install-macos-artifact.sh <version> <dmg 路径>` | 仅 macOS；dmg 产物；当前用户在 `admin` 组（全程不提权，`:8-11`）；旧 sidecar 必须已自行退出（脚本只等不 `pkill`，`:31-34`） |
 | `verify-windows-artifact.sh` | 验收装在 .68 上的 CI 产物**本身**：注册表 `DisplayVersion` == 要求版本；安装目录里那份源码级 `.py` 逐个与 `git show v<tag>` 比对（两边都 `tr -d '\r'`，Windows 包全是 CRLF，直接 certutil 比 tag 哈希会把装对的版本判成装错）；curl_cffi 三件套与主程序里的离屏窗口标签单独扫一遍，tag 里没这项就 SKIP 而不是假 FAIL | `tools/verify-windows-artifact.sh <version>`<br>`… <version> params.py utils/httpclient.py`（只比对指定文件） | 仅 macOS 侧发起；能 `ssh administrator@192.168.1.68`；本地有 `v<version>` tag；不碰 UI、不打补丁。任一项 FAIL = 这版产物在他手上不可信，别继续让他测 |
 | `pull-rule-packs-installed.py` | 驱动**打包版** sidecar 走 `plugin_check_updates` → `plugin_pull`，证明已装的规则包真能升到官方索引版本 | `python3 tools/pull-rule-packs-installed.py`<br>`… --only hancast-douyin`<br>`… --no-relaunch`<br>`… --app /Applications/HanCast.app` | 仅 macOS（默认 `APP = /Applications/HanCast.app`，`:38`）；打包产物；能访问 `raw.githubusercontent.com`，走系统代理时带 `HTTPS_PROXY`；脚本会**整体退出并重启 GUI** |
@@ -75,6 +75,7 @@ ssh administrator@192.168.1.68 "schtasks /delete /tn <TASK> /f"      # 收尾
 | `verify-win-screencast-dwell.sh` | 跑批的同时从本机拉产品自己的 HTTP 通道 `http://<host>:8765/hls/<session>/live.m3u8`，按秒记录最大分片号。协议里的 `screen_cast_status` 只说「进程还在」，说不出「画面还在往前走」；喂料线程/环流饿死时进程可以活着但分片不再增长 | `tools/verify-win-screencast-dwell.sh [host] [时长秒]`（默认 `192.168.1.68` / 60 秒） | 从 macOS/Linux 跑；能 `ssh administrator@<host>`；.68 上正有一路屏幕投屏在跑；`curl` |
 | `verify-win-screencast-tone-content.sh` | 内容级判据：start 返回 ok、status 返回 running、退出码 0 全都只说明「FFmpeg 还活着」，声音到底有没有进分片只能把分片拿回来量。让 .68 循环播「440Hz 与 3500Hz 同时发声」的提示音，用产品协议起一路投屏，从产品 HTTP 通道拉回两段中途分片，用打包内同一份 ffmpeg 做 420–460Hz / 3300–3700Hz 带通 + `volumedetect` | `tools/verify-win-screencast-tone-content.sh [phase-1输出] [系统声音名字正则] [麦克风名字正则]`<br>环境变量 `HOST`（默认 `192.168.1.68`）<br>特殊值 `MIC=off`（只起「单独系统声音」那一路，判据最干净）、`TONE=off`（静音对照，量同一台机器同一副麦克风同一路投屏的地板） | 从 macOS/Linux 跑；能 ssh 到 .68；默认**自适应选设备**：系统声音 = 枚举里标着「当前出声」(default) 的那块环回，麦克风 = `麦克风 .*Realtek`；不给 phase-1 输出就自己跑一轮 `list_screen_sources` 枚举。判据：3.5kHz 带通有能量 → 提示音真被混进输出；3.5kHz = −91dB（数字静音）→ 输出里一点提示音都没有。为什么是 3.5kHz：单频 440Hz 判不准，风扇与麦克风底噪的能量就堆在低频（静音对照的 420–460Hz 带通已有 −35dB，跟放音时只差 3dB），3.5kHz 麦克风给不出来 |
 | `verify-dshow-parse-offline.py` | 离线回放 Windows dshow 设备枚举，验 `_list_audio_devices` 的解析。判据是「认出的音频设备集合 == 原始文本里带 `(audio)` 后缀的行」，且 `Alternative name` 行一条都不能混进来（它同样带引号，早期只按分段头切段的实现会把它当设备） | `tools/verify-dshow-parse-offline.py <ffmpeg -list_devices 抓到的原始输出文件>` | **不需要 Windows**（设计上就是在 Mac 上跑）；后端源码可 import（`sys.path` 插入 `hancast-backend`）；输入文件需事先从 .68 抓来。为什么离线：.68 的麦克风名是中文、设备列表随插拔变化，UI 里点一遍既慢又不可复现 |
+| `verify-ffmpeg-detect.ps1` | v2.3.11「FFmpeg 去捆绑」的真机总验收：驱动**装好的** `hancast-sidecar.exe` 走 stdin/stdout JSON，把检测链三层各造一次环境——② `source=system`（winget `Links` 那份）、③ `source=downloaded`（往 `managed_dir` 播种一份真 ffmpeg）、以及「本机确实没有 ffmpeg」时弹窗的数据源本体（`ok=False` + `missing` + `install_commands` + `download.available` + 错误原文）。`-Download` 再真按一次 gyan 下载，逐帧打印 `stage/received/total/percent/speed` | scp 进 `D:\Temp` 后 `powershell -NoProfile -ExecutionPolicy Bypass -File D:\Temp\verify-ffmpeg-detect.ps1 [-TempAppData] [-BarePath] [-SeedDownloaded <真 ffmpeg>] [-Download]` | 仅 Windows（.68），**不需要交互桌面**（不碰 gdigrab）；默认打 `%LOCALAPPDATA%\HanCast\hancast-sidecar.exe`。沙盒只重定向 APPDATA/LOCALAPPDATA/USERPROFILE 进一次性目录并在收尾删除，**不动用户的 winget 安装与真实设置**（seed 那份是从旧随包目录拷进沙盒的副本）。要造「没有 ffmpeg」必须 `-TempAppData` **加** `-BarePath`：这一台机器的进程 PATH 本来就带 winget `Links`（单独 `-TempAppData` 时 `_extra_dirs()` 已被沙盒中和却仍命中 system），只重定向目录照样检得到。脚本保持 ASCII-only；stderr 刻意**不**重定向（管道缓冲会在下载中途写满把 sidecar 顶死） |
 
 ### 1.5 解析与规则包
 
@@ -139,7 +140,7 @@ ssh administrator@192.168.1.68 "schtasks /delete /tn <TASK> /f"      # 收尾
 
 「产物验收」的定义就是**对打包结果而非源码的验证**。下面这些脚本的判据只有在产物上才成立：
 
-- `accept-macos-artifact.sh` — 读的是 `/Applications/HanCast.app/Contents/Resources/hancast_sidecar/`（`:8`），并把里面的源文件与 `git show <tag>` 逐文件比 sha256（`:34-42`）。跑源码等于没跑。
+- `accept-macos-artifact.sh` — 读的是 `/Applications/HanCast.app/Contents/Resources/hancast_sidecar/`（`RES`，`:11`），并把里面的源文件与 `git show <tag>` 逐文件比 sha256（清单 `:35-44`，29 个文件）。跑源码等于没跑。
 - `install-macos-artifact.sh` — 输入就是 dmg。
 - `pull-rule-packs-installed.py` — 存在的理由原话：「手改 `share_rules/plugins/` 里的文件则是拿补丁冒充验收，产物里根本没跑过 `plugin_pull`」（`:5-8`）。
 - `verify-browser-segment-live.py`、`verify-watch-page-live.mjs`、`verify-dlna-stop-chain.py` — 都硬编码 `/Applications/HanCast.app/...` 下的 sidecar。
@@ -148,6 +149,7 @@ ssh administrator@192.168.1.68 "schtasks /delete /tn <TASK> /f"      # 收尾
 - `verify-ssdp-offline-eviction.py` — 默认读打包版日志。
 - `probe-installed-ja3.py` — 跑的是 `.app` 里的冻结 sidecar（`DEFAULT_BIN`，`:47`）。它存在的理由就是源码级探针测不到这一层：`probe-tls-ja3.py --client hancast` 走 `sys.path` 里的源码，只能证明接线对，v2.3.7 恰恰是接线对、白名单漏包。
 - `verify-windows-artifact.sh` — 读的是 .68 安装目录里那份 `.py` 与二进制，与 `git show v<tag>` 逐文件比哈希；本地工作树跟它无关。
+- `verify-ffmpeg-detect.ps1` — 打的是 `%LOCALAPPDATA%\HanCast\hancast-sidecar.exe`（Nuitka 冻结产物）。源码级那三层判定由 `tests/test_ffmpeg_deps.py` / `test_ffmpeg_download_e2e.py` 管，这个脚本存在的理由正是「产物里 `bundle.resources` 到底有没有把 ffmpeg 带进去、装好的 sidecar 在真机上认不认得到系统那份」——跑源码等于没跑。
 
 反过来，这些是**源码级/离线**的，不需要产物：`verify-dlna-volume-chain.py`、`verify-dshow-parse-offline.py`、`verify-sidecar-utf8-protocol.py`、`verify-params-ui.mjs`、`probe-hls-antileech.py`、`probe-ts-skin-offset.py`、`probe-dyrs-*.sh`、`ssdp_probe.py`、`dump-cgwindowlist.py`、`rust-check.sh`、`build-rule-packs.py`。
 
@@ -156,7 +158,7 @@ ssh administrator@192.168.1.68 "schtasks /delete /tn <TASK> /f"      # 收尾
 `192.168.1.68`（脚本里简称 `.68`）：
 
 - **必须在 .68 的交互桌面会话里跑**（gdigrab 抓不到 session 0，所以必须经 `schtasks … /it` 投递）：`verify-screencast-audio-order.cmd`、`verify-win-loopback-feed.cmd`、`verify-win-screencast-audio-live.cmd`、`probe-win-window-picker.py`
-- **必须在 .68 上跑但不需要桌面**：`probe-wasapi-loopback.py`、`probe-win-audio-pipe.py`（后者显式避开 gdigrab，视频输入用 `lavfi testsrc` 顶替）、`verify-screencast-audio-order.ps1`（读已产出的 m3u8）
+- **必须在 .68 上跑但不需要桌面**：`probe-wasapi-loopback.py`、`probe-win-audio-pipe.py`（后者显式避开 gdigrab，视频输入用 `lavfi testsrc` 顶替）、`verify-screencast-audio-order.ps1`（读已产出的 m3u8）、`verify-ffmpeg-detect.ps1`（只发 stdin/stdout JSON 给 sidecar，可直接 ssh `powershell -File` 跑，不用 `schtasks /it`）
 - **从 macOS/Linux 远程打 .68**：`verify-windows-artifact.sh`（产物验收）、`verify-win-screencast-dwell.sh`、`verify-win-screencast-tone-content.sh`（两者 `HOST` 默认 `192.168.1.68`，走 ssh + 产品的 `http://<host>:8765/hls/<session>/` 通道）
 - **不需要 .68**：`verify-dshow-parse-offline.py`（离线回放 .68 抓来的文本，设计上就是在 Mac 上跑）、`gen-win-screencast-live-req.py`（只生成 ASCII 请求文本）
 - `verify-dlna-stop-chain.py` 需要局域网里有一台在跑的 Windows renderer，默认认 `display_name` 含 `AMD-YES` 或 IP `192.168.1.68`
@@ -191,7 +193,7 @@ ssh administrator@192.168.1.68 "schtasks /delete /tn <TASK> /f"      # 收尾
 **别写死机器上会变的东西。** 三条已付过学费的具体要求：
 
 1. **别写死设备名。** `verify-win-screencast-tone-content.sh:3-8` 记着这条：系统声音不再按名字硬挑，因为「装了虚拟音效设备（FxSound 等）的机器上，默认渲染端点根本不是 Realtek，按 `Realtek.*Loopback` 挑中的是静音镜像，分片里只剩补出来的数字静音，会被读成『系统声音没采到』」。现在默认认枚举里标着「当前出声」(`default`) 的那块环回（提交 `bfe127a`）。名字只作为**可覆盖的默认值**暴露成位置参数/环境变量。
-2. **别写死条数。** 提交 `9787f2b`（`fix(tools): 参数表验收改为与 tag 源码逐键比对，不再写死条数`）的原话：写死 `"18"` 的断言在加了 `rules.index_url`（第 19 条）之后必然 FAIL，而**这条 FAIL 只证明脚本过期，证明不了产物有问题**——每轮加参数都得同步改脚本。改法是从**被测 tag 的 git 树现读基准**（`git show <tag>:hancast-backend/hancast_sidecar/params.py`），逐 key 逐 default 比对，这样能同时抓住产物**多带 / 漏带 / 带旧值**三种情况（四种变异体验证过）。实现见 `accept-macos-artifact.sh:108-121`。
+2. **别写死条数。** 提交 `9787f2b`（`fix(tools): 参数表验收改为与 tag 源码逐键比对，不再写死条数`）的原话：写死 `"18"` 的断言在加了 `rules.index_url`（第 19 条）之后必然 FAIL，而**这条 FAIL 只证明脚本过期，证明不了产物有问题**——每轮加参数都得同步改脚本。改法是从**被测 tag 的 git 树现读基准**（`git show <tag>:hancast-backend/hancast_sidecar/params.py`），逐 key 逐 default 比对，这样能同时抓住产物**多带 / 漏带 / 带旧值**三种情况（四种变异体验证过）。实现见 `accept-macos-artifact.sh:102-123`。
    - 顺带一个实现坑，同处 `:111` 注释：临时文件**必须叫 `params.py`**——importlib 按后缀选 loader，无后缀的 `mktemp` 文件会静默读不出表。
    - 下界断言（`len(specs) < 18` 这种「不少于」）不会因新增参数而假红，可以接受，但 docstring 里的数字要跟着更新——`verify-sidecar-utf8-protocol.py:11` 写的「18 项」已滞后于当前的 27 条（`params.py:35-209`），`:81` 的实际断言仍是 `< 18` 下界所以没坏。
 3. **别写死路径/版本号当唯一入口。** 产物路径要做成可覆盖参数（`pull-rule-packs-installed.py --app`、`verify-proxy-segment-decodable.py --root/--ffmpeg`、`verify-ssdp-offline-eviction.py --log`）；Chrome 从 `~/.cache/puppeteer/` 现找而非钉版本；triple 用 `rustc -vV` 现取（`rust-check.sh:38`）。
