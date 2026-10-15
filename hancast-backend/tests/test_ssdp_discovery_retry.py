@@ -21,6 +21,14 @@ RENDERER_DESC = """<?xml version="1.0"?>
   <deviceType>urn:schemas-upnp-org:device:MediaRenderer:1</deviceType>
   <friendlyName>WIN-PC HanCast</friendlyName>
   <UDN>uuid:9d2b1c00-1111-2222-3333-444455556666</UDN>
+  <!-- v2.3.13 起投屏目标必须声明 AVTransport：这份替身描述是「合格的渲染端」，
+       所以补上服务；路由器那类没有 AVTransport 的描述归 test_ssdp_cast_service_gate.py 管 -->
+  <serviceList>
+   <service>
+    <serviceType>urn:schemas-upnp-org:service:AVTransport:1</serviceType>
+    <controlURL>AVT/control</controlURL>
+   </service>
+  </serviceList>
  </device>
 </root>
 """
@@ -117,7 +125,9 @@ def test_unparseable_description_warns(service, monkeypatch, caplog):
                         lambda *a, **k: _Html())
     with caplog.at_level(logging.WARNING):
         service._fetch_device_from_notify(LOC, "192.168.1.68")
-    assert "设备描述无法解析" in caplog.text
+    # v2.3.13 起理由由解析侧点名（XML 损坏 / 缺 UDN / 没有 AVTransport），
+    # 不再由抓取方笼统断言「非 UPnP 设备或 XML 损坏」
+    assert "不列入投屏目标" in caplog.text
     assert service.get_devices() == []
 
 

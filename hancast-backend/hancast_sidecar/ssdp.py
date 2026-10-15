@@ -176,6 +176,10 @@ class SSDPService:
         # location → 连续抓取失败次数：失败要重试（否则一次瞬断就把设备
         # 藏住 30s 以上），但告警只打第一次，避免每轮刷屏
         self._fetch_failures: Dict[str, int] = {}
+        # location → 因「不是投屏目标」被拒绝的次数。路由器/NAS 这类 UPnP 设备
+        # 每 30s 就把 NOTIFY 重播一遍，同一 location 只在首次露一行，否则日志面板
+        # 一天被它刷掉上万行。
+        self._rejected_targets: Dict[str, int] = {}
         # udn → 最近一次「确认它还在」的时刻（alive / M-SEARCH 回包 / 探活成功）
         self._last_seen: Dict[str, float] = {}
         # udn → 连续探活失败次数：连败两次才判离线，给瞬断留一次余地
@@ -649,9 +653,8 @@ class SSDPService:
                 resp.text, ip, port=device_port, location=location)
             self._fetch_failures.pop(location, None)
             if device is None:
-                # 抓到了但认不出是 UPnP 设备：重抓无意义，留现场信息即可
-                logger.warning(
-                    "设备描述无法解析（非 UPnP 设备或 XML 损坏）: %s", location)
+                # 重抓无意义；不在这里断言原因——解析侧已按 location 记过精确理由
+                # （不是 UPnP 描述 / 缺 UDN / 不提供 AVTransport 投屏服务）
                 return
             self._register_found_device(device, "NOTIFY")
         except Exception as e:
@@ -1043,8 +1046,7 @@ class SSDPService:
                 resp.text, addr[0], port=device_port, location=location)
             self._fetch_failures.pop(location, None)
             if device is None:
-                logger.warning(
-                    "设备描述无法解析（非 UPnP 设备或 XML 损坏）: %s", location)
+                # 同上：理由由解析侧按 location 记一次，避免每轮刷新重复刷屏
                 return
             self._register_found_device(device, "M-SEARCH")
         except Exception as e:
@@ -1062,9 +1064,48 @@ class SSDPService:
             else:
                 logger.debug("抓取设备描述重试中 第%d次: %s: %s", n, location, e)
 
+    # 投屏目标的准入条件：描述里必须有 AVTransport 服务。
+    # 控制端能做的所有事（SetAVTransportURI / Play / Pause / Stop / Position）都走
+    # 这一个服务，deviceType 只是给人看的标签——路由器的 InternetGatewayDevice、
+    # NAS 的 MediaServer 都能被 UPnP 栈正常解析，但对投屏毫无用处。以前「有 UDN
+    # 就登记」，路由器就混进了投屏列表（2.3.12 本机日志：`荣耀路由X1 增强版`，2026-10-15）。
+    # 大小写不敏感比对：URN 规范写法是 AVTransport，但山寨描述里 a/v 大小写混乱的不少，
+    # 宁可放宽匹配也别把真能投屏的设备挡在门外。
+    _CAST_SERVICE = "urn:schemas-upnp-org:service:avtransport:"
+
+    @classmethod
+    def _provides_cast_service(cls, root) -> bool:
+        """在整份描述里找 AVTransport 服务（含内嵌设备，命名空间无关）"""
+        for node in root.iter():
+            tag = node.tag
+            if not isinstance(tag, str):
+                # 注释与处理指令节点的 tag 是个可调用对象（lxml 里不是字符串），
+                # 而设备描述带 XML 注释很常见——这里炸掉会让整份好描述被判成坏数据
+                continue
+            # node.tag 可能是 '{urn:...}serviceType' 或 'serviceType'，两种都取 local-name
+            if tag.rpartition('}')[2] != "serviceType":
+                continue
+            if (node.text or "").strip().lower().startswith(cls._CAST_SERVICE):
+                return True
+        return False
+
+    def _note_rejected_target(self, where: str, detail: str,
+                              warn: bool = False) -> None:
+        """登记「这份描述不能当投屏目标」的理由；同一 location 只在首次露一行"""
+        n = self._rejected_targets.get(where, 0) + 1
+        self._rejected_targets[where] = n
+        if n > 1:
+            logger.debug("不列入投屏目标：%s — %s", detail, where)
+            return
+        if warn:
+            logger.warning("不列入投屏目标：%s — %s", detail, where)
+        else:
+            logger.info("不列入投屏目标：%s — %s", detail, where)
+
     def _parse_device_description(self, xml_text: str, ip: str,
                                   port: int = 8080,
                                   location: str = "") -> Optional[Device]:
+        where = location or f"{ip}:{port}"
         try:
             # 确保 XML 文本是字符串，然后编码为字节
             if isinstance(xml_text, bytes):
@@ -1095,7 +1136,9 @@ class SSDPService:
                     device_elem = device_type_elem.getparent()
                     active_ns = {}
                 else:
-                    logger.debug(f"No device element found in XML for {ip}")
+                    self._note_rejected_target(
+                        where, "抓回来的不是 UPnP 设备描述（没有 device 元素）",
+                        warn=True)
                     return None
 
             def find_text(elem, tag, default=""):
@@ -1110,7 +1153,8 @@ class SSDPService:
             udn = find_text(device_elem, "UDN")
 
             if not udn:
-                logger.debug(f"No UDN found for device at {ip}")
+                self._note_rejected_target(
+                    where, "设备描述缺少 UDN，无法建立身份", warn=True)
                 return None
 
             device_type = "unknown"
@@ -1122,6 +1166,15 @@ class SSDPService:
             elif "MediaServer" in type_str:
                 device_type = "server"
 
+            # 准入看服务，不看标签：deviceType 五花八门的设备只有提供 AVTransport
+            # 才可能真的被投屏控制。
+            if not self._provides_cast_service(root):
+                self._note_rejected_target(
+                    where, f"{friendly_name or '无名设备'} 不提供 AVTransport 投屏服务"
+                           f"（deviceType={type_str or '未声明'}）")
+                return None
+
+            self._rejected_targets.pop(where, None)
             logger.debug(f"Parsed device: {friendly_name} ({device_type}) at {ip}:{port}"
                          f" [via {self._discovery_via}]")
 
@@ -1131,7 +1184,9 @@ class SSDPService:
                 model_name=model_name, udn=udn, location=location,
             )
         except Exception as e:
-            logger.debug(f"XML parse error for {ip}: {e}")
+            self._note_rejected_target(
+                where, f"描述 XML 解析失败（{e.__class__.__name__}: {e}）",
+                warn=True)
             return None
 
     def get_devices(self) -> List[Device]:
@@ -1174,7 +1229,10 @@ class SSDPService:
         device = self._parse_device_description(
             xml_text, host, port=used_port, location=used_url)
         if not device:
-            raise ValueError("该地址不是有效的 DLNA 设备描述")
+            # 文案要点名准入条件：用户手输的很可能是路由器/NAS 的后台地址，
+            # 那些机器确实有 UPnP 描述，说「不是有效的 DLNA 设备描述」会让人以为填错了格式
+            raise ValueError("该地址不能投屏：设备描述里必须声明 AVTransport 服务"
+                             "（电视/盒子/带投屏的音箱才有，路由器与 NAS 没有）")
 
         if (not device.ip or device.ip in ("127.0.0.1", "0.0.0.0")) and host:
             device.ip = host

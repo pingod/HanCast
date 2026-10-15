@@ -1,6 +1,6 @@
 # Changelog
 
-> 最后校对：2026-10-15，对应版本 v2.3.12（`package.json:4`）
+> 最后校对：2026-10-15，对应版本 v2.3.13（`package.json:4`）
 
 本文件记录 HanCast 的版本历史。口径说明：
 
@@ -8,6 +8,21 @@
 - 版本号唯一来源是 **`package.json` 的 `version`**（`scripts/sync-version.cjs:4,17`），`npm run version:set <x.y.z>` 把它刷进 7 处契约点：`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`（本地包那条，v2.3.8 起收进来——此前每版都靠人肉补）、`hancast-backend/pyproject.toml`、`hancast_sidecar/utils/config.py:39`、`src/api/commands.ts`（mock）、`src/stores/settings.ts`。`scripts/check-version.cjs` 自称以 `tauri.conf.json` 为源（口径相反），但全仓无人调用，是未接线的孤儿脚本——判定以 `sync-version.cjs` 为准。详见 [docs/构建与发布.md](docs/构建与发布.md) §1。
 - 下表「提交」列即 `git tag <版本>` 指向的提交；细节以 `git show <提交>` 为准，本文只留用户可感知的变化。
 - 新加版本时**同一次提交**里补这里，并按 [docs/README.md](docs/README.md) §4 的约定同步对应文档。
+
+---
+
+## v2.3.13 — 2026-10-15（本轮发布提交）
+
+设备列表里不再躺着路由器：投屏目标改成**按服务识别**，不提供 AVTransport 的 UPnP 设备一律不登记。
+
+- **准入门槛**（`ssdp.py:1074` 常量、`ssdp.py:1076-1090` 判定、`ssdp.py:1169-1175` 落在 `_parse_device_description` 里）：整份描述 XML（含内嵌设备）必须出现 `urn:schemas-upnp-org:service:AVTransport:`。判定是**命名空间无关**的（`tag.rpartition('}')[2]` 取 local-name）且**大小写不敏感**——URN 规范写法是 `AVTransport`，但山寨描述里 a/v 混乱，宁可放宽匹配也别把真能投屏的设备挡在门外。`deviceType` 降级为展示标签，不再参与准入：控制端能做的所有事（SetAVTransportURI / Play / Pause / Stop / Position）都走 AVTransport 这一个服务，标签写 `MediaServer` 的盒子只要带这个服务就照样收进来，写 `MediaRenderer` 但没有服务的设备照样挡掉。
+- **手动添加走同一条门槛**（`ssdp.py:1231-1235`）：报错文案从「该地址不是有效的 DLNA 设备描述」改成点名准入条件——用户手输的往往正是路由器后台地址，那些机器**确实有**合法的 UPnP 描述，旧文案会让人反复检查自己填的格式对不对。`_MANUAL_PORTS`（`ssdp.py:1212`）仍是手输裸 IP 时的猜端口候选，**不是端口扫描**；发现链路自始至终只被动收 NOTIFY / M-SEARCH 响应。
+- **顺带抓出一个真 bug**：lxml 的注释与处理指令节点 `.tag` 是**可调用对象**而非字符串，服务遍历在其上抛 `AttributeError`，被外层宽 `except` 吞成「描述 XML 解析失败」——**表现是「带 XML 注释的合格电视从列表消失」而不是报错**。守卫是 `isinstance(tag, str)`（`ssdp.py:1081-1084`），回归锁为 `test_ssdp_cast_service_gate.py::test_xml_comments_do_not_break_the_service_scan`。这条只有真机替身（描述里带注释）才会暴露，纯桩数据容易漏。
+- **拒绝理由按 location 去重**（`ssdp.py:1092-1103`、计数表 `ssdp.py:182`）：同一地址首次打 INFO/WARNING、之后降 DEBUG。路由器这类设备每 30s 重播一轮 NOTIFY（抓取去重窗口 `fetch_dedup_window`，`ssdp.py:175`），不去重就是每天上万行噪音；无 device 元素 / 缺 UDN / XML 解析失败三种「数据本身有问题」的理由仍按 WARNING 露首行，正常「不是投屏目标」按 INFO。两个发现调用点（NOTIFY 与 M-SEARCH）不再各自打笼统 WARNING，理由由解析侧统一给。
+- **数字口径**：`ssdp.py` 1264 → **1322** 行；测试新增 `tests/test_ssdp_cast_service_gate.py` **13 条**（电视/路由器/IGW 三份描述 fixture + 大小写 + 命名空间 + 内嵌设备 + 注释回归 + 日志去重 + 手动添加文案），`tests/test_ssdp_discovery_retry.py` 的 `RENDERER_DESC` 随之补上 `<serviceList>`（它原本没有服务，正是新门槛要挡的形状）。命令面、事件面、后台参数本轮**未动**（Rust 66 条 / Sidecar 59 条 / `commands.ts` 65 个 / `PARAM_SPECS` 32 项）。
+- **新入库探针** `tools/verify-ssdp-cast-gate.py`（登记在 [tools/README.md](tools/README.md) §1.2）：一次起**两台**替身——带 AVTransport 的「电视」必须进列表，不提供的「路由器」（MediaServer 描述 + XML 注释）必须被挡下并留下理由。`--source` 就地跑仓库源码（打 tag 前用，需要 1900 空闲），默认模式读**已装产物**的 sidecar 日志（证明修复到了打包版）。两台替身的 LOCATION 都写 `127.0.0.1`，否则会撞上 `_is_own_location` 自通告回环过滤而「看起来脚本没生效」（§3.3 那条老坑）。
+- **验收（本轮真实输出，打 tag 之前做完）**：`.venv/bin/python -m pytest tests/test_ssdp_cast_service_gate.py tests/test_ssdp_discovery_retry.py -q` → **30 passed in 1.25s**；`hancast-backend/.venv/bin/python tools/verify-ssdp-cast-gate.py --source --timeout 90` → **PASS（源码）：渲染端进列表、路由器挡在门外并留理由**，替身列表只认到 `HanCastCastGateTV-49311`，拒的那行是 `不列入投屏目标：HanCastCastGateRouter-49312 不提供 AVTransport 投屏服务（deviceType=urn:schemas-upnp-org:device:MediaServer:1） — http://127.0.0.1:49312/description.xml`；**同一台替身在 v2.3.12 产物上是 FAIL 的**（`python3 tools/verify-ssdp-cast-gate.py` → `[FAIL] 没有 AVTransport 的替身仍被登记为投屏目标：Found device via NOTIFY: HanCastCastGateRouter-49312`），即缺陷在打包版上复现、修复只可能在源码里自证的区分做完了；`python3 tools/audit-doc-refs.py` → 合计引用 **2963 处、可疑 0 处**（本轮 ssdp.py 插入代码使 179 行之后的行号整体位移，故障排查/架构总览/Frontend-API/AGENTS 里 19 处引用按**被引原文逐条重导**，不是统一加偏移）。装包后还要在 Mac 与 .68 各跑一次非 `--source` 模式作为产物级判据。
+- **文档同轮修订**：AGENTS.md（SSDP 服务行加准入与判据、`ssdp.py` 行数、tools 计数口径、最后校对）、docs/故障排查.md（新增 §3.5 与本条症状索引行，含「不做端口扫描」的澄清）、docs/架构总览.md（§2 网络面新增发现准入段）、docs/HanCast-Frontend-API.md（`device_found` 触发时机 + `add_device` 错误清单与新行号）、hancast-backend/README.md（目录树 ssdp.py 一行）、tools/README.md（新脚本登记 + 计数 46/52 项）。
 
 ---
 

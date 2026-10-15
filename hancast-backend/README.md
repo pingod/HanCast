@@ -1,12 +1,12 @@
 # HanCast Python Sidecar
 
-> 最后校对：2026-10-15，对应版本 v2.3.12（`package.json:4`）。深度内容见 [../docs/README.md](../docs/README.md)。
+> 最后校对：2026-10-15，对应版本 v2.3.13（`package.json:4`）。深度内容见 [../docs/README.md](../docs/README.md)。
 
 `hancast-backend/` 是 HanCast 的 Python 后端，以 **Sidecar 子进程**形式被 Tauri 壳层拉起，
 通过 stdin/stdout 的行分隔 JSON 与 Rust 通信。它负责 DLNA/SSDP、媒体服务、mpv 渲染、
 屏幕投屏采集，以及粘贴链接的站点解析。
 
-版本：与主程序同步（当前 v2.3.6，`hancast_sidecar/utils/config.py:39`），
+版本：与主程序同步（当前 v2.3.13，`hancast_sidecar/utils/config.py:39`），
 Python `>= 3.11`（`pyproject.toml:13`）。
 
 > 深入内容不在此文：分层与端口/线程/落盘状态见 [../docs/架构总览.md](../docs/架构总览.md)，
@@ -22,7 +22,7 @@ hancast-backend/
 │   ├── main.py          # 入口：UTF-8 stdio 包裹 → ready 事件 → 命令主循环
 │   ├── commands.py      # 命令路由与 Sidecar 侧服务装配（注册 59 条命令）
 │   ├── params.py        # 后台参数登记表 PARAM_SPECS（32 项）
-│   ├── ssdp.py          # SSDP 发现（M-SEARCH / NOTIFY alive+byebye / 陈旧摘除）
+│   ├── ssdp.py          # SSDP 发现（M-SEARCH / NOTIFY alive+byebye / 陈旧摘除；准入=描述声明 AVTransport）
 │   ├── protocol/        # dlna.py（SOAP 控制与描述）、server.py（UPnP HTTP 服务）
 │   ├── renderer/        # mpv.py（接收端播放与 IPC）、base.py
 │   ├── media/           # parser.py、server.py（本地文件 HTTP + 链路内代理）、

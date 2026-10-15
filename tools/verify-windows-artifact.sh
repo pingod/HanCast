@@ -21,10 +21,13 @@ SIDE='C:\Users\Administrator\AppData\Local\HanCast\hancast_sidecar'
 # 默认清单：本轮及最近几轮「判修复在不在」的关键文件。
 # 逐文件哈希同时充当「存在性」判据——v2.3.7 新增的 utils/httpclient.py（JA3 指纹
 # 会话工厂）与 utils/browser_channel.py（浏览器通道 Python 半）就是靠这条判在不在。
+# v2.3.12 起补 utils/ghmirror.py（GitHub 镜像唯一改写入口）：新模块只写进源码测试
+# 不算数，v2.3.8 的 curl_cffi 就是因为产物清单没这条，产物里静默降级成 requests 也没人发现。
 RELS=("$@")
 if [ ${#RELS[@]} -eq 0 ]; then
   RELS=(protocol/dlna.py protocol/server.py params.py media/failures.py
         utils/identity.py utils/httpclient.py utils/browser_channel.py
+        utils/ghmirror.py
         media/rules/jsruntime.py media/rules/jsplugins.py
         media/share_resolver.py media/server.py screencast/capture.py
         screencast/loopback.py main.py)

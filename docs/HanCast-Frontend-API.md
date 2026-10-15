@@ -2,7 +2,7 @@
 
 > 回答一个问题：前端 `invoke()` 出去的每一条命令，究竟由壳层（Rust/Tauri）就地执行、还是转发给 Sidecar（Python 后台进程）；它的入参、返回结构、可能错误，以及 Sidecar 主动推给前端的事件分别是什么。
 >
-> 最后校对：2026-10-15，对应版本 v2.3.12（`package.json`）
+> 最后校对：2026-10-15，对应版本 v2.3.13（`package.json`）
 
 ---
 
@@ -163,7 +163,7 @@ Tauri 2 会把 JS 侧的 camelCase 自动映射到 Rust 的 snake_case 形参。
 | `rename_device` | `renameDevice(id, name)` `commands.ts:622` | `id: string`、`name: string` | `void` | Sidecar | 通用 |
 | `remove_device` | `removeDevice(id)` `commands.ts:627` | `id: string` | `void`；同时从持久化的手动设备列表摘掉同 IP 条目（`commands.py:347-357`） | Sidecar | 通用。⚠️ 该封装在 `src/` 下**无调用点** |
 | `hide_device` | `hideDevice(id)` `commands.ts:632` | `id: string` | `void`；SSDP 仍能发现，只是不再推给前端（`commands.py:375-379`） | Sidecar | 通用 |
-| `add_device` | `addDevice(address)` `commands.ts:638` | `address: string`，接受 `192.168.1.68` / `ip:port` / 完整描述 URL | `Device`（`commands.py:370`） | Sidecar | `请输入设备 IP 或描述地址`（`commands.py:366`、`ssdp.py:1170`）；`无法识别的地址：<target>`（`ssdp.py:1210`）；`该地址不是有效的 DLNA 设备描述`（`ssdp.py:1177`）；`设备 <名称> 已被隐藏，请先取消隐藏`（`ssdp.py:1182`）；描述抓取失败原因（`HTTP <code>` / `响应中没有 UPNP 设备描述` / 异常原文，`ssdp.py:1235-1242`） |
+| `add_device` | `addDevice(address)` `commands.ts:638` | `address: string`，接受 `192.168.1.68` / `ip:port` / 完整描述 URL | `Device`（`commands.py:370`） | Sidecar | `请输入设备 IP 或描述地址`（`commands.py:366`、`ssdp.py:1225`）；`无法识别的地址：<target>`（`ssdp.py:1268`）；`该地址不能投屏：设备描述里必须声明 AVTransport 服务（电视/盒子/带投屏的音箱才有，路由器与 NAS 没有）`（`ssdp.py:1231-1235`，v2.3.13 起手动添加与自动发现走同一条准入）；`设备 <名称> 已被隐藏，请先取消隐藏`（`ssdp.py:1240`）；描述抓取失败原因（`HTTP <code>` / `响应中没有 UPNP 设备描述` / 异常原文，`ssdp.py:1289-1300`） |
 | `get_manual_devices` | `getManualDevices()` `commands.ts:644` | 无 | `string[]`（`config.manual_devices`，`commands.py:372-373`） | Sidecar | 通用 |
 
 壳层定义：`lib.rs:164-226`。Sidecar 处理函数：`commands.py:327-391`。
@@ -380,8 +380,8 @@ Device Guard 管的是**接收投屏**方向：外部设备往本机推流时，
 | 事件名 | 载荷字段（逐个） | 谁发出 | 谁订阅 | 触发时机 |
 | --- | --- | --- | --- | --- |
 | `ready` | 无（`data` 为 `{}`，`protocol_io.py:58`） | `hancast-backend/hancast_sidecar/main.py:110` | **无前端订阅者**（全仓 `listen(` 检索无命中） | Sidecar 启动完成、进入 `for line in sys.stdin` 主循环之前，握手用。壳层也不监听它 |
-| `device_found` | `id: string`、`name: string`（已被 `display_name` 覆盖）、`device_type: string`、`ip: string`、`port: number`、`status: string`、`is_default: boolean`、`manufacturer: string\|null`、`model_name: string\|null`、`udn: string`、`custom_name: string\|null`、`location: string` | `commands.py:281`（`_on_device_found`，载荷是 `Device.to_dict()`，`models/device.py:26-29`） | `src/stores/device.ts:122` | SSDP 收到 NOTIFY/搜索响应并完成描述抓取时。同一设备重复发现也会发，前端做 upsert（`device.ts:123-134`） |
-| `device_lost` | `id: string` | `commands.py:289`（`_on_device_lost`） | `src/stores/device.ts:139` | 收到 SSDP byebye（`ssdp.py:722-735`）或探活判定过期（`ssdp.py:719-720`、`discovery.device_stale_s`，`ssdp.py:744`） |
+| `device_found` | `id: string`、`name: string`（已被 `display_name` 覆盖）、`device_type: string`、`ip: string`、`port: number`、`status: string`、`is_default: boolean`、`manufacturer: string\|null`、`model_name: string\|null`、`udn: string`、`custom_name: string\|null`、`location: string` | `commands.py:281`（`_on_device_found`，载荷是 `Device.to_dict()`，`models/device.py:26-29`） | `src/stores/device.ts:122` | SSDP 收到 NOTIFY/搜索响应并完成描述抓取时。同一设备重复发现也会发，前端做 upsert（`device.ts:123-134`）。**v2.3.13 起有准入门槛**：描述里必须声明 `AVTransport` 服务（`ssdp.py:1074`、`ssdp.py:1169-1175`），路由器/NAS 这类「有 UPnP 描述但投不了屏」的设备不再发事件、也不进列表 |
+| `device_lost` | `id: string` | `commands.py:289`（`_on_device_lost`） | `src/stores/device.ts:139` | 收到 SSDP byebye（`ssdp.py:725-738`）或探活判定过期（`ssdp.py:722-723`、`discovery.device_stale_s`，`ssdp.py:747`） |
 | `cast_state_changed` | `status: string`、`device_id: string\|null`、`position: string`（`HH:MM:SS`）、`duration: string`（`HH:MM:SS`，见下注）、`volume: number`、`is_muted: boolean`、`media?: MediaInfo`（有媒体时才带） | `commands.py:323`（DLNA `TransportState` 变化回调）、`commands.py:439`（`start_cast` 后立即补发）、`commands.py:469`（`stop_cast` 逐设备发）、`commands.py:517`（`_emit_session_state`，会话轮询回调） | `src/stores/cast.ts:564` | 投屏状态机变化。**注意 `commands.py:311-321` 那条路径不带 `duration`**，前端要容错 |
 | `cast_confirm_request` | `request_id: string`、`device: { ip, udn, friendly_name, model_name }`、`timeout: number`（秒） | `commands.py:950`（`_on_guard_confirm_request`） | `src/stores/guard.ts:126` | 外部设备向本机推流、且该来源不在信任/黑名单里时（`guard.py:188-238` → `240-272`）。前端收到后弹确认框并把窗口拉到前台（`guard.ts:141-148`） |
 | `screen_cast_state_changed` | 与 `screen_cast_status` 返回体**完全相同**：`running`、`target`、`source`、`device_id`、`session_id`、`watch_url`、`url`、`viewers`、`error`、`started_at`，外加 `pull`、`ffmpeg` | `screencast/manager.py:469`（`_emit()`，载荷就是 `self.status()`） | `src/stores/screencast.ts:156` | 屏幕投屏启动成功（`manager.py:167`）、停止（`manager.py:225`）、捕获出错、观众数变化时 |
@@ -751,7 +751,7 @@ async function toggleAutostart() {
 
 后果：`DeviceCard.vue:151` 的 `v-if="device.type === 'speaker'"` 恒为 `false`，音箱设备的同步控件永远不渲染。
 
-同时联合类型两头都不对：`ssdp.py:1116-1123` 实际只会产出 `tv` / `speaker` / `server` / `unknown` 四种，**`box` 从来不会被赋值**，而 `server` 不在 TS 联合里。
+同时联合类型两头都不对：`ssdp.py:1160-1167` 实际只会产出 `tv` / `speaker` / `server` / `unknown` 四种，**`box` 从来不会被赋值**，而 `server` 不在 TS 联合里。
 
 ### 6.2 `PluginInfo.broken` 后端从不产出
 

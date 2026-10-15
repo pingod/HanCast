@@ -3,7 +3,7 @@
 > 旧名 `CLAUDE.md`（Claude Code 私有约定），2026-10-15 改名为跨工具的 `AGENTS.md`；
 > `CLAUDE.md` 现在只留三行指针指向本文件。
 
-> 最后校对：2026-10-15，对应版本 v2.3.12（`package.json:4`）。
+> 最后校对：2026-10-15，对应版本 v2.3.13（`package.json:4`）。
 > 本文件是速览与硬约束；逐模块的深度内容在 **docs/README.md** 的索引里，别在这里找细节。
 
 ## 项目概述
@@ -12,7 +12,7 @@
 
 - **项目名**: HanCast
 - **作者**: lanzeweie@foxmail.com
-- **版本**: 2.3.11（版本 SSOT 是 `package.json` 的 `version`，`scripts/sync-version.cjs:4`；改版本只走 `npm run version:set`，见「版本管理」）
+- **版本**: 2.3.13（版本 SSOT 是 `package.json` 的 `version`，`scripts/sync-version.cjs:4`；改版本只走 `npm run version:set`，见「版本管理」）
 - **性质**: 二次开发（非原项目官方更新）
 - **原始代码**: [xfangfang/Macast](https://github.com/xfangfang/Macast)（原作者 xfangfang，最后更新 2022-01）。仓库里**不含** `Macast-main/`、`Macast-plugins-main/` 这些本地目录，1.x 源码只作为移植参考，见「原始代码复用情况」
 - **目标架构**: Tauri 2.0 前端 + Rust 桥接 + Python Sidecar（+ MPV 接收端播放、FFmpeg 屏幕抓取）
@@ -108,7 +108,7 @@ HanCast/
 │   │   ├── main.py              # Sidecar 入口（148 行：UTF-8 stdio、stdin/stdout JSON 循环、双击兜底）
 │   │   ├── commands.py          # CommandHandler — 命令路由（59 条注册表 commands.py:110-197）
 │   │   ├── params.py            # 后台参数 PARAM_SPECS（32 项，params.py:41-265）
-│   │   ├── ssdp.py              # SSDP 设备发现（1264 行）
+│   │   ├── ssdp.py              # SSDP 设备发现（1322 行；投屏准入见 _provides_cast_service）
 │   │   ├── protocol/
 │   │   │   ├── dlna.py          # DLNA 控制端实现（1229 行，AVTransport/RenderingControl SOAP）
 │   │   │   └── server.py        # DLNA 描述服务（Description.xml、SCPD、事件 SUBSCRIBE）
@@ -151,7 +151,7 @@ HanCast/
 │   ├── index.json               # 官方索引；线上地址是 main 分支 raw 路径 `https://raw.githubusercontent.com/pingod/HanCast/main/rule-packs/index.json`（`params.py:21`）
 │   └── dist/                    # 打包 zip（CI 随 draft Release 发布）
 ├── scripts/                     # 壳层脚本：sync-version / check-version / sync-sidecar / check-resources（均为 .cjs）
-├── tools/                       # 42 个探针与验收脚本（.py/.sh/.ps1/.mjs），索引与计数口径见 tools/README.md
+├── tools/                       # 47 个顶层脚本 + 1 个目录型验收包（browser-channel-livecheck/），索引与计数口径见 tools/README.md
 ├── mpv/                         # 本地放置的 MPV（`.gitignore:86-87` 只留 portable_config/）
 │   └── portable_config/mpv.conf # 入库：弹幕/OSD 脚本、着色器、字体
 ├── docs/                        # 设计文档，**入口是 docs/README.md**
@@ -269,7 +269,7 @@ Rust 命令名与 Sidecar `cmd` 名不一定同名（例如 Rust 的 `plugin_lis
 | 服务 | 端口 | 说明 |
 |------|------|------|
 | DLNA Server | 默认 8080，占用则回退随机 | 描述 XML、SCPDXML、入站 SOAP 处理。端口由 `commands.py:86-90` 传入，冲突回退见 `protocol/server.py:339-346`；**真实端口回灌给 SSDP**（`commands.py:211` `self.ssdp._port = self.dlna_server.get_port()`），否则设备抓到 8080 却取不到描述文件 |
-| SSDP Service | 1900 | UDP 多播，设备发现（NOTIFY + M-SEARCH）；组播被系统阻断时回退子网广播（`ssdp.py:32,412,553-554`），NOTIFY 周期 30s 对齐 `CACHE-CONTROL: max-age=66`（`ssdp.py:6`） |
+| SSDP Service | 1900 | UDP 多播，设备发现（NOTIFY + M-SEARCH）；组播被系统阻断时回退子网广播（`ssdp.py:32,416,556-557`），NOTIFY 周期 30s 对齐 `CACHE-CONTROL: max-age=66`（`ssdp.py:6`）。**发现不扫描端口**，且描述必须声明 `AVTransport` 服务才登记（`ssdp.py:1074`、`ssdp.py:1169-1175`，v2.3.13），路由器/NAS 不进列表，判据 `tools/verify-ssdp-cast-gate.py` |
 | Media Server | 0 = 自动选择 | 本地文件 HTTP 服务（Range + 边下边播代理），`config.media_port` 默认 0（`utils/config.py:112-114`、`commands.py:221`） |
 | Screencast HTTP | 默认 8765 | 观看页 + HLS 供流（`screencast/httpd.py:32,84`），观看链接带每会话新生成的短随机段 `/r/<session_id>` |
 | MPV Renderer | IPC | 通过 named pipe (Windows) / unix socket (Linux/macOS) 控制 MPV |
@@ -605,7 +605,7 @@ node tools/verify-params-ui.mjs        # 参数表与 tag 源码逐键比对（U
 python3 tools/audit-doc-refs.py        # 文档引用的 文件:行号 是否还成立
 ```
 
-`tools/` 下 42 个探针/验收脚本按用途分类见 tools/README.md（计数口径同那里）；端到端验收脚本的判据写在
+`tools/` 下 47 个顶层脚本（+ `browser-channel-livecheck/` 目录型验收包）按用途分类见 tools/README.md（计数口径同那里）；端到端验收脚本的判据写在
 docs/构建与发布.md §6 与各专题文档，不要凭脚本退出码 0 就当作功能可用。
 
 ## 窗口配置

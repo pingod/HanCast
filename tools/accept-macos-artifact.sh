@@ -31,7 +31,9 @@ else
   say "PASS 无 linker-signed 标志"
 fi
 
-cd /Users/pavia/githome/HanCast || exit 1
+# 仓库根从脚本自身位置推导：写死绝对路径的话，换一台机器/换一个 clone 位置就只在
+# 本机成立，而这份验收恰恰要在 CI 产物装好的那台机器上跑。
+cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 for rel in ssdp.py commands.py params.py security/guard.py protocol/dlna.py protocol/server.py \
            models/session.py models/media.py renderer/mpv.py screencast/manager.py screencast/capture.py \
            screencast/httpd.py screencast/ffmpeg_manager.py screencast/www/index.html \

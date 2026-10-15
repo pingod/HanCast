@@ -4,7 +4,7 @@
 
 `tools/` 里放的是**可重复运行的验收 / 探针脚本**，不是一次性的 `/tmp` 手搓脚本。它们必须自适应当前机器——设备名、网卡、产物路径、参数条数都从现场现读，不写死。用法上的两条铁律：**修 bug 之前先跑它复现，修完之后再用它证明**。「证明」的对象是判据（退出码 / PASS-FAIL 行），不是截图，也不是「我点了一下看起来对」。
 
-当前分类表收录 **45 个顶层脚本 + 1 个目录型验收包**（`browser-channel-livecheck/`，4 个文件合写成 §1.7 的一行）。核对计数用 `git ls-files tools/`：现在是 51 项 = 46 个顶层脚本文件 + 验收包 4 个 + 本 README；46 与 45 的差是那一个 `audit-doc-refs.py`——它是全仓文档体检工具，用法记在 `AGENTS.md:598` 与 [docs/README.md](../docs/README.md) §4，不进本索引的分类表。`ls tools/` 还多一个不入库的 `__pycache__/`。
+当前分类表收录 **46 个顶层脚本 + 1 个目录型验收包**（`browser-channel-livecheck/`，4 个文件合写成 §1.7 的一行）。核对计数用 `git ls-files tools/`：现在是 52 项 = 47 个顶层脚本文件 + 验收包 4 个 + 本 README；47 与 46 的差是那一个 `audit-doc-refs.py`——它是全仓文档体检工具，用法记在 `AGENTS.md:605` 与 [docs/README.md](../docs/README.md) §4，不进本索引的分类表。`ls tools/` 还多一个不入库的 `__pycache__/`。
 
 ---
 
@@ -30,6 +30,7 @@
 |------|-----------|---------|---------|
 | `ssdp_probe.py` | SSDP 现场探针：设备「发现不到」时先看网络上到底有什么。每块网卡各开一个组播成员，能看出「某块网卡收不到组播」这类单向发现问题 | `python3 tools/ssdp_probe.py`（全部网卡，听 20 秒并主动搜一轮）<br>`… --seconds 60`<br>`… --st MediaRenderer --search-only` | 真机 + 局域网；与 HanCast 同网段；会**向 239.255.255.250:1900 发组播** |
 | `verify-ssdp-offline-eviction.py` | 静默下线的设备必须被探活摘掉：起一台假 MediaRenderer 替身，`SIGKILL` 掉它（发不出 byebye），等 sidecar 连探两次无应答后在日志里摘除 | `python3 tools/verify-ssdp-offline-eviction.py`（用打包版日志）<br>`… --log /path/to/hancast.log`<br>`… --serve --port 49217`（只当替身，内部用） | 默认读**打包版**日志（macOS 路径）；替身监听 `127.0.0.1`，LOCATION 故意写 127.0.0.1 以绕过 `_is_own_location` 自通告回环过滤；等待时长受后台参数 `discovery.device_stale_s`（默认 90s）影响 |
+| `verify-ssdp-cast-gate.py` | 投屏目标准入（v2.3.13 的真机验收）：同时起两台替身——声明 AVTransport 的「电视」必须进列表，不提供该服务的「路由器」（MediaServer 描述 + XML 注释）必须被挡在门外并在日志留下「不列入投屏目标」理由 | `hancast-backend/.venv/bin/python tools/verify-ssdp-cast-gate.py --source --timeout 90`（就地跑**仓库源码**的发现链路，打 tag 前用；需要 1900 空闲）<br>`python3 tools/verify-ssdp-cast-gate.py`（读**已装产物**的 sidecar 日志，证明修复真进了打包版；v2.3.12 产物上这一步是 FAIL，即本次缺陷的复现）<br>`… --ports 49311 49312`<br>`… --serve tv\|router --port N`（只当替身，主流程内部调用） | 替身 LOCATION 同样必须写 `127.0.0.1` 以绕开 `_is_own_location` 自通告过滤；`--source` 要后端 venv（import `hancast_sidecar.ssdp`）；单测侧的等价契约在 `hancast-backend/tests/test_ssdp_cast_service_gate.py` |
 | `verify-dlna-stop-chain.py` | 真机验证停止链路：用 CI 打进 `.app` 的 sidecar 把测试视频推给 Windows renderer，再从 renderer 自己那边确认 `TransportState` 真从 `PLAYING` 变回 `STOPPED`（只看本机状态会骗人） | `python3 tools/verify-dlna-stop-chain.py` | 仅 macOS 打包产物（`APP = /Applications/HanCast.app/Contents/MacOS`）；**必须先整体退出 HanCast**（sidecar 空载要占 8080）；`/tmp/hc_media/test.mp4` 存在（docstring 给了用 .app 自带 ffmpeg 生成的命令）；局域网里要有一台在跑的 Windows renderer（默认认 `display_name` 含 `AMD-YES` 或 IP `192.168.1.68`） |
 | `verify-dlna-volume-chain.py` | 离线验证音量键链路（手机作控制端 → RenderingControl → MPV）：直接给 `DLNAProtocol.call()` 喂 SOAP 信封，用假 renderer / 截获的 IPC 命令做判据 | `hancast-backend/.venv/bin/python tools/verify-dlna-volume-chain.py` | **不需要真机**；必须用后端 venv 的解释器（系统 `python3` 没有 `requests`/`lxml`）；判据全部 PASS 才退出 0 |
 
@@ -143,7 +144,7 @@ ssh administrator@192.168.1.68 "schtasks /delete /tn <TASK> /f"      # 收尾
 
 「产物验收」的定义就是**对打包结果而非源码的验证**。下面这些脚本的判据只有在产物上才成立：
 
-- `accept-macos-artifact.sh` — 读的是 `/Applications/HanCast.app/Contents/Resources/hancast_sidecar/`（`RES`，`:11`），并把里面的源文件与 `git show <tag>` 逐文件比 sha256（清单 `:35-44`，30 个文件，v2.3.12 起含 `utils/ghmirror.py`）。跑源码等于没跑。
+- `accept-macos-artifact.sh` — 读的是 `/Applications/HanCast.app/Contents/Resources/hancast_sidecar/`（`RES`，`:11`），并把里面的源文件与 `git show <tag>` 逐文件比 sha256（清单 `:37-43`，30 个文件，v2.3.12 起含 `utils/ghmirror.py`；v2.3.13 轮把仓库根改成从脚本自身位置推导，`:34-36`，不再写死本机绝对路径）。跑源码等于没跑。
 - `install-macos-artifact.sh` — 输入就是 dmg。
 - `pull-rule-packs-installed.py` — 存在的理由原话：「手改 `share_rules/plugins/` 里的文件则是拿补丁冒充验收，产物里根本没跑过 `plugin_pull`」（`:5-8`）。
 - `verify-browser-segment-live.py`、`verify-watch-page-live.mjs`、`verify-dlna-stop-chain.py` — 都硬编码 `/Applications/HanCast.app/...` 下的 sidecar。
