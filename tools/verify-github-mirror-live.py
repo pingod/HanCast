@@ -19,11 +19,13 @@
 
 from __future__ import annotations
 
+import atexit
 import hashlib
 import io
 import json
 import logging
 import os
+import shutil
 import sys
 import tempfile
 import zipfile
@@ -126,7 +128,9 @@ def main() -> int:
           f"{len(mirrored)} vs {len(direct_index)}")
 
     # 真代码路径：fetch_index 走镜像，日志要认得出来
-    mgr = jsplugins.PluginManager(os.path.join(tempfile.mkdtemp(prefix="hancast-mirror-"), "plugins"))
+    mir_dir = tempfile.mkdtemp(prefix="hancast-mirror-", dir="/tmp")
+    atexit.register(shutil.rmtree, mir_dir, ignore_errors=True)   # /tmp 落地物脚本自清
+    mgr = jsplugins.PluginManager(os.path.join(mir_dir, "plugins"))
     spy.lines.clear()
     try:
         idx = mgr.fetch_index(index_url)

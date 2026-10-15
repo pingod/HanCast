@@ -102,5 +102,5 @@ hancast-backend/mpv_diag.txt
 # pi 追踪目录
 .pi-traces/
 
-# 真机取证脚本（本地临时，不入库）
+# 本地临时工作区（探针脚本、验收截图与产物；不入库）
 .tmp-win/

@@ -9,7 +9,10 @@ set -u
 U="$1"
 PAGE="${2:-https://www.4kcz.com/v_play/bXZfMjM5ODktbm1fMQ==.html}"
 UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-OUT=$(mktemp -d)
+# 产物落仓库 .tmp-win/（可见、可清）——临时目录别散在 /tmp 或 $TMPDIR
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+OUT="$REPO/.tmp-win/dyrs-headers"
+rm -rf "$OUT"; mkdir -p "$OUT"
 JAR="$OUT/cookies.txt"
 
 echo "== 播放列表响应头（看有没有 Set-Cookie）=="

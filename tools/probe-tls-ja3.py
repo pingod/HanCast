@@ -24,6 +24,11 @@ import ssl
 import struct
 import sys
 import threading
+from pathlib import Path
+
+# 失败样本落点：仓库内本地临时区（gitignored）。别写 /tmp——那里系统只清
+# >3 天的普通文件，实测等于不回收（2026-10-15）。
+FAIL_DIR = Path(__file__).resolve().parent.parent / ".tmp-win"
 
 
 # ────────────────────────────── ClientHello 解析 ──────────────────────────────
@@ -194,9 +199,10 @@ class HelloCatcher:
                         self.results.append(None)
                 except Exception as e:
                     self.results.append(f"解析失败: {e}（捕获 {len(buf)} 字节，"
-                                        f"已存 /tmp/ja3-fail-{served}.bin）")
+                                        f"已存 .tmp-win/ja3-fail-{served}.bin）")
                     try:
-                        open(f"/tmp/ja3-fail-{served}.bin", "wb").write(buf)
+                        FAIL_DIR.mkdir(exist_ok=True)
+                        open(FAIL_DIR / f"ja3-fail-{served}.bin", "wb").write(buf)
                     except OSError:
                         pass
                 try:

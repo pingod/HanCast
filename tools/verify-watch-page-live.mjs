@@ -12,13 +12,14 @@
  * 用法: node tools/verify-watch-page-live.mjs [segmentSeconds]
  *   默认 1（出厂契约）；传 4 会先 save_params 覆盖再测，用来对照
  * 前置: 脚本会整体退出 HanCast.app 抢端口，结束后自动打开回来
- * 退出码 0 = 全部断言通过；截图落在 /tmp/hancast-watch-live.png
+ * 退出码 0 = 全部断言通过；截图落在 .tmp-win/hancast-watch-live.png（仓库内本地临时区，gitignored）
  */
 
 import { spawn, execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path, { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const SEG = Number(process.argv[2] ?? 1)
 const SIDECAR = '/Applications/HanCast.app/Contents/MacOS/hancast-sidecar'
@@ -142,7 +143,7 @@ async function main() {
          /-g \d+/.exec(cmdLine)?.[0] ?? '无 -g')
 
   console.log('\n=== 真实浏览器打开观看页 ===')
-  profile = mkdtempSync(path.join(tmpdir(), 'hancast-watch-'))
+  profile = mkdtempSync('/tmp/hancast-watch-')  // 即抛件放 /tmp（退出时删），不散 $TMPDIR
   chrome = spawn(findShell(), [
     `--remote-debugging-port=${CDP_PORT}`, `--user-data-dir=${profile}`,
     '--no-first-run', '--no-default-browser-check', '--mute-audio',
@@ -234,8 +235,12 @@ async function main() {
   assert('画面有真实内容（亮度标准差 >2）', content.sd > 2, `sd=${content.sd}`)
 
   const shot = await send('Page.captureScreenshot', { format: 'png' })
-  writeFileSync('/tmp/hancast-watch-live.png', Buffer.from(shot.data, 'base64'))
-  console.log('  截图 /tmp/hancast-watch-live.png')
+  // 落 .tmp-win（仓库内本地临时区），别写 /tmp——那里系统只清 >3 天的普通文件，实测等于不回收
+  const scratch = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.tmp-win')
+  mkdirSync(scratch, { recursive: true })
+  const shotPath = path.join(scratch, 'hancast-watch-live.png')
+  writeFileSync(shotPath, Buffer.from(shot.data, 'base64'))
+  console.log(`  截图 ${shotPath}`)
 }
 
 main()

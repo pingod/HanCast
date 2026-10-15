@@ -41,6 +41,15 @@ fi
 OLD_VER=$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist" 2>/dev/null || echo none)
 ASIDE="/tmp/HanCast_pre_${OLD_VER//./}_$(date +%H%M%S).app"
 
+# 回滚备份只保留最近一份：/tmp 的系统清扫只删「atime/mtime/ctime 全 >3 天」的普通文件，
+# .app 这种目录包要分多轮才啃得动，等于不回收（2026-10-15 实测：一份 184M 的回滚包
+# 在「系统会自行清扫」的错误注释下躺满一天原样）。每次装包前先把历轮遗留的清掉。
+for old in /tmp/HanCast_pre_*.app; do
+  [ -e "$old" ] || continue
+  [ "$old" = "$ASIDE" ] && continue
+  rm -rf "$old" && echo "清除历轮回滚备份: $old"
+done
+
 if [ -e "$APP" ] && [ ! -w "$APP" ]; then
   echo "FAIL $APP 当前用户不可写（root:wheel 遗留）。一次性修好后再来：sudo chown -R $(id -un) \"$APP\""
   exit 1
@@ -51,7 +60,7 @@ ditto "$SRC" "$APP"
 
 OUT=$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")
 OWNER=$(stat -f '%Su:%Sg' "$APP")
-# 滚动包在 /tmp，系统会自行清扫，别把它当长期备份
+# $ASIDE 是本次唯一回滚备份，下次装包时会被上面的循环清掉，别把它当长期备份
 echo "已安装: $OUT（原 $OLD_VER 移到 $ASIDE，归属 $OWNER）"
 [ "$OUT" = "$VER" ] || { echo "FAIL 安装后版本不符"; exit 1; }
 [ "$OWNER" = "$(id -un):staff" ] || echo "WARN 归属不是 $(id -un):staff，下次装包会要管理员授权"

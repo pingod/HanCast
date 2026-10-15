@@ -1,6 +1,6 @@
 # Changelog
 
-> 最后校对：2026-10-15，对应版本 v2.3.14（`package.json:4`）
+> 最后校对：2026-10-16，对应版本 v2.3.15（`package.json:4`）
 
 本文件记录 HanCast 的版本历史。口径说明：
 
@@ -8,6 +8,23 @@
 - 版本号唯一来源是 **`package.json` 的 `version`**（`scripts/sync-version.cjs:4,17`），`npm run version:set <x.y.z>` 把它刷进 7 处契约点：`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`（本地包那条，v2.3.8 起收进来——此前每版都靠人肉补）、`hancast-backend/pyproject.toml`、`hancast_sidecar/utils/config.py:39`、`src/api/commands.ts`（mock）、`src/stores/settings.ts`。`scripts/check-version.cjs` 自称以 `tauri.conf.json` 为源（口径相反），但全仓无人调用，是未接线的孤儿脚本——判定以 `sync-version.cjs` 为准。详见 [docs/构建与发布.md](docs/构建与发布.md) §1。
 - 下表「提交」列即 `git tag <版本>` 指向的提交；细节以 `git show <提交>` 为准，本文只留用户可感知的变化。
 - 新加版本时**同一次提交**里补这里，并按 [docs/README.md](docs/README.md) §4 的约定同步对应文档。
+
+---
+
+## v2.3.15 — 2026-10-16（本轮发布提交）
+
+纯工具与文档轮：产品行为零变化（非 `tools/`／文档面的 diff 只有 8 处契约点的版本串，`npm run version:set 2.3.15` 刷入）。主题是把临时文件落点全仓收成二选一（`/tmp` 或仓库根 `.tmp-win/`），另修一处文档体检的存量误报。
+
+- **落点政策（用户定死，不许第三处）**：要留给人复看的证据（截图、探针 dump、失败样本、测试媒体）写 `.tmp-win/`（`.gitignore:106` 忽略；可见、每轮清）；只活在本次运行里的即抛件（chrome profile、测试 HLS 素材、备份目录、scp 中转文件）走 `/tmp` **显式路径**，且必须由脚本自己清（bash `trap`／python `finally`+`atexit`／node 退出前删）。此前一批脚本用裸 `mktemp`（默认落 per-user `$TMPDIR`）或 `tempfile.gettempdir()`，落点随环境变量漂移——`$TMPDIR` 是 `/var/folders/…` 随机路径，用户找不到、系统也不回收，本轮清零。
+- **「系统会清」是错误假设（有实测）**：macOS 的 `/tmp` 清扫只吃「>3 天的普通文件 + 空目录」——`.app` 这类目录包要分多轮才啃得动、socket 永不回收，等于不回收（2026-10-15：`install-macos-artifact.sh` 的 184M 回滚包在「系统会自行清扫」的错注释下躺满一天原样；同轮清掉的存量还有 81 个孤儿 mpv（ppid=1、全 idle、约 1.1GB RSS）与 426 个 socket 死文件，`/private/tmp` 306M → 24K）。`install-macos-artifact.sh:44-51` 因此加**装包前自清历轮回滚包、只留本次一份**（`[ "$old" = "$ASIDE" ] && continue` 跳过本次），`:63` 的错注释同轮改掉；三场景实测（无匹配不误杀／多份全清／只剩本次原样）。
+- **`tools/` 25 个脚本逐个改**（7 `.sh` + 14 `.py` + 4 `.mjs`；语法校验全过）：
+  - **bash**：`mktemp` 显式化——`accept-macos-artifact.sh:116,446-447`（tag 目录与探针文件，用完即删）、`verify-win-screencast-tone-content.sh:38`（trap 自清）、`verify-windows-artifact.sh:51,55,90`（scp 中转列表与两份 ps1，用完即删）；证据件改落 `.tmp-win/`——`probe-dyrs-headers.sh:12-14`、`probe-dyrs-skin.sh:8-10`（每个先 `rm -rf` 再建）；`run-macos-tap-probe.sh:20-22,67` 日志留 `.tmp-win/hancast-tap-probe.log`、临时 `.app` 固定 `/tmp/HanCast Tap Probe.app` 且结尾自清。
+  - **python**：`tempfile.gettempdir()` → 字面 `/tmp`（「写完读进内存即删」的即抛件）——`probe-macos-audio-pitch.py:95,179`、`probe-macos-systap.py:207,433`、`verify-proxy-live.py:67`；`mkdtemp()` 补 `dir="/tmp"` 与自清——`share_resolve_probe.py:188`、`verify-github-mirror-live.py:131-132`（配 `atexit`）、`verify-proxy-segment-decodable.py:218,256`、`verify-rule-pack-live.py:86`、`verify-rule-packs-live.py:121`、`verify-browser-segment-live.py:131,215`（setting 备份目录，还原后 rmtree）；证据件改落 `.tmp-win/`——`probe-tls-ja3.py:31,204-205`（TLS 失败样本）、`probe-ts-skin-offset.py:64-66`（剥皮对照 ts）、`probe-window-picker.py:98-101`（`--capture` 抽帧证据，先 rmtree 再 makedirs）、`verify-dlna-stop-chain.py:25`（测试媒体，docstring 同步）。
+  - **node/mjs**：`mkdtempSync(path.join(tmpdir(), …))` → `mkdtempSync('/tmp/…-')`（profile 与测试 HLS 即抛件；`verify-error-wrap-ui.mjs:46`、`verify-params-ui.mjs:42`、`verify-watch-page-live.mjs:146`、`verify-watch-page-sound.mjs:174,249`）；截图 5 张改落 `.tmp-win/`（error-wrap `:164-166`、params-ui `:234`、watch-live `:239-241`、watch-sound `:235-237`——落点从脚本自身位置推仓库根，不依赖 cwd）。`tmpdir()` 保留给 puppeteer 缓存目录的兜底读（`process.env.HOME ?? tmpdir()`），不是写点。
+- **`tools/audit-doc-refs.py` 修存量误报**：`D:/Temp/x.cmd` 这类盘符路径会被 REF_RE 误捕成仓库相对路径（`:` 不在字符类里，捕获从盘符后的 `/` 开始；`tools/README.md:75-76` 两处，该文件不在默认扫描范围、只在显式指定时才露头，`:73` 那位靠行内历史词侥幸放行）。新增 `WINPATH_RE`（`:62`）先按整段盘符路径划 span，落进 span 的命中放行并计入「运行时」类（`:153,156`；docstring `:8-9` 同步）。修后：显式扫 `tools/README.md` **235 处 0 可疑**（此前 2 处误报），全仓 **3025 处 0 可疑**（3026 → 3025：1 处盘符路径命中转入放行类）。
+- **文档同轮修订**：`tools/README.md` 按新落点逐行改 10 处登记行（§1.2 一行、§1.3 四行、§1.5 一行、§1.6 两行、§2 安全表两行），§3.3 新增政策两条（「临时落点二选一」+「别指望系统清扫」）；`.gitignore:106` 注释改为「本地临时工作区（探针脚本、验收截图与产物；不入库）」；`docs/构建与发布.md:650` 表格行同步。
+- **验收（本轮真实输出，打 tag 之前做完）**：25 个脚本语法校验全过（7 `bash -n`／14 `py_compile`／4 `node --check`）；`python3 tools/audit-doc-refs.py` → 合计引用 **3025 处、可疑 0 处**（本节落账前的口径；写入本节 33 处 `file:line` 引用后复跑为 **3058 处、可疑 0 处**）；`npm run version:sync` → **2.3.15，更新了 0 个文件**；`node node_modules/vue-tsc/bin/vue-tsc.js --noEmit` **rc=0**（附带发现：本机 `node_modules/.bin/vue-tsc` 无执行权限，`npx vue-tsc` 会「Permission denied」静默没跑成，改用 node 直调）。产品代码零改动，无产物行为变化。
+- **没闭合的口子（别当成已验）**：① 25 个脚本没有逐个真跑一遍（多数要真机/网络/特定环境），判据来自逐文件 diff 复核 + 语法校验；运行时取证只覆盖 `install-macos-artifact.sh` 的三场景回滚清理。② `.68` 上跑的 Windows 批处理（`verify-screencast-audio-order.cmd` 等）落 `D:\Temp` 本轮不动——落点政策管的是**本机 macOS** 脚本。③ `$TMPDIR` 的否决理由按本机实测（`/var/folders/…` 随机路径）立论，不追求跨平台严格性。
 
 ---
 

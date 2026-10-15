@@ -113,7 +113,7 @@ PY
 PARAMS_JSON=$(load_params "$RES/params.py" 2>/dev/null) || PARAMS_JSON='{}'
 # 基准从被测 tag 的源码现读，不写死条数：写死过 "18"，加一个参数就得同步改脚本，
 # FAIL 只能证明脚本过期，证明不了产物有问题。逐键逐默认值比，能同时抓住多带/漏带/带旧值。
-TAG_DIR=$(mktemp -d)
+TAG_DIR=$(mktemp -d /tmp/hc-accept-tag.XXXXXX)   # 下面用完即删，显式 /tmp
 # 文件名必须以 .py 结尾：importlib 按后缀选 loader，无后缀的 mktemp 临时文件会静默读不出表
 git show "${TAG}:hancast-backend/hancast_sidecar/params.py" > "$TAG_DIR/params.py" 2>/dev/null
 SRC_PARAMS_JSON=$(load_params "$TAG_DIR/params.py" 2>/dev/null)
@@ -443,8 +443,8 @@ for i in $(seq 1 12); do pgrep -x hancast-sidecar >/dev/null 2>&1 || break; slee
 if pgrep -x hancast-sidecar >/dev/null 2>&1; then
   say "FAIL 旧 sidecar 未退出，跳过 FFmpeg 依赖实测（别 pkill，会留空壳 GUI）"; fails=$((fails+1))
 else
-  TMPHOME=$(mktemp -d)
-  PROBE_FILE=$(mktemp)
+  TMPHOME=$(mktemp -d /tmp/hc-accept-home.XXXXXX)
+  PROBE_FILE=$(mktemp /tmp/hc-accept-probe.XXXXXX)
   /usr/bin/python3 - "$APP/Contents/MacOS/hancast-sidecar" "$TMPHOME" > "$PROBE_FILE" 2>&1 <<'PY'
 import json, os, queue, subprocess, sys, threading, time
 

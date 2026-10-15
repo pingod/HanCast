@@ -13,13 +13,14 @@
  * 用法: node tools/verify-error-wrap-ui.mjs [base-url]
  *   base-url 默认 http://localhost:5199
  *   需先起 vite：node node_modules/vite/bin/vite.js --port 5199
- * 退出码 0 = 全部断言通过；截图落在 /tmp/hancast-error-wrap.png
+ * 退出码 0 = 全部断言通过；截图落在 .tmp-win/hancast-error-wrap.png（仓库内本地临时区，gitignored）
  */
 
 import { spawn } from 'node:child_process'
-import { mkdtempSync, rmSync, readdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const BASE = process.argv[2] ?? 'http://localhost:5199'
 const PORT = 9339
@@ -42,7 +43,7 @@ function findShell() {
   throw new Error('找不到 chrome-headless-shell，先 npx puppeteer browsers install chrome-headless-shell')
 }
 
-const profile = mkdtempSync(path.join(tmpdir(), 'hancast-errwrap-'))
+const profile = mkdtempSync('/tmp/hancast-errwrap-')  // 即抛件放 /tmp（退出时删），不散 $TMPDIR
 const child = spawn(findShell(), [
   `--remote-debugging-port=${PORT}`,
   `--user-data-dir=${profile}`,
@@ -159,8 +160,12 @@ async function main() {
   await new Promise((r) => setTimeout(r, 300))
   await s.send('Emulation.clearDeviceMetricsOverride')
   const shot = await s.send('Page.captureScreenshot', { format: 'png' })
-  writeFileSync('/tmp/hancast-error-wrap.png', Buffer.from(shot.data, 'base64'))
-  console.log('  截图: /tmp/hancast-error-wrap.png')
+  // 落 .tmp-win（仓库内本地临时区），别写 /tmp——那里系统只清 >3 天的普通文件，实测等于不回收
+  const scratch = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.tmp-win')
+  mkdirSync(scratch, { recursive: true })
+  const shotPath = path.join(scratch, 'hancast-error-wrap.png')
+  writeFileSync(shotPath, Buffer.from(shot.data, 'base64'))
+  console.log(`  截图: ${shotPath}`)
   console.log(`\nRESULT: ${fails === 0 ? 'ALL PASS' : `${fails} FAIL`}`)
 }
 

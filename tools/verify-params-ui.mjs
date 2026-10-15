@@ -9,13 +9,14 @@
  *
  * 用法: node tools/verify-params-ui.mjs [base-url]
  *   base-url 默认 http://localhost:5199（需先起 vite：node node_modules/vite/bin/vite.js --port 5199）
- * 退出码 0 = 全部断言通过；截图落在 /tmp/hancast-params-ui-*.png
+ * 退出码 0 = 全部断言通过；截图落在 .tmp-win/hancast-params-ui.png（仓库内本地临时区，gitignored）
  */
 
 import { spawn } from 'node:child_process'
-import { mkdtempSync, rmSync, readdirSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const BASE = process.argv[2] ?? 'http://localhost:5199'
 const PORT = 9337
@@ -38,7 +39,7 @@ function os_home() {
   return process.env.HOME ?? process.env.USERPROFILE ?? tmpdir()
 }
 
-const profile = mkdtempSync(path.join(tmpdir(), 'hancast-ui-'))
+const profile = mkdtempSync('/tmp/hancast-ui-')  // 即抛件放 /tmp（退出时删），不散 $TMPDIR
 const chrome = findShell()
 const child = spawn(chrome, [
   `--remote-debugging-port=${PORT}`,
@@ -229,7 +230,10 @@ async function main() {
   await new Promise((r) => setTimeout(r, 400))
   await s.send('Emulation.clearDeviceMetricsOverride')
   const shot = await s.send('Page.captureScreenshot', { format: 'png' })
-  const out = path.join('/tmp', 'hancast-params-ui.png')
+  // 落 .tmp-win（仓库内本地临时区），别写 /tmp——那里系统只清 >3 天的普通文件，实测等于不回收
+  const scratch = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.tmp-win')
+  mkdirSync(scratch, { recursive: true })
+  const out = path.join(scratch, 'hancast-params-ui.png')
   const { writeFileSync } = await import('node:fs')
   writeFileSync(out, Buffer.from(shot.data, 'base64'))
   console.log(`  截图: ${out}`)

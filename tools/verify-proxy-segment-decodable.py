@@ -215,7 +215,7 @@ def main() -> int:
     srv = MediaServer(host="127.0.0.1", port=0, lan_ip="127.0.0.1")
     srv.start(0)
     say(f"本机代理已起: {MediaHandler.base_url}")
-    tmp = tempfile.mkdtemp(prefix="hancast-proxy-")
+    tmp = tempfile.mkdtemp(prefix="hancast-proxy-", dir="/tmp")
     try:
         pl_url = srv.register_proxy(args.m3u8, headers, player_safe_suffix(args.m3u8))
         for level in range(1, 4):
@@ -253,6 +253,7 @@ def main() -> int:
                     say(f"  （跳过解码验证：找不到 ffmpeg {args.ffmpeg}）")
     finally:
         srv.stop()
+        shutil.rmtree(tmp, ignore_errors=True)   # /tmp 落地物脚本自清，不指望系统回收
 
     say(f"--- {'ALL PASS' if not FAILS else str(len(FAILS)) + ' FAIL'} ---")
     return 1 if FAILS else 0

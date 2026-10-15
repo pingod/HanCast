@@ -48,11 +48,12 @@ if [ "$REG" = "$VER" ]; then say "PASS 注册表 DisplayVersion ($VER)"; else
 # 的 UTF-8 当 GBK 读，中文注释会吞掉下一行首字符）
 PS1_REMOTE='D:\Temp\hc_verify.ps1'
 ssh -o ConnectTimeout=10 "$WIN" "if not exist D:\Temp md D:\Temp" >/dev/null 2>&1
-LIST_FILE=$(mktemp)
+LIST_FILE=$(mktemp /tmp/hc_verify_lst.XXXXXX)
 printf '%s\n' "${RELS[@]}" > "$LIST_FILE"
 scp -q "$LIST_FILE" "$WIN:D:/Temp/hc_verify.txt" 2>/dev/null
 rm -f "$LIST_FILE"
-cat > /tmp/hc_verify.ps1 <<'EOF'
+PS1_LOCAL=$(mktemp /tmp/hc_verify_ps1.XXXXXX)   # 显式 /tmp（用完即删），不散 per-user $TMPDIR
+cat > "$PS1_LOCAL" <<'EOF'
 $base = 'C:\Users\Administrator\AppData\Local\HanCast\hancast_sidecar'
 Get-Content 'D:\Temp\hc_verify.txt' | ForEach-Object {
   $rel = $_.Trim()
@@ -65,8 +66,8 @@ Get-Content 'D:\Temp\hc_verify.txt' | ForEach-Object {
   Write-Output ($rel + ' ' + $h.ToLower())
 }
 EOF
-scp -q /tmp/hc_verify.ps1 "$WIN:D:/Temp/hc_verify.ps1"
-rm -f /tmp/hc_verify.ps1
+scp -q "$PS1_LOCAL" "$WIN:D:/Temp/hc_verify.ps1"
+rm -f "$PS1_LOCAL"
 REMOTE_OUT=$(ssh -o ConnectTimeout=10 "$WIN" \
   "powershell -NoProfile -ExecutionPolicy Bypass -File D:\Temp\hc_verify.ps1" 2>&1 | tr -d '\r')
 
@@ -86,7 +87,8 @@ done
 NEED_JA3=$(git show "$TAG:hancast-backend/pyproject.toml" 2>/dev/null | grep -q curl_cffi && echo 1 || echo 0)
 NEED_RENDER=$(git show "$TAG:src-tauri/src/browser.rs" >/dev/null 2>&1 && echo 1 || echo 0)
 PS2_REMOTE='D:\Temp\hc_presence.ps1'
-cat > /tmp/hc_presence.ps1 <<'EOF'
+PS2_LOCAL=$(mktemp /tmp/hc_verify_ps2.XXXXXX)
+cat > "$PS2_LOCAL" <<'EOF'
 $root = 'C:\Users\Administrator\AppData\Local\HanCast'
 $files = @(Get-ChildItem -Path $root -Recurse -File -ErrorAction SilentlyContinue)
 $dirs  = @(Get-ChildItem -Path $root -Recurse -Directory -ErrorAction SilentlyContinue)
@@ -107,8 +109,8 @@ if (Test-Path $exe) {
   else { Write-Output 'ABSENT hc-render-' }
 } else { Write-Output 'ABSENT hc-render-' }
 EOF
-scp -q /tmp/hc_presence.ps1 "$WIN:D:/Temp/hc_presence.ps1"
-rm -f /tmp/hc_presence.ps1
+scp -q "$PS2_LOCAL" "$WIN:D:/Temp/hc_presence.ps1"
+rm -f "$PS2_LOCAL"
 PRES=$(ssh -o ConnectTimeout=20 "$WIN" \
   "powershell -NoProfile -ExecutionPolicy Bypass -File $PS2_REMOTE" 2>&1 | tr -d '\r')
 check() {  # check <git树该有?> <label> <说明>

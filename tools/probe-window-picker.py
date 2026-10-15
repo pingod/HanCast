@@ -15,9 +15,9 @@
 import argparse
 import os
 import re
+import shutil
 import subprocess
 import sys
-import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "hancast-backend"))
@@ -95,7 +95,11 @@ def main():
     import numpy as np
 
     by_no = {d["screen_no"]: d for d in displays}
-    out = tempfile.mkdtemp(prefix="probe-win-cast-")
+    out = os.path.join(ROOT, ".tmp-win", "win-picker")
+    # 抽帧证据（整屏/裁剪/基准/PSNR 对比图）留仓库 .tmp-win/ 给人复看：
+    # 落点二选一 /tmp 或 .tmp-win/，不散 $TMPDIR——那里用户找不到，系统也不回收
+    shutil.rmtree(out, ignore_errors=True)
+    os.makedirs(out, exist_ok=True)
 
     def dims(p):
         probe = subprocess.run(

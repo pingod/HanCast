@@ -35,7 +35,7 @@ FFMPEG_BIN="${FFMPEG_BIN:-$HOME/Library/Application Support/HanCast/bin/ffmpeg}"
 WIN_FF="${WIN_FF:-%APPDATA%\HanCast\bin\ffmpeg.exe}"
 NOPROXY=(env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy
          -u ALL_PROXY -u all_proxy)
-TMPD=$(mktemp -d /tmp/hctone.XXXXXX)
+TMPD=$(mktemp -d /tmp/hctone.XXXXXX)   # 显式 /tmp + trap 自清，不散 per-user $TMPDIR
 cleanup() {
   stop_tone >/dev/null 2>&1
   rm -rf "$TMPD"

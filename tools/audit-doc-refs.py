@@ -5,7 +5,8 @@
 
 三类命中会被放行，各自计入统计并在结尾说明：
   - URL 整段（扫每行前先用 URL_RE 把 http/www 片段挖掉）
-  - 运行时/本地产物：名字在 RUNTIME_NAMES 里，或被 `.gitignore` 忽略（`git check-ignore`）
+  - 运行时/本地产物：名字在 RUNTIME_NAMES 里，或被 `.gitignore` 忽略（`git check-ignore`），
+    或落在 Windows 盘符路径里（`D:/Temp/xxx.cmd`——在 .68 上跑的产物，见 WINPATH_RE）
   - 历史论断：同一行带 HIST_MARKERS（「曾」「已删除」「上游」等），说明作者刻意引用
     一个已退役或不在本仓的文件名
 
@@ -53,6 +54,12 @@ def normalize(name):
 
 
 URL_RE = re.compile(r'\S*(?:https?://|www\.)\S*', re.IGNORECASE)
+
+# Windows 盘符路径（D:/Temp/x.cmd、C:\Users\Administrator\...）：跨机器的运行时产物，
+# 不是仓库引用。`:` 不在 REF_RE 的字符类里，这类路径会以 `/Temp/x.cmd` 或裸 `x.cmd`
+# 的形态被误捕（2026-10-16 实测 tools/README.md:75-76 两处误报，:73 靠行内历史词侥幸放行）；
+# 先按整段盘符路径划 span，落进 span 的命中计入 skipped_runtime。
+WINPATH_RE = re.compile(r'[A-Za-z]:[\\/][^\s`|]*')
 
 
 def strip_urls(text):
@@ -143,8 +150,12 @@ def main():
             mark_hit = any(k in text for k in line_markers) or any(k in prev for k in line_markers)
             prev = text if text.strip() else prev
             scannable = strip_urls(text)
+            win_spans = [mm.span() for mm in WINPATH_RE.finditer(scannable)]
             for m in REF_RE.finditer(scannable):
                 name, start, end = normalize(m.group(1)), m.group(2), m.group(3)
+                if any(a <= m.start() < b for a, b in win_spans):
+                    skipped_runtime += 1
+                    continue
                 if name.startswith('.'):
                     skipped_url += 1
                     continue

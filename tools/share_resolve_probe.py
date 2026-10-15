@@ -185,7 +185,7 @@ def main():
         # 探针调试的地址默认挪到临时目录，别混进去
         import tempfile
         from hancast_sidecar.media import failures
-        tmp_ledger = tempfile.mkdtemp(prefix="hancast-probe-ledger-")
+        tmp_ledger = tempfile.mkdtemp(prefix="hancast-probe-ledger-", dir="/tmp")
         failures.SETTING_DIR = tmp_ledger
         atexit.register(shutil.rmtree, tmp_ledger, ignore_errors=True)
 

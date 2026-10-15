@@ -10,14 +10,16 @@
 # 所以这里用同一个 bundle 身份来复现产品路径。
 #
 # 用法：bash tools/run-macos-tap-probe.sh [ffmpeg 路径]
-# 输出：探针的完整 stdout/stderr（GUI app 没有终端，落到日志文件再打印）
+# 输出：探针的完整 stdout/stderr（GUI app 没有终端，落到日志文件再打印；
+#       日志留 .tmp-win/hancast-tap-probe.log，临时 app 建在 /tmp 且跑完即删）
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 PY="$PWD/hancast-backend/.venv/bin/python"
 FFMPEG="${1:-$(command -v ffmpeg)}"
-LOG="${TMPDIR:-/tmp}/hancast-tap-probe.log"
-APP="${TMPDIR:-/tmp}/HanCast Tap Probe.app"
+mkdir -p "$PWD/.tmp-win"                 # 探针日志留仓库 .tmp-win/（可见、可清）
+LOG="$PWD/.tmp-win/hancast-tap-probe.log"
+APP="/tmp/HanCast Tap Probe.app"         # 临时 app 只放 /tmp，脚本结尾自清
 BUNDLE_ID="${HANCAST_TAP_BUNDLE_ID:-com.hancast.tapprobe}"
 [[ -x "$PY" ]] || { echo "找不到 $PY"; exit 2; }
 
@@ -62,4 +64,6 @@ if kill -0 "$wait_pid" 2>/dev/null; then
 fi
 wait "$wait_pid" 2>/dev/null || true
 cat "$LOG"
+rm -rf "$APP"                            # 临时 app 用完即扔；日志留在 .tmp-win 可复看
+echo "日志已留: $LOG"
 grep -q "SUMMARY: PASS" "$LOG" && echo "→ 打包 bundle 身份下环回可用"

@@ -8,6 +8,7 @@ import collections
 import subprocess
 import sys
 import urllib.parse as up
+from pathlib import Path
 
 import requests
 
@@ -60,8 +61,11 @@ def main():
         print(f"  最佳对齐偏移={best} (40 包中 {alignment(body, best, 40)} 个 0x47)，"
               f"偏移 0 对齐={alignment(body, 0, 40)}")
         # 剥皮前后各交给 ffprobe 一次，验证「剥皮才解得开」
+        # 落 .tmp-win（仓库内本地临时区），别写 /tmp——那里系统只清 >3 天的普通文件，实测等于不回收
+        scratch = Path(__file__).resolve().parent.parent / ".tmp-win"
+        scratch.mkdir(exist_ok=True)
         for tag, data in (("原样", body), ("剥皮", body[best:])):
-            path = f"/tmp/hancast-skin-{tag}.ts"
+            path = scratch / f"hancast-skin-{tag}.ts"
             with open(path, "wb") as f:
                 f.write(data)
             p = subprocess.run(["ffprobe", "-v", "error", "-show_entries",

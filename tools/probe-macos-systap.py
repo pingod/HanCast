@@ -21,7 +21,6 @@ import os
 import re
 import subprocess
 import sys
-import tempfile
 import time
 import wave
 
@@ -205,7 +204,7 @@ def capture(ffmpeg: str, idx: str, seconds: float, playing: bool, tone_wav: str)
     if playing:
         player = subprocess.Popen(["afplay", tone_wav])
     time.sleep(0.3)
-    out = os.path.join(tempfile.gettempdir(), f"hancast-systap-{int(time.time()*1000)}.wav")
+    out = f"/tmp/hancast-systap-{int(time.time()*1000)}.wav"   # 录完读进内存即删，显式 /tmp
     r = subprocess.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
                         "-f", "avfoundation", "-i", f":{idx}",
                         "-t", f"{seconds}", "-ar", str(RATE), "-ac", "1",
@@ -431,8 +430,7 @@ def main() -> int:
             else:
                 idx, name = tap
                 print(f"环回设备: [{idx}]{name}")
-                tone_wav = os.path.join(tempfile.gettempdir(),
-                                        "hancast-systap-tone.wav")
+                tone_wav = "/tmp/hancast-systap-tone.wav"   # 用完即删（下面 os.remove）
                 make_tone(tone_wav)
                 base_pcm = capture(ffmpeg, idx, 2.0, False, tone_wav)
                 base_level, base_rms = band_energy(base_pcm, TONE_HZ, tol=0.02)

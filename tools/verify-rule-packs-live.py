@@ -118,7 +118,7 @@ def main() -> int:
     if args.rules_dir:
         rules_dir = os.path.abspath(args.rules_dir)
     else:
-        temp_dir = tempfile.mkdtemp(prefix="hancast-rulepack-")
+        temp_dir = tempfile.mkdtemp(prefix="hancast-rulepack-", dir="/tmp")
         rules_dir = temp_dir
 
     try:

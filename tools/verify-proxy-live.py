@@ -10,7 +10,6 @@ import os
 import re
 import subprocess
 import sys
-import tempfile
 import urllib.parse as up
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "hancast-backend"))
@@ -65,7 +64,7 @@ def main():
             body = subprocess.run(
                 ["curl", "-s", *(["-H", f"Range: {rng['Range']}"] if rng else []), url],
                 capture_output=True).stdout
-            path = os.path.join(tempfile.gettempdir(), f"hancast-verify-{pick}.ts")
+            path = f"/tmp/hancast-verify-{pick}.ts"   # 即抛件：下面 ffprobe 完就 os.remove
             with open(path, "wb") as f:
                 f.write(body)
             rc, out = probe(path)

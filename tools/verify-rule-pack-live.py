@@ -83,7 +83,7 @@ def main() -> int:
     args = ap.parse_args()
 
     zip_path = dist_zip(args.pack)
-    tmp = tempfile.mkdtemp(prefix="hancast-packcheck-")
+    tmp = tempfile.mkdtemp(prefix="hancast-packcheck-", dir="/tmp")
     failed = 0
     try:
         rules_dir = os.path.join(tmp, "share_rules")

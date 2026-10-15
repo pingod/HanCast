@@ -18,7 +18,6 @@ import os
 import re
 import subprocess
 import sys
-import tempfile
 import time
 import wave
 
@@ -93,7 +92,7 @@ def measure(ffmpeg: str, idx: str, tone: str, seconds: float = 5.0) -> str:
     import numpy as np
     player = subprocess.Popen(["afplay", tone])
     time.sleep(0.4)
-    out = os.path.join(tempfile.gettempdir(), f"pitch-{idx}-{int(time.time() * 1000)}.wav")
+    out = f"/tmp/pitch-{idx}-{int(time.time() * 1000)}.wav"   # 录完读进内存即删，显式 /tmp
     r = subprocess.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
                         "-f", "avfoundation", "-i", f":{idx}", "-t", f"{seconds}",
                         "-ar", str(RATE), "-ac", "1", "-c:a", "pcm_s16le", out],
@@ -177,7 +176,7 @@ def run_tap(ffmpeg: str, tone: str):
 def main() -> int:
     ffmpeg = ffmpeg_path()
     T._objc()  # 装载 CoreAudio / objc 桥
-    tone = os.path.join(tempfile.gettempdir(), "hancast-pitch-440.wav")
+    tone = "/tmp/hancast-pitch-440.wav"   # 用完 os.remove，即抛件
     make_tone(tone, ffmpeg)
     print(f"源文件 440Hz@{RATE} 的实测：", end=" ")
     import numpy as np

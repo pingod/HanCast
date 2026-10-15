@@ -18,6 +18,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.request
@@ -125,7 +126,10 @@ def main():
 
     backup = None
     if os.path.exists(SETTING):
-        backup = "/tmp/hancast_setting.backup.json"
+        # 备份放 /tmp（本脚本唯一落点，还原时删）——落点二选一：/tmp 或仓库 .tmp-win/，
+        # 别散 per-user $TMPDIR：那里用户找不到，系统也不回收
+        backup = os.path.join(tempfile.mkdtemp(prefix="hc-setting-backup-", dir="/tmp"),
+                              "hancast_setting.json")
         shutil.copy2(SETTING, backup)
     was_running = app_running()
     if was_running:
@@ -208,6 +212,7 @@ def main():
                 proc.kill()
         if backup:
             shutil.copy2(backup, SETTING)
+            shutil.rmtree(os.path.dirname(backup), ignore_errors=True)
             print(f"\n已还原 {SETTING}")
         if was_running:
             subprocess.run(["open", "/Applications/HanCast.app"], capture_output=True)

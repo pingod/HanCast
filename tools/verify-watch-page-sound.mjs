@@ -18,11 +18,11 @@
  * hls.min.js 也取源码目录 —— 验的是产品代码本身，不是替身。
  *
  * 用法: node tools/verify-watch-page-sound.mjs
- * 退出码 0 = 两 pass 全部断言通过；截图落 /tmp/hancast-watch-sound-{A,B}.png
+ * 退出码 0 = 两 pass 全部断言通过；截图落 .tmp-win/hancast-watch-sound-{A,B}.png（仓库内本地临时区，gitignored）
  */
 
 import { spawn, execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, readdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, readdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import http from 'node:http'
 import path, { join } from 'node:path'
@@ -171,7 +171,7 @@ async function clickCenter(cdp, selector) {
 
 async function runPass({ bin, watchUrl, policy, port, label }) {
   console.log(`\n=== ${label}（--autoplay-policy=${policy}）===`)
-  const profile = mkdtempSync(join(tmpdir(), 'hancast-sound-prof-'))
+  const profile = mkdtempSync('/tmp/hancast-sound-prof-')  // 即抛件放 /tmp（退出时删），不散 $TMPDIR
   const chrome = spawn(bin, [
     `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`,
     '--no-first-run', '--no-default-browser-check', '--noerrdialogs', '--disable-infobars',
@@ -231,7 +231,10 @@ async function runPass({ bin, watchUrl, policy, port, label }) {
     }
 
     const shot = await cdp.send('Page.captureScreenshot', { format: 'png' })
-    const shotPath = `/tmp/hancast-watch-sound-${label.includes('A') ? 'A' : 'B'}.png`
+    // 落 .tmp-win（仓库内本地临时区），别写 /tmp——那里系统只清 >3 天的普通文件，实测等于不回收
+    const scratch = path.resolve(HERE, '..', '.tmp-win')
+    mkdirSync(scratch, { recursive: true })
+    const shotPath = path.join(scratch, `hancast-watch-sound-${label.includes('A') ? 'A' : 'B'}.png`)
     writeFileSync(shotPath, Buffer.from(shot.data, 'base64'))
     console.log(`  截图 ${shotPath}`)
   } finally {
@@ -243,7 +246,7 @@ async function runPass({ bin, watchUrl, policy, port, label }) {
 async function main() {
   const bin = findChrome()
   console.log(`Chrome: ${bin}`)
-  const hlsDir = mkdtempSync(join(tmpdir(), 'hancast-sound-hls-'))
+  const hlsDir = mkdtempSync('/tmp/hancast-sound-hls-')  // 测试 HLS 即抛件放 /tmp（退出时删）
   let server
   try {
     console.log(`生成 ${CLIP_SECONDS}s 测试 HLS（1s 分片，含 440Hz 音轨）…`)
