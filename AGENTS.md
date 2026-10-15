@@ -3,7 +3,7 @@
 > 旧名 `CLAUDE.md`（Claude Code 私有约定），2026-10-15 改名为跨工具的 `AGENTS.md`；
 > `CLAUDE.md` 现在只留三行指针指向本文件。
 
-> 最后校对：2026-10-15，对应版本 v2.3.11（`package.json:4`，tag `v2.3.11`）。
+> 最后校对：2026-10-15，对应版本 v2.3.12（`package.json:4`）。
 > 本文件是速览与硬约束；逐模块的深度内容在 **docs/README.md** 的索引里，别在这里找细节。
 
 ## 项目概述
@@ -107,7 +107,7 @@ HanCast/
 │   ├── hancast_sidecar/
 │   │   ├── main.py              # Sidecar 入口（148 行：UTF-8 stdio、stdin/stdout JSON 循环、双击兜底）
 │   │   ├── commands.py          # CommandHandler — 命令路由（59 条注册表 commands.py:110-197）
-│   │   ├── params.py            # 后台参数 PARAM_SPECS（30 项，params.py:35-236）
+│   │   ├── params.py            # 后台参数 PARAM_SPECS（32 项，params.py:41-265）
 │   │   ├── ssdp.py              # SSDP 设备发现（1264 行）
 │   │   ├── protocol/
 │   │   │   ├── dlna.py          # DLNA 控制端实现（1229 行，AVTransport/RenderingControl SOAP）
@@ -259,7 +259,7 @@ Rust 命令名与 Sidecar `cmd` 名不一定同名（例如 Rust 的 `plugin_lis
 | 投屏确认 | `get_guard_devices` / `remove_guard_device` / `set_guard_policy` | 信任 / 黑名单管理 |
 | 投屏确认 | `get_guard_settings` / `save_guard_settings` | 确认开关与超时档位 |
 | 设置 | `get_settings` / `save_settings` | 应用设置 |
-| 后台参数 | `get_params` / `save_params` | `PARAM_SPECS` 30 项（`params.py:35-236`） |
+| 后台参数 | `get_params` / `save_params` | `PARAM_SPECS` 32 项（`params.py:41-265`） |
 | 日志 | `get_logs` / `export_logs` / `set_log_level` | 面板取数、导出、级别 |
 | 播放环境 | `check_mpv` / `set_mpv_path` | 捆绑 MPV 探测与自定义路径 |
 | 更新与自启 | `check_update` / `ignore_update_version` / `is_store_version` / `get_autostart` / `set_autostart` | 自更新、Store 版判定、开机自启 |

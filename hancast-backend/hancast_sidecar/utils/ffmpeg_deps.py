@@ -24,7 +24,7 @@ import zipfile
 import logging
 from typing import Callable, Dict, List, Optional, Tuple
 
-from . import config
+from . import config, ghmirror
 
 logger = logging.getLogger("hancast.ffmpeg_deps")
 
@@ -324,21 +324,38 @@ def format_error(exc: BaseException) -> str:
 
 
 def _open_stream(url: str):
-    """先按系统/环境代理走，代理不通就直连（和解析链路同一套策略）"""
+    """先按系统/环境代理走，代理不通就直连（和解析链路同一套策略）
+
+    GitHub 系的源在「GitHub 走国内镜像」打开时先试镜像前缀，失败自动回退直连。
+    两条路的失败原因都要写进文案：只说「连接下载源失败」，用户分不清是镜像挂了
+    还是线路挂了，而这两种情况的处理动作完全不同。
+    """
     from . import httpclient
-    session = httpclient.make_session()
-    try:
-        r = session.get(url, timeout=(15, 30), stream=True,
-                        headers={"User-Agent": "HanCast/dependency-installer",
-                                 "Accept-Encoding": "identity"},
-                        allow_redirects=True)
-    except Exception as e:                       # noqa: BLE001
-        raise DependencyError(
-            f"连接下载源失败（{url}）— {format_error(e)}") from e
-    if r.status_code >= 400:
-        r.close()
-        raise DependencyError(f"下载源返回 HTTP {r.status_code}（{url}）")
-    return session, r
+    paths = ghmirror.candidates(url)
+    errors: List[str] = []
+    for via, target in paths:
+        session = httpclient.make_session()
+        try:
+            r = session.get(target, timeout=(15, 30), stream=True,
+                            headers={"User-Agent": "HanCast/dependency-installer",
+                                     "Accept-Encoding": "identity"},
+                            allow_redirects=True)
+        except Exception as e:                       # noqa: BLE001
+            session.close()
+            errors.append(f"{via}：{format_error(e)}")
+            if len(paths) > 1:
+                logger.warning(f"依赖下载经{via}失败，回退下一条路径（{target}）")
+            continue
+        if r.status_code >= 400:
+            r.close()
+            session.close()
+            errors.append(f"{via}：HTTP {r.status_code}")
+            if len(paths) > 1:
+                logger.warning(f"依赖下载经{via}返回 {r.status_code}，回退下一条路径")
+            continue
+        return session, r
+    raise DependencyError(
+        f"连接下载源失败（{url}）— {'；'.join(errors)}") from None
 
 
 def _total_bytes(r) -> int:

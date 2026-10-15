@@ -11,6 +11,10 @@
 注册表里只有两种来源：JS 脚本包（``jsplugins.py``）与外置声明式 JSON
 （``declarative.py``），都是运行期注入、用户可增可删可停。
 程序本身不带任何站点规则——想让某个站被解析，就去装规则包。
+
+``hosts`` 里写 ``"*"`` 是**兜底作用域**（见 ``WILDCARD_HOST``）：这条规则不认域名，
+任何地址都可能命中，但 ``matching`` 保证它只在同阶段的站点专属规则全都拿不下之后
+才被试。这样「通用采集站规则」和「某站的精确规则」可以共存而互不遮挡。
 """
 
 import os
@@ -26,6 +30,9 @@ from ...models.media import MediaInfo
 from ...utils.httpclient import HttpSession
 
 logger = logging.getLogger("hancast.media.rules")
+
+# hosts 里写这个值 = 兜底作用域（不认域名，排在站点专属规则之后试）
+WILDCARD_HOST = "*"
 
 # 身份常量单点定义在 utils/identity.py（代理侧要用同一个 UA，不能再各写一份）
 from ...utils.identity import (DESKTOP_UA, MOBILE_UA, desktop_ua, mobile_ua)
@@ -120,6 +127,8 @@ class SiteRule:
     priority = 100           # 数字小者先试；包规则统一落在 4-8
 
     def matches(self, url: str) -> bool:
+        if WILDCARD_HOST in self.hosts:
+            return True
         host = (urlparse(url).hostname or "").lower()
         return any(host == h or host.endswith("." + h) for h in self.hosts)
 
@@ -149,7 +158,16 @@ def registered() -> list:
 
 
 def matching(url: str, stage: str) -> list:
-    return [r for r in _RULES if r.stage == stage and r.matches(url)]
+    """该阶段能用的规则，按「站点专属在前、通用兜底在后」返回
+
+    兜底规则（``hosts`` 含 ``*``）不认域名，靠排序而不是 priority 让位：
+    装了精确规则的站永远先试精确的，只有全都拿不下才轮到通用规则。
+    两组成员各自保持 ``(priority, name)`` 顺序。
+    """
+    hit = [r for r in _RULES if r.stage == stage and r.matches(url)]
+    specific = [r for r in hit if WILDCARD_HOST not in r.hosts]
+    fallback = [r for r in hit if WILDCARD_HOST in r.hosts]
+    return specific + fallback
 
 
 def set_plugin_rules(rules: list) -> None:
@@ -245,6 +263,7 @@ def _ext_of(url: str) -> str:
 
 __all__ = [
     "DESKTOP_UA", "MOBILE_UA", "desktop_ua", "mobile_ua",
+    "WILDCARD_HOST",
     "RuleContext", "SiteRule", "register",
     "registered", "matching", "refresh_external", "set_external_loader",
     "set_plugin_rules", "decode_body", "decode_js_string", "normalize_text",

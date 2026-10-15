@@ -26,6 +26,10 @@
 ``body``（最后一次 fetch 的正文）。``fetch`` / ``regex`` / ``json`` / ``set``
 四种操作，值里的 ``{name}`` 用变量池插值。
 
+``hosts`` 写 ``["*"]`` 是**兜底作用域**：不认域名，任何地址都可能命中，但注册表
+保证它只在同阶段的站点专属规则全都拿不下之后才被试（``base.matching``）。
+采集站这类「一套程序换个域名再开一家」的站就适合它——一条规则覆盖以后所有的站。
+
 正文在交给规则之前已归一化 ``\\/``、``\\u002F``、``\\u0026`` 与 HTML 实体，
 和通用提取看到的是同一份文本，一条正则就能同时吃到 JS 转义与实体写法。
 
@@ -44,7 +48,7 @@ from urllib.parse import urlparse
 
 from .base import (SiteRule, RuleContext, set_external_loader, template_apply,
                    absolutize, title_from_html, guess_mime, normalize_text,
-                   decode_body)
+                   decode_body, WILDCARD_HOST)
 
 logger = logging.getLogger("hancast.media.rules")
 
@@ -76,8 +80,12 @@ class DeclarativeRule(SiteRule):
     def matches(self, url: str) -> bool:
         p = urlparse(url)
         host = (p.hostname or "").lower()
-        if not self.hosts or not any(
-                host == h or host.endswith("." + h) for h in self.hosts):
+        if not self.hosts:
+            return False
+        if WILDCARD_HOST in self.hosts:
+            # 兜底作用域：不认域名，路径正则仍然生效
+            return not self._path_re or bool(self._path_re.search(p.path or "/"))
+        if not any(host == h or host.endswith("." + h) for h in self.hosts):
             return False
         return not self._path_re or bool(self._path_re.search(p.path or "/"))
 

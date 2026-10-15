@@ -38,6 +38,7 @@ import requests
 from .base import (SiteRule, RuleContext, set_plugin_rules, normalize_text,
                    absolutize, title_from_html, guess_mime)
 from .jsruntime import JsRuntime
+from ...utils import ghmirror
 
 logger = logging.getLogger("hancast.media.jsplugin")
 
@@ -336,23 +337,36 @@ class PluginManager:
 
         不显式传 timeout 时按后台参数 ``rules.index_timeout_s`` 走：写死 15s 的话，
         墙内冷启动点「检查规则包更新」必然失败，而失败看起来像「没有更新」。
+
+        地址按 ``utils/ghmirror.candidates`` 给的顺序试（开了镜像就是「先镜像、
+        后直连」）；两条路的失败原因都拼进异常，用户才分得清「镜像挂了」
+        和「根本没网」。
         """
         target = (url or index_url()).strip()
         if timeout is None:
             timeout = index_timeout()
         if not target.lower().startswith(("http://", "https://")):
             raise PluginError(f"索引地址必须是 http(s)（当前：{target or '未设置'}）")
-        try:
-            with requests.Session() as s:
-                r = s.get(target, timeout=timeout,
-                          headers={"User-Agent": _IMPORT_UA})
-                if r.status_code >= 400:
-                    raise PluginError(f"索引拉取失败（HTTP {r.status_code}）")
-                doc = r.json()
-        except requests.RequestException as e:
-            raise PluginError(f"索引拉取失败: {type(e).__name__}: {e}")
-        except ValueError as e:
-            raise PluginError(f"索引不是合法 JSON: {e}")
+        doc = None
+        errors: list[str] = []
+        for via, fetch_url in ghmirror.candidates(target):
+            try:
+                with requests.Session() as s:
+                    r = s.get(fetch_url, timeout=timeout,
+                              headers={"User-Agent": _IMPORT_UA})
+                    if r.status_code >= 400:
+                        raise PluginError(f"HTTP {r.status_code}")
+                    doc = r.json()
+                if via != "直连":
+                    logger.info(f"规则包索引经{via}取得: {fetch_url[:90]}")
+                break
+            except (PluginError, requests.RequestException, ValueError) as e:
+                detail = str(e) if isinstance(e, PluginError) else f"{type(e).__name__}: {e}"
+                errors.append(f"{via} {detail}")
+                if via != "直连":
+                    logger.info(f"索引走镜像失败，回退直连（{fetch_url[:80]}）: {e}")
+        if doc is None:
+            raise PluginError("索引拉取失败: " + "；".join(errors))
         packs: dict[str, dict] = {}
         entries = doc.get("packs") if isinstance(doc, dict) else None
         for item in entries or []:
@@ -533,24 +547,46 @@ class PluginManager:
 
     def import_url(self, url: str, timeout: float = 60.0,
                    expected_sha256: str = "") -> dict:
+        """下载并安装一个包；摘要对不上就换下一条路，最后一条也不对才判死
+
+        走 ``ghmirror.candidates``：开了镜像先试镜像、失败或摘要不符再退回直连。
+        退回的理由是「镜像给错了字节」与「镜像挂了」在用户侧看起来一模一样，
+        而直连重取一次就能分开这两种；sha256 始终按索引里那份官方摘要校验，
+        所以退回直连不构成放宽——被换掉的包照样过不了这道关。
+        """
         if not url.lower().startswith(("http://", "https://")):
             raise PluginError("只支持 http(s) 下载地址")
-        with requests.Session() as s:
-            r = s.get(url, timeout=timeout, stream=True,
-                      headers={"User-Agent": _IMPORT_UA})
-            if r.status_code >= 400:
-                raise PluginError(f"下载失败（HTTP {r.status_code}）")
-            data = b""
-            for chunk in r.iter_content(chunk_size=64 * 1024):
-                data += chunk
-                if len(data) > _MAX_ZIP_BYTES:
-                    raise PluginError("插件包超过 2MB 上限")
-        # 索引给了摘要就必须对上：这是「下载来就执行」的入口，不能只信传输层
-        if expected_sha256:
-            got = hashlib.sha256(data).hexdigest()
-            if got != expected_sha256.lower():
-                raise PluginError(
-                    f"包校验失败（sha256 不匹配，可能被劫持或索引过期）: {got[:12]}…")
+        paths = ghmirror.candidates(url)
+        data = None
+        errors: list[str] = []
+        for via, fetch_url in paths:
+            try:
+                with requests.Session() as s:
+                    r = s.get(fetch_url, timeout=timeout, stream=True,
+                              headers={"User-Agent": _IMPORT_UA})
+                    if r.status_code >= 400:
+                        raise PluginError(f"下载失败（HTTP {r.status_code}）")
+                    buf = b""
+                    for chunk in r.iter_content(chunk_size=64 * 1024):
+                        buf += chunk
+                        if len(buf) > _MAX_ZIP_BYTES:
+                            raise PluginError("插件包超过 2MB 上限")
+                if expected_sha256:
+                    got = hashlib.sha256(buf).hexdigest()
+                    if got != expected_sha256.lower():
+                        raise PluginError(
+                            f"包校验失败（sha256 不匹配，可能是镜像过期）: {got[:12]}…")
+                data = buf
+                if via != "直连":
+                    logger.info(f"规则包经{via}下载: {fetch_url[:90]}")
+                break
+            except (PluginError, requests.RequestException) as e:
+                detail = str(e) if isinstance(e, PluginError) else f"{type(e).__name__}: {e}"
+                errors.append(f"{via} {detail}")
+                if len(paths) > 1:
+                    logger.info(f"{via} 下载规则包不成，换下一条路: {e}")
+        if data is None:
+            raise PluginError("；".join(errors) or "下载失败")
         return self.import_zip_bytes(data)
 
     def remove(self, name: str) -> None:

@@ -21,6 +21,12 @@ ADVANCED_KEY = "advanced"
 DEFAULT_RULES_INDEX = ("https://raw.githubusercontent.com/pingod/HanCast"
                        "/main/rule-packs/index.json")
 
+# GitHub 镜像的默认前缀（gh-proxy 家族的「前缀 + 原地址」形态）。
+# 实测（2026-10-15，本机不挂任何代理）：raw 索引、dist zip（sha256 与索引一致）、
+# releases/download 的 FFmpeg、api.github.com 的更新检查四条全通；
+# 换一个镜像（ghfast.top）前三条通而 api 回 403——所以这只是默认值，用户可改。
+DEFAULT_GITHUB_MIRROR = "https://gh-proxy.com/"
+
 # 对外身份的默认值就登记在这里，`utils/identity.py` 反过来读它——
 # 两边各写一份正是以前「规则层 Chrome/124、代理层 Chrome/120」的由来。
 DEFAULT_UA_DESKTOP = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -232,6 +238,30 @@ PARAM_SPECS: List[Dict] = [
      "label_zh": "规则包索引超时", "label_en": "Rule pack index timeout",
      "help_zh": "拉索引和查更新时单次网络请求的等待上限",
      "help_en": "Per-request wait limit for fetching the index and update checks"},
+
+    # ── GitHub 加速 ──
+    # 程序对 GitHub 的四类请求（规则包索引、规则包 zip、更新检查、FFmpeg 按需下载）
+    # 全部经 utils/ghmirror.py 改写，加新触点请调 ghmirror.candidates()，别自己拼前缀。
+    {"key": "github.mirror_enabled", "section": "network",
+     "type": "bool", "default": False,
+     "label_zh": "GitHub 走国内镜像", "label_en": "Use GitHub mirror",
+     "help_zh": "国内直连 GitHub 不通时打开：规则包索引与下载、检查新版本、"
+               "FFmpeg 按需下载都先走镜像地址，镜像失败会自动回退直连并记日志。"
+               "包的 sha256 仍按官方索引校验，镜像换包会被当场拦下",
+     "help_en": "Route GitHub traffic (rule pack index and zips, update check, FFmpeg "
+                "download) through the mirror prefix below; falls back to a direct "
+                "request if the mirror fails. Pack sha256s are still verified"},
+    {"key": "github.mirror_prefix", "section": "network",
+     "type": "text", "default": DEFAULT_GITHUB_MIRROR,
+     "label_zh": "GitHub 镜像前缀", "label_en": "GitHub mirror prefix",
+     # 实测（2026-10-15，本机不挂代理）：gh-proxy.com 对 raw / zip / releases/download /
+     # api.github.com 四种形态都成立；ghfast.top 前三样可但 api 回 403。
+     # 所以前缀必须是可换的参数，而不是我们替用户决定的常量。
+     "help_zh": "填镜像站根地址并以 / 结尾，最终请求 = 前缀 + 原地址"
+               "（例：https://gh-proxy.com/https://raw.githubusercontent.com/…）。"
+               "只有 GitHub 的地址会被改写，Gitee 等其它源原样通过",
+     "help_en": "Mirror root ending with /; the request becomes prefix + original URL. "
+                "Only GitHub hosts are rewritten, other sources pass through untouched"},
 ]
 
 _SPECS_BY_KEY = {s["key"]: s for s in PARAM_SPECS}

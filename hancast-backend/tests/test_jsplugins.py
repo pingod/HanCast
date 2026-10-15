@@ -5,6 +5,7 @@
 - 死循环中断 / 内存上限 / JS 异常消息透传
 - zip 导入：合法包安装、路径穿越/多余文件/双 manifest/坏 name 拒收
 - 规则注册表：命中、via 命名、停用开关持久化、坏脚本只损伤自己
+- 兜底作用域 ``hosts:['*']``：不认域名的包规则排在站点专属规则之后试
 - 真实解析管线联动：resolve → 插件规则 → follow/publish/info
 - 全新安装零规则：程序不编译进任何站点规则，装包之前解析不了 B 站链接
 - 规则包分发：fetch_index 过滤、check_updates 分堆、pull 安装 + sha256 校验、
@@ -328,6 +329,35 @@ class TestRegistryAndPipeline(unittest.TestCase):
              patch.object(ShareResolver, "_publish", side_effect=pub):
             self.resolver.resolve("https://demo.example/play/2")
         self.assertEqual(captured["extra"], {"Referer": "https://demo.example/play/2"})
+
+    def test_wildcard_pack_rule_defers_to_site_rule(self):
+        """包规则同样认 hosts:['*'] 兜底，且排在站点专属规则之后试
+
+        兜底那条名字取 a-generic：注册表按 (priority, name) 排它本来在前，
+        「专属在前」只能靠 matching 的分组排序实现。
+        """
+        self.resolver.plugin_mgr.import_zip_bytes(make_zip(
+            name="a-generic",
+            js="registerRule({name:'a-generic',hosts:['*'],stage:'page',"
+               "resolve:function(c){return {url:'https://g.example/g.m3u8'};}});"))
+        url = "https://demo.example/play/1"
+        self.assertEqual([r.name for r in rules_base.matching(url, "page")],
+                         ["demo", "a-generic"])
+        html = ('<html><script>var cfg={"playUrl":'
+                '"https://cdn.example/v/1.m3u8?token=a"};</script></html>')
+        result = self._resolve(html, url)
+        self.assertEqual(result["via"], "demo/demo")
+
+    def test_wildcard_pack_rule_catches_unknown_site(self):
+        """没有精确规则的站：兜底包规则接手，不必为每个采集站单独发包"""
+        self.resolver.plugin_mgr.import_zip_bytes(make_zip(
+            name="cms",
+            js="registerRule({name:'cms',hosts:['*'],stage:'page',"
+               "resolve:function(c){return {url:'https://g.example/g.m3u8'};}});"))
+        result = self._resolve("<html>随便什么正文</html>",
+                               "https://some-new-clone.example/play/9")
+        self.assertEqual(result["via"], "cms/cms")
+        self.assertEqual(result["uri"], "https://g.example/g.m3u8")
 
     def test_broken_rule_yields_not_crashes(self):
         self.resolver.plugin_mgr.import_zip_bytes(make_zip(

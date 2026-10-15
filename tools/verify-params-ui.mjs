@@ -154,7 +154,7 @@ async function main() {
   pass('渲染出参数行', `${count} 项`)
   chk('分组标题按 section 出现', await s.evaluate(
     `[...document.querySelectorAll('.settings__params-group-title')].map(h=>h.textContent.trim()).join(',')`),
-    '屏幕投屏,浏览器播放器,解析规则')
+    '屏幕投屏,浏览器播放器,解析规则,GitHub 加速')
 
   // 3. 四类控件都在（text 是 v2.3.3 加的：规则包索引地址要在设置里能改）
   chk('number 控件', await s.evaluate(
@@ -167,6 +167,10 @@ async function main() {
   chk('text 控件带上屏地址', await s.evaluate(
     `[...document.querySelectorAll('.settings__param input[type=text]')]
       .some(i => i.value.includes('rule-packs/index.json'))`), true)
+  // GitHub 镜像前缀（v2.3.12 加）：这一项要能直接改，写死常量等于替用户决定用哪家镜像
+  chk('text 控件带镜像前缀', await s.evaluate(
+    `[...document.querySelectorAll('.settings__param input[type=text]')]
+      .some(i => i.value === 'https://gh-proxy.com/')`), true)
   chk('1 秒默认值上屏', await s.evaluate(
     `[...document.querySelectorAll('.settings__param input[type=number]')].some(i => i.value === '1')`), true)
 

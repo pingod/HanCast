@@ -2,7 +2,7 @@
 
 > 回答一个问题：前端 `invoke()` 出去的每一条命令，究竟由壳层（Rust/Tauri）就地执行、还是转发给 Sidecar（Python 后台进程）；它的入参、返回结构、可能错误，以及 Sidecar 主动推给前端的事件分别是什么。
 >
-> 最后校对：2026-10-15，对应版本 v2.3.11（`package.json`，tag `v2.3.11`）
+> 最后校对：2026-10-15，对应版本 v2.3.12（`package.json`）
 
 ---
 
@@ -18,7 +18,7 @@
 | ├─ 无独立封装的命令 | 3 | `get_resolve_result`（内联在 `resolveShare` / `pluginTest` 轮询里）、`check_mpv`、`set_mpv_path`（`src/` 下无任何调用点） |
 | └─ 一对多封装 | 1 | `plugin_import` → `pluginImportFile` / `pluginImportData` / `pluginImportUrl`（`commands.ts:797-813`） |
 | Sidecar 命令注册表条目 | 59 | `hancast-backend/hancast_sidecar/commands.py:110-197` |
-| 后台参数（`params.py`）条目 | 30 | `hancast-backend/hancast_sidecar/params.py:35-236` |
+| 后台参数（`params.py`）条目 | 32 | `hancast-backend/hancast_sidecar/params.py:41-265` |
 
 **66 与 59 为什么对不上**：57 条转发里，`parse_media_file` 与 `parse_media_url` 在壳层是两条命令、到 Sidecar 归并成一条 `parse_media`（`lib.rs:229-253`），57 − 1 = 56 个不同的 Sidecar 命令名；Sidecar 另有三条**没有对应壳层命令**——`unhide_device`、`get_hidden_devices`（`commands.py:120-121`，前端调不到）与 `browser_result`（`commands.py:166`，只由壳层的浏览器通道反向 RPC 下发）。56 + 3 = 59。此外 `exit` 不走注册表，是主循环直接拦下的特殊命令（`main.py:126-128`）。
 
@@ -77,8 +77,8 @@ Sidecar 的启动方式：开发态 `uv run python -m hancast_sidecar.main`（`s
 | 壳层等单条命令 | **60s** | `sidecar.rs:18`（`COMMAND_TIMEOUT`） |
 | Sidecar 单次分享解析预算 | 25s | `media/share_resolver.py:34`（`_TOTAL_BUDGET`） |
 | 前端 `resolveShare` / `pluginTest` 轮询 | 45s，每 400ms 一次 | `commands.ts:695-705`、`commands.ts:916-925` |
-| 并发解析任务 | 最多 3 个 pending | `commands.py:620-621` |
-| 解析任务结果保留 | 完成后 10 分钟过期清理 | `commands.py:614-617` |
+| 并发解析任务 | 最多 3 个 pending | `commands.py:628-629` |
+| 解析任务结果保留 | 完成后 10 分钟过期清理 | `commands.py:621-625` |
 | 更新检查 HTTP | GitHub 1s / Gitee 3s | `commands.py:860-869` |
 | 退出时等 Sidecar | Windows 3000ms，其余 1000ms，超时 force kill | `sidecar.rs:447-498` |
 
@@ -198,8 +198,8 @@ Sidecar 侧还有两条**前端调不到**的命令：`unhide_device`（`command
 | --- | --- | --- | --- | --- | --- |
 | `parse_media_file` | `parseMediaFile(filePath)` `commands.ts:650` | `filePath: string` | `MediaInfo`（`models/media.py:22-39`） | Sidecar | 通用；解析异常原文。壳层把它改写成 Sidecar 的 `parse_media` + `{"type":"file","path":...}`（`lib.rs:229-239`） |
 | `parse_media_url` | `parseMediaUrl(url)` `commands.ts:655` | `url: string` | `MediaInfo` | Sidecar | 同上，改写成 `{"type":"url","url":...}`（`lib.rs:241-252`）。⚠️ 该封装在 `src/` 下**无调用点** |
-| `resolve_share` | `resolveShare(text, quality?)` `commands.ts:684` | `text: string`、`quality?: string` | **异步任务**：`{ task_id: string, status: "pending" }`（`commands.py:639`） | Sidecar | `粘贴内容为空`（`commands.py:607`）；`已有 3 个解析任务进行中，请稍后再试`（`commands.py:621`）；通用 |
-| `get_resolve_result` | 无独立封装，内联在 `resolveShare`（`commands.ts:698`）与 `pluginTest`（`commands.ts:919`） | `taskId: string` | `{ status: "pending" \| "done" \| "error", result?: ShareResolveResult, error?: string, ts: number }`（`commands.py:641-648`） | Sidecar | `解析任务不存在或已过期`（`commands.py:646`）；通用 |
+| `resolve_share` | `resolveShare(text, quality?)` `commands.ts:684` | `text: string`、`quality?: string` | **异步任务**：`{ task_id: string, status: "pending" }`（`commands.py:647`） | Sidecar | `粘贴内容为空`（`commands.py:615`）；`已有 3 个解析任务进行中，请稍后再试`（`commands.py:629`）；通用 |
+| `get_resolve_result` | 无独立封装，内联在 `resolveShare`（`commands.ts:698`）与 `pluginTest`（`commands.ts:919`） | `taskId: string` | `{ status: "pending" \| "done" \| "error", result?: ShareResolveResult, error?: string, ts: number }`（`commands.py:649-656`） | Sidecar | `解析任务不存在或已过期`（`commands.py:654`）；通用 |
 
 壳层定义：`lib.rs:228-281`。Sidecar 处理函数：`commands.py:591-648`。
 
@@ -227,7 +227,7 @@ Sidecar 侧还有两条**前端调不到**的命令：`unhide_device`（`command
 
 壳层定义：`lib.rs:735-844`。Sidecar 注册 `commands.py:185-192`、处理函数 `commands.py:1041-1078`，投屏实现在 `screencast/manager.py`、依赖检测与下载在 `utils/ffmpeg_deps.py`。
 
-边界：屏幕投屏是**把本机画面推给别的设备**，与「接收投屏」（本机作为 DLNA 渲染端，靠 MPV）完全是两套代码。dlna 通道与 browser 通道共用一份 HLS 输出，但分片时长的后台参数不同（`screencast.dlna_segment_seconds` 默认 2s，`screencast.browser_segment_seconds` 默认 1s，`params.py:36-47`）。每次 `start` 都生成新的 `session_id`（`secrets.token_hex(3)`，`manager.py:157`）和新的 URL，旧链接立即失效。
+边界：屏幕投屏是**把本机画面推给别的设备**，与「接收投屏」（本机作为 DLNA 渲染端，靠 MPV）完全是两套代码。dlna 通道与 browser 通道共用一份 HLS 输出，但分片时长的后台参数不同（`screencast.dlna_segment_seconds` 默认 2s，`screencast.browser_segment_seconds` 默认 1s，`params.py:43-53`）。每次 `start` 都生成新的 `session_id`（`secrets.token_hex(3)`，`manager.py:157`）和新的 URL，旧链接立即失效。
 
 `_state` 的完整键集见 `manager.py:61-72`：`running / target / source / device_id / session_id / watch_url / url / viewers / error / started_at`。
 
@@ -252,41 +252,57 @@ Device Guard 管的是**接收投屏**方向：外部设备往本机推流时，
 
 | 命令名 | 前端封装 | 入参 | 返回 | 执行层 | 可能的错误 |
 | --- | --- | --- | --- | --- | --- |
-| `plugin_list` | `pluginList()` `commands.ts:791` | 无 | `{ plugins: PluginInfo[] }`，前端解包成数组（`commands.py:651-654`） | Sidecar | 通用 |
+| `plugin_list` | `pluginList()` `commands.ts:791` | 无 | `{ plugins: PluginInfo[] }`，前端解包成数组（`commands.py:659-662`） | Sidecar | 通用 |
 | `rule_inventory` | `ruleInventory()` `commands.ts:838` | 无 | `{ rules_dir: string, script_packs: PluginInfo[], declarative: DeclarativeRuleInfo[] }`（`share_resolver.py:385-397`） | Sidecar | 通用。声明式规则 JSON 写坏时不报错，坏条目带 `error` 字段照样列出（`declarative.py:262-269`） |
 | `failure_list` | `failureList()` `commands.ts:849` | 无 | `{ enabled, path, hosts: FailureHost[], total }`（`failures.py:167-190`） | Sidecar | 通用 |
-| `failure_delete` | `failureDelete(host?, url?)` `commands.ts:855` | `host?: string`、`url?: string`（前端把空串转成 `null`，`commands.ts:858`） | `{ removed: number, enabled, path, hosts, total }`（`commands.py:666-670`） | Sidecar | 通用 |
-| `failure_clear` | `failureClear()` `commands.ts:862` | 无 | `{ removed: number, enabled, path, hosts, total }`（`commands.py:672-674`） | Sidecar | 通用 |
+| `failure_delete` | `failureDelete(host?, url?)` `commands.ts:855` | `host?: string`、`url?: string`（前端把空串转成 `null`，`commands.ts:858`） | `{ removed: number, enabled, path, hosts, total }`（`commands.py:674-678`） | Sidecar | 通用 |
+| `failure_clear` | `failureClear()` `commands.ts:862` | 无 | `{ removed: number, enabled, path, hosts, total }`（`commands.py:680-682`） | Sidecar | 通用 |
 | `plugin_check_updates` | `pluginCheckUpdates(indexUrl?)` `commands.ts:877` | `indexUrl?: string`（空 → 走后台参数 `rules.index_url`） | `{ index_url, updates: PackUpdateEntry[], available: PackIndexEntry[], installed: number }`（`jsplugins.py:371-386`） | Sidecar | `索引地址必须是 http(s)（当前：…）`、`索引拉取失败（HTTP <code>）`、`索引拉取失败: <异常>`、`索引不是合法 JSON: …`（`jsplugins.py:343-355`）；通用 |
-| `plugin_pull` | `pluginPull(name, indexUrl?)` `commands.ts:894` | `name: string`、`indexUrl?: string` | `{ plugins: PluginInfo[] }`（`commands.py:691`） | Sidecar | `缺少包名`（`commands.py:690`）；`官方索引不可用，「<name>」也没声明更新地址：…`、`「<name>」既不在官方索引里，也没声明 update_url`（`jsplugins.py:399-402`）；`包校验失败（sha256 不匹配，可能被劫持或索引过期）: <前12位>…`（`jsplugins.py:549-553`）；下载类错误见下 |
-| `plugin_import` | `pluginImportFile(filePath)` `:797` / `pluginImportData(dataBase64)` `:803` / `pluginImportUrl(url)` `:809` | 三选一：`filePath` / `dataBase64` / `url`（壳层合成一个对象下传，`lib.rs:353-371`） | `{ plugins: PluginInfo[] }`（`commands.py:706`） | Sidecar | `需要 path / data_base64 / url 之一`（`commands.py:706`）；`插件包超过 2MB 上限`、`不是合法的 zip 包: …`、`插件包文件数超过 128 上限`、`插件包解压后超过 8MB 上限`、`zip 内路径不合法: …`、`zip 内不允许的文件（只收 manifest.json 和 .js）: …`、`单文件超过 2MB: …`、`zip 内不允许软链接: …`、`插件包必须恰好含一个 manifest.json`、`manifest.json 不是合法 JSON: …`、`manifest scripts 条目必须是 .js 文件名: …`、`manifest scripts 引用了不存在的文件: …`（`jsplugins.py:475-518`）；`只支持 http(s) 下载地址`、`下载失败（HTTP <code>）`（`jsplugins.py:536-542`） |
-| `plugin_remove` | `pluginRemove(name)` `commands.ts:815` | `name: string` | `{ plugins: PluginInfo[] }`（`commands.py:709-711`） | Sidecar | `插件不存在: <name>`（`jsplugins.py:465`）；通用 |
-| `plugin_set_rule_enabled` | `pluginSetRuleEnabled(plugin, rule, enabled)` `commands.ts:821` | `plugin: string`、`rule: string`、`enabled: boolean` | `{ plugins: PluginInfo[] }`（`commands.py:713-716`） | Sidecar | 通用 |
-| `plugin_test` | `pluginTest(plugin, text)` `commands.ts:906` | `plugin: string`、`text: string` | `{ task_id, status: "pending" }`，之后走 `get_resolve_result` 轮询（与 `resolveShare` 完全同一套，`commands.ts:916-925`） | Sidecar | `插件不存在: <name>`（`jsplugins.py:465`）；`粘贴内容为空`（`commands.py:723`）、`已有 3 个解析任务进行中，请稍后再试`（`commands.py:621`） |
+| `plugin_pull` | `pluginPull(name, indexUrl?)` `commands.ts:894` | `name: string`、`indexUrl?: string` | `{ plugins: PluginInfo[] }`（`commands.py:699`） | Sidecar | `缺少包名`（`commands.py:698`）；`官方索引不可用，「<name>」也没声明更新地址：…`、`「<name>」既不在官方索引里，也没声明 update_url`（`jsplugins.py:399-402`）；`包校验失败（sha256 不匹配，可能是镜像过期）: <前12位>…`（`jsplugins.py:549-553`）；下载类错误见下 |
+| `plugin_import` | `pluginImportFile(filePath)` `:797` / `pluginImportData(dataBase64)` `:803` / `pluginImportUrl(url)` `:809` | 三选一：`filePath` / `dataBase64` / `url`（壳层合成一个对象下传，`lib.rs:353-371`） | `{ plugins: PluginInfo[] }`（`commands.py:702-715`） | Sidecar | `需要 path / data_base64 / url 之一`（`commands.py:714`）；`插件包超过 2MB 上限`、`不是合法的 zip 包: …`、`插件包文件数超过 128 上限`、`插件包解压后超过 8MB 上限`、`zip 内路径不合法: …`、`zip 内不允许的文件（只收 manifest.json 和 .js）: …`、`单文件超过 2MB: …`、`zip 内不允许软链接: …`、`插件包必须恰好含一个 manifest.json`、`manifest.json 不是合法 JSON: …`、`manifest scripts 条目必须是 .js 文件名: …`、`manifest scripts 引用了不存在的文件: …`（`jsplugins.py:475-518`）；`只支持 http(s) 下载地址`、`下载失败（HTTP <code>）`（`jsplugins.py:536-542`） |
+| `plugin_remove` | `pluginRemove(name)` `commands.ts:815` | `name: string` | `{ plugins: PluginInfo[] }`（`commands.py:717-719`） | Sidecar | `插件不存在: <name>`（`jsplugins.py:465`）；通用 |
+| `plugin_set_rule_enabled` | `pluginSetRuleEnabled(plugin, rule, enabled)` `commands.ts:821` | `plugin: string`、`rule: string`、`enabled: boolean` | `{ plugins: PluginInfo[] }`（`commands.py:721-724`） | Sidecar | 通用 |
+| `plugin_test` | `pluginTest(plugin, text)` `commands.ts:906` | `plugin: string`、`text: string` | `{ task_id, status: "pending" }`，之后走 `get_resolve_result` 轮询（与 `resolveShare` 完全同一套，`commands.ts:916-925`） | Sidecar | `插件不存在: <name>`（`jsplugins.py:465`）；`粘贴内容为空`（`commands.py:731`）、`已有 3 个解析任务进行中，请稍后再试`（`commands.py:629`） |
 
-壳层定义：`lib.rs:282-407`。Sidecar 处理函数：`commands.py:651-726`。
+壳层定义：`lib.rs:282-407`。Sidecar 处理函数：`commands.py:659-734`。
 
-约定：**所有会改动插件仓库的命令（import / remove / set_rule_enabled / pull）都返回全量 `{plugins: [...]}`**，前端拿它直接刷新列表，不需要再调一次 `plugin_list`（`commands.py:683-686` 的注释就是这个意思）。`rule_inventory` 是例外，它返回的是 `script_packs` 键。
+约定：**所有会改动插件仓库的命令（import / remove / set_rule_enabled / pull）都返回全量 `{plugins: [...]}`**，前端拿它直接刷新列表，不需要再调一次 `plugin_list`（`commands.py:691-694` 的注释就是这个意思）。`rule_inventory` 是例外，它返回的是 `script_packs` 键。
 
 规则包索引默认地址来自后台参数 `rules.index_url`（`params.py:21-22`、`PARAM_SPECS` 中 `rules` 段），`plugin_pull` 会按索引条目的 `sha256` 校验下载内容，**对不上就不落盘**（`jsplugins.py:548-553`）。
+
+**GitHub 国内镜像开关**（`github.mirror_enabled`，`params.py:245-264`）：打开后，凡是
+`github.com` / `raw.githubusercontent.com` / `api.github.com` / `codeload.github.com` /
+`objects.githubusercontent.com` 这五个主机的地址，都会先经 `utils/ghmirror.py` 改写成
+`<github.mirror_prefix><原始地址>` 的前缀形式去取（`ghmirror.py:1-21` 的模块说明就是这套规则）。
+`candidates(url)` 返回「镜像 → 直连」两条路，调用点**逐条试、失败就退回直连**，且异常文案里
+把两条路的失败原因都拼上（`jsplugins.py:332-369` 索引、`jsplugins.py:548-590` 包下载、
+`ffmpeg_deps.py:_open_stream` 依赖下载、`commands.py:875-916` 更新检查）。
+镜像只改**取字节的路径**：`plugin_pull` 仍按索引里的官方 sha256 校验，替换字节的镜像会被拒落盘
+（`jsplugins.py:576-579`），退回直连重取一次才能把「镜像挂了」和「镜像给错东西」分开。
+非 GitHub 主机（Gitee、站点自己的 CDN）原样通过。
 
 ### 2.7 设置与后台参数（5 条）
 
 | 命令名 | 前端封装 | 入参 | 返回 | 执行层 | 可能的错误 |
 | --- | --- | --- | --- | --- | --- |
 | `get_settings` | `getSettings()` `commands.ts:1018` | 无 | `{ usn, friendly_name, version, media_port, default_device, network_interface, settings }`（`utils/config.py:94-104`） | Sidecar | 通用 |
-| `save_settings` | `saveSettings(settings)` `commands.ts:1023` | `settings: Partial<AppSettings>`；壳层包成 `{"settings": …}`（`lib.rs:562`） | `void` | Sidecar | 通用（`Missing field: 'settings'`）。`friendly_name` 传空串会被静默改回当前值、不阻断其余项保存（`commands.py:744-747`） |
-| `list_network_interfaces` | `listNetworkInterfaces()` `commands.ts:1028` | 无 | `{ interfaces: NetworkInterface[], selected: string }`（`commands.py:731-737`） | Sidecar | 通用 |
-| `get_params` | `getParams()` `commands.ts:1034` | 无 | `{ specs: ParamSpec[] }`（**27 条**，`params.py:35-209`；`specs()` 给每条补 `value` 与 `overridden`，`params.py:215-224`），前端解包成数组 | Sidecar | 通用 |
-| `save_params` | `saveParams(values)` `commands.ts:1041` | `values: Record<key, number\|boolean\|string>`；壳层包成 `{"values": …}`（`lib.rs:589`） | `{ ok: boolean, errors: string[], specs: ParamSpec[] }`（`commands.py:775-783`）。`ok = errors.length === 0` | Sidecar | **不抛错**，逐项校验失败写进 `errors`：`未知参数: <key>`、`<中文标签>: <原因>`（`params.py:261-282`）。成功项照常落库，是部分成功语义 |
+| `save_settings` | `saveSettings(settings)` `commands.ts:1023` | `settings: Partial<AppSettings>`；壳层包成 `{"settings": …}`（`lib.rs:562`） | `void` | Sidecar | 通用（`Missing field: 'settings'`）。`friendly_name` 传空串会被静默改回当前值、不阻断其余项保存（`commands.py:752-755`） |
+| `list_network_interfaces` | `listNetworkInterfaces()` `commands.ts:1028` | 无 | `{ interfaces: NetworkInterface[], selected: string }`（`commands.py:739-744`） | Sidecar | 通用 |
+| `get_params` | `getParams()` `commands.ts:1034` | 无 | `{ specs: ParamSpec[] }`（**32 条**，`params.py:41-265`；`specs()` 给每条补 `value` 与 `overridden`，`params.py:271-279`），前端解包成数组 | Sidecar | 通用 |
+| `save_params` | `saveParams(values)` `commands.ts:1041` | `values: Record<key, number\|boolean\|string>`；壳层包成 `{"values": …}`（`lib.rs:589`） | `{ ok: boolean, errors: string[], specs: ParamSpec[] }`（`commands.py:783-791`）。`ok = errors.length === 0` | Sidecar | **不抛错**，逐项校验失败写进 `errors`：`未知参数: <key>`、`<中文标签>: <原因>`（`params.py:332-340`）。成功项照常落库，是部分成功语义 |
 
-壳层定义：`lib.rs:551-593`。Sidecar 处理函数：`commands.py:728-783`。
+壳层定义：`lib.rs:551-593`。Sidecar 处理函数：`commands.py:736-791`。
 
-后台参数 = `params.py` 里 `PARAM_SPECS` 暴露的可调项，落盘位置是 `hancast_setting.json` 的 `advanced` 键（`params.py:17`，`ADVANCED_KEY`）。**只保存与默认值不同的覆盖项**（`params.py:278-281`），改回默认值即删除覆盖，这样将来版本调默认值时用户能跟着走。
+后台参数 = `params.py` 里 `PARAM_SPECS` 暴露的可调项，落盘位置是 `hancast_setting.json` 的 `advanced` 键（`params.py:17`，`ADVANCED_KEY`）。**只保存与默认值不同的覆盖项**（`params.py:342-345`），改回默认值即删除覆盖，这样将来版本调默认值时用户能跟着走。
 
-27 条按 section 分布：`screencast` 9、`discovery` 4、`player` 3、`http` 3、`failures` 3、`media` 2、`rules` 2、`logs` 1。
+32 条按 section 分布：`screencast` 9、`discovery` 4、`player` 3、`http` 3、`browser` 3、`failures` 3、`media` 2、`rules` 2、`network` 2、`logs` 1。设置页分组标题按 section **首次出现顺序**排（`SettingsView.vue:111-115`），所以新加 section 要同时在 `src/locales/zh-CN.json` 与 `en-US.json` 补一条 `settings.paramsGroup.<section>`，否则界面上露出的是 i18n 键名。
 
-改 `network_interface` 会触发 SSDP 在后台线程重绑网卡（约 1-2 秒），命令本身立即返回（`commands.py:759-769`）—— 前端 `saveSettings` resolve 之后设备列表可能还是旧网卡的结果。
+`network` 段那两条（`github.mirror_enabled` / `github.mirror_prefix`）是**开关 + 前缀**一对：
+开关默认关，前缀默认 `https://gh-proxy.com/`（`params.py:28`，`DEFAULT_GITHUB_MIRROR`）。
+它们的消费点不在设置页而在 `utils/ghmirror.py`，每次请求现读，所以改完不用重启也不影响
+已经在跑的解析任务；改写范围与回退语义见 §2.6 的「GitHub 国内镜像开关」一段。
+
+改 `network_interface` 会触发 SSDP 在后台线程重绑网卡（约 1-2 秒），命令本身立即返回（`commands.py:763-777`）—— 前端 `saveSettings` resolve 之后设备列表可能还是旧网卡的结果。
 
 ### 2.8 日志（3 条）
 
@@ -306,12 +322,12 @@ Device Guard 管的是**接收投屏**方向：外部设备往本机推流时，
 
 | 命令名 | 前端封装 | 入参 | 返回 | 执行层 | 可能的错误 |
 | --- | --- | --- | --- | --- | --- |
-| `check_update` | `checkUpdate(currentVersion, force?)` `commands.ts:1137` | `currentVersion: string`、`force?: boolean`。壳层**硬编码注入** `"sources": ["github","gitee"]`（`lib.rs:606`），前端无法指定源 | `{ has_update, current, latest, url, body, source }`；`body` 截断到 500 字符（`commands.py:928`）。全部源失败时额外带 `"error": "无法连接更新服务器"`（`commands.py:896-903`） | Sidecar | 不抛错，失败信息在返回体的 `error` 键里（前端 `UpdateInfo` 类型没有这个字段，见 §6.6）。单源异常被 `logger.warning` 吞掉后 continue（`commands.py:890-892`） |
-| `ignore_update_version` | `ignoreUpdateVersion(version)` `commands.ts:1142` | `version: string` | `boolean`；空串返回 `false`（`commands.py:933-940`） | Sidecar | 通用 |
+| `check_update` | `checkUpdate(currentVersion, force?)` `commands.ts:1137` | `currentVersion: string`、`force?: boolean`。壳层**硬编码注入** `"sources": ["github","gitee"]`（`lib.rs:606`），前端无法指定源 | `{ has_update, current, latest, url, body, source }`；`body` 截断到 500 字符（`commands.py:951`）。**只有真的经镜像取到版本信息时才多带一个 `via: "镜像"`**（`commands.py:910-911`），直连命中则没有这个键，前端 `UpdateInfo` 也不读它——它是给日志和探针看的。全部源失败时额外带 `"error": "无法连接更新服务器"`（`commands.py:918-927`） | Sidecar | 不抛错，失败信息在返回体的 `error` 键里（前端 `UpdateInfo` 类型没有这个字段，见 §6.6）。单源异常被 `logger.warning` 吞掉后 continue（`commands.py:913-916`） |
+| `ignore_update_version` | `ignoreUpdateVersion(version)` `commands.ts:1142` | `version: string` | `boolean`；空串返回 `false`（`commands.py:956-962`） | Sidecar | 通用 |
 
-壳层定义：`lib.rs:595-624`。Sidecar 处理函数：`commands.py:844-940`。
+壳层定义：`lib.rs:595-624`。Sidecar 处理函数：`commands.py:860-962`。
 
-版本号比较走 SemVer 元组，含预发布位（`commands.py:795-843`，`_parse_version`）。超时：GitHub API 1 秒、Gitee 3 秒（`commands.py:860-869`）—— 手动检查最坏情况约 4 秒返回。
+版本号比较走 SemVer 元组，含预发布位（`commands.py:804-851`，`_parse_version`）。超时：GitHub API 1 秒、Gitee 3 秒（`commands.py:875-884`）—— 手动检查最坏情况约 4 秒返回。**GitHub 走镜像时那 1 秒预算换成 3 秒**（`commands.py:892-895`）：国内镜像的往返本来就在 1~2 秒，照抄 1 秒等于开关无效。
 
 另有一条**不经过前端**的启动检查：壳层 spawn 一个后台任务，睡 3 秒等 Sidecar 就绪，然后只查 `["github"]` 一个源，命中就 `emit("update-available")`（`lib.rs:1201-1241`）。微软商店版本直接跳过（`lib.rs:1204-1207`）。
 
@@ -757,7 +773,7 @@ async function toggleAutostart() {
 
 ### 6.6 `UpdateInfo` 缺 `error`
 
-`_check_update` 在所有源都失败时返回 `{"error": "无法连接更新服务器"}`（`commands.py:903`），`types/update.ts:4-11` 没有这个字段，`source` 也会被声明成 `'github'|'gitee'` 而实际会是 `''`。
+`_check_update` 在所有源都失败时返回 `{"error": "无法连接更新服务器"}`（`commands.py:926`），`types/update.ts:4-11` 没有这个字段，`source` 也会被声明成 `'github'|'gitee'` 而实际会是 `''`。
 
 ### 6.7 两个 `hancast.log`
 
@@ -772,7 +788,7 @@ async function toggleAutostart() {
 
 ### 6.9 `save_guard_settings` 与 `save_settings` 的解包方式不一致
 
-- `save_settings`：壳层包一层 → `json!({"settings": settings})`（`lib.rs:562`），Python 读 `params["settings"]`（`commands.py:739`）。
+- `save_settings`：壳层包一层 → `json!({"settings": settings})`（`lib.rs:562`），Python 读 `params["settings"]`（`commands.py:747`）。
 - `save_guard_settings`：壳层**原样下传** → `.send_command("save_guard_settings", settings)`（`lib.rs:691`），Python 直接读 `params["enabled"]`（`commands.py:986`）。
 
 同样是「保存一个设置对象」，两条命令的信封结构不同。`start_screen_cast`（`lib.rs:748`）和 `get_logs`（`lib.rs:788`）也是原样下传。
@@ -836,7 +852,7 @@ Sidecar 实现了（`commands.py:381-389`）并注册在 `_commands` 里（`comm
 | 37 | `get_settings` | 取应用设置 | SC |
 | 38 | `save_settings` | 存应用设置（改网卡会后台重启 SSDP） | SC |
 | 39 | `list_network_interfaces` | 枚举可选网卡及当前选定项 | SC |
-| 40 | `get_params` | 取 30 条后台参数登记表 + 当前值 | SC |
+| 40 | `get_params` | 取 32 条后台参数登记表 + 当前值 | SC |
 | 41 | `save_params` | 存后台参数，逐项校验、部分成功 | SC |
 | 42 | `check_update` | 检查新版本（壳层硬编码 github + gitee 双源） | SC |
 | 43 | `ignore_update_version` | 记录「此版本不再提示」 | SC |

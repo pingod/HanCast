@@ -26,6 +26,7 @@ from .utils.config import Config
 from . import params as app_params
 from .security.guard import DeviceGuard
 from .utils.mpv_manager import MpvManager
+from .utils import ghmirror
 from .utils import browser_channel
 from .utils import protocol_io
 from .screencast import ScreenCastManager
@@ -887,25 +888,32 @@ class CommandHandler:
             if source not in source_configs:
                 continue
             api_url, timeout = source_configs[source]
-            try:
-                result = self._fetch_github_release(api_url, current_version, timeout=timeout)
-                if result:
-                    # 检查是否被用户忽略（除非 force=True）
-                    if not force and ignored_version and result["latest"] == ignored_version:
-                        logger.info(f"Update {result['latest']} ignored by user")
-                        return {
-                            "has_update": False,
-                            "current": current_version,
-                            "latest": result["latest"],
-                            "url": "",
-                            "body": "",
-                            "source": source,
-                        }
-                    result["source"] = source
-                    return result
-            except Exception as e:
-                logger.warning(f"Update check failed ({source}): {e}")
-                continue
+            # 镜像开关只改写 GitHub 那条源（Gitee 不是 GitHub，原样通过）
+            for via, fetch_url in ghmirror.candidates(api_url):
+                # 直连留 1 秒是给启动检查的（GitHub 不通时不该拖住界面）；
+                # 走镜像时国内往返本来就 1~2 秒，照抄 1 秒等于开关无效
+                wait = 3 if via != "直连" else timeout
+                try:
+                    result = self._fetch_github_release(fetch_url, current_version, timeout=wait)
+                    if result:
+                        # 检查是否被用户忽略（除非 force=True）
+                        if not force and ignored_version and result["latest"] == ignored_version:
+                            logger.info(f"Update {result['latest']} ignored by user")
+                            return {
+                                "has_update": False,
+                                "current": current_version,
+                                "latest": result["latest"],
+                                "url": "",
+                                "body": "",
+                                "source": source,
+                            }
+                        result["source"] = source
+                        if via != "直连":
+                            result["via"] = via
+                        return result
+                except Exception as e:
+                    logger.warning(f"Update check failed ({source}/{via}): {e}")
+                    continue
 
         # 所有源都失败或无更新
         return {

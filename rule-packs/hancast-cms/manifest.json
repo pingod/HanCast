@@ -1,0 +1,7 @@
+{
+  "name": "hancast-cms",
+  "version": "1.0.0",
+  "author": "HanCast",
+  "description": "采集站通用兜底规则（不认域名）：苹果CMS/maccms 的 player_aaaa 编码地址、myui 模板的 share 播放器页相对地址。站点专属规则没命中时最后试它。",
+  "scripts": ["main.js"]
+}

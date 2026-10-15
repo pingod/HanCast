@@ -78,6 +78,7 @@
   "settings.paramsGroup.logs": "日志",
   "settings.paramsGroup.rules": "解析规则",
   "settings.paramsGroup.failures": "解析失败台账",
+  "settings.paramsGroup.network": "GitHub 加速",
   "settings.plugins": "解析插件",
   "settings.pluginsToggle": "管理解析插件",
   "settings.pluginsHint": "解析能力全部来自规则包：程序本身不带任何站点规则。JS 规则包（ZIP）为特定站点注册取流规则，导入即生效、改动热载。",

@@ -1,6 +1,6 @@
 # Changelog
 
-> 最后校对：2026-10-15，对应版本 v2.3.11（`package.json:4`）
+> 最后校对：2026-10-15，对应版本 v2.3.12（`package.json:4`）
 
 本文件记录 HanCast 的版本历史。口径说明：
 
@@ -10,6 +10,27 @@
 - 新加版本时**同一次提交**里补这里，并按 [docs/README.md](docs/README.md) §4 的约定同步对应文档。
 
 ---
+
+## v2.3.12 — 2026-10-15（本轮发布提交）
+
+采集站那批失败页现在有包可装了；GitHub 连不通时有镜像开关；报错文案不再被界面砍掉后半句；老程序随包的 FFmpeg 残留从两台机器上清干净。
+
+- **新官方规则包 `hancast-cms` 1.0.0**（通用兜底，不认域名），来源就是 `.68` 解析失败台账里的地址。JS 包 `rule-packs/hancast-cms/main.js`（128 行）两条规则，都是 `hosts: ['*']`、`stage: 'page'`、`priority: 8`：苹果CMS/maccms 的 `player_aaaa` 编码地址（`:50-53`）、myui 模板 share 播放器页的相对地址（`:103-106`）。索引 `rule-packs/index.json` 加在第 2 条，产物 `rule-packs/dist/hancast-cms-1.0.0.zip`（sha256 `7d3caa03…`）走 main 分支 raw 路径——程序里点「检查规则包更新」就能下载装上。
+- **`hosts: ["*"]` 的语义是「兜底作用域」，靠排序让位而不是 priority**（`media/rules/base.py:35,129-133,160-170`、`declarative.py:80-91`）：`matching(url, stage)` 把命中的规则切成「站点专属在前、通用兜底在后」两段返回，两组内部各自保持 `(priority, name)`。装了 B 站/抖音精确规则的站永远先试精确的，只有全都拿不下才轮到通用规则，两边不会互相遮挡。声明式规则的通配只免掉域名判定，`path_re` 依然生效。**没有新增 manifest 字段、没有新增用户开关**，解不出来时的报错与台账记录路径一字未改——「通用规则还是不行再报错和记录」就是这个次序。
+- **GitHub 国内镜像开关**（新文件 `utils/ghmirror.py`，83 行；`rewrite()` `:65`、`candidates()` `:73`）：
+  - 两个新后台参数（`params.py:245-264`，section 键 `network`，设置页分组标题「GitHub 加速」/ "GitHub acceleration"）：`github.mirror_enabled`（bool，**默认关**）与 `github.mirror_prefix`（text，默认 `https://gh-proxy.com/`，`params.py:28`）。前缀做成参数而不是常量是有实测依据的：gh-proxy 对 raw 索引 / dist zip / releases/download / `api.github.com` 四种形态全通，而 ghfast.top 前三样通、`api` 回 403——我们不能替用户钉死一个镜像。
+  - **改写只发生在一个入口**：`candidates(url)` 返回 `[("镜像", 前缀+原地址), ("直连", 原地址)]`，开关关掉就只剩直连；只有 GitHub 那 5 个主机会被改写，Gitee 等自建源原样通过。四个触点各自循环它：规则包索引 `jsplugins.py:352`、包 zip 下载 `jsplugins.py:562`、检查新版本 `commands.py:892`、FFmpeg 按需下载 `ffmpeg_deps.py:334`。
+  - **失败自动回退，两条原因都留**：`索引拉取失败: 镜像 …；直连 …`，用户分得清「镜像挂了」和「根本没网」。走镜像时若 sha256 对不上也换下一条路（`import_url` 的 docstring `:548-556` 写明了为什么退回直连不构成放宽）。
+  - **镜像是加速器，不是新的信任边界**：sha256 始终只认官方索引里那一份，镜像换包会被当场拦下——所以改前缀不需要重新签名任何东西；但把 `rules.index_url` 换成自建源就必须连 sha256 一起照抄（对照表在 [rule-packs/README.md](rule-packs/README.md) §2.3）。
+  - 附带调整：`check_update` 直连的单次预算仍是 1 秒（GitHub 不通时不该拖住界面），**走镜像放宽到 3 秒**（`commands.py:895`）——国内往返本身 1~2 秒，照抄 1 秒等于开关白开。
+- **报错信息不再被界面截断**：`.media-input__error` 从 `overflow:hidden + text-overflow:ellipsis + white-space:nowrap` 改成 `white-space:normal + overflow-wrap:anywhere + line-height:1.45`（`MediaInput.vue:697-707`）。失败原因是一整句话（站点 + 状态码 + 下一步动作），截断等于把最有用的后半句丢掉；而长 URL 里没有可断点，光 `normal` 折不下来，必须配 `overflow-wrap`。
+- **旧程序内置 FFmpeg 的残留清理**：macOS 删掉 `src-tauri/target/debug/ffmpeg/`（0 字节桩，gitignore 的构建目录里的遗留，其它搜到的 ffmpeg 都属于第三方软件，没动）；Windows 测试机 `.68` 删掉 `C:\Users\Administrator\AppData\Local\HanCast\ffmpeg\`（≤v2.3.10 随包那份 `ffmpeg.exe`，82,797,568 字节），删后全目录复扫再无 HanCast 的 ffmpeg 文件。系统 ffmpeg 确认还在两处（`WinGet\Links` 与 yt-dlp.FFmpeg 包），删除后检测报 `ok=True source=system path=…\WinGet\Links\ffmpeg.exe`、版本 `8.1.2-full_build`，ffprobe 同目录一并认成 `source=system`。
+  - 这正是 v2.3.11「升级遗留」预告的场景落地：那台机器 `hancast_setting.json` 里 `screencast.ffmpeg_path` 仍指向刚被删掉的路径，而 `set_ffmpeg_path` 只能设不能清（[docs/屏幕投屏.md](docs/屏幕投屏.md) §5.1），值会一直留着。留着的代价只有每次检测多一次失败的 `-version` 子进程和一条 `Configured FFmpeg path no longer valid` 告警——`ffmpeg_manager._configured()`（`:416-427`）先校验再把结果交给 `status()`，死路径按设计降级到「系统已装 / 本程序下载」两层，功能没有锁死。
+- **数字口径**：`PARAM_SPECS` 30 → **32**（`params.py:41-265`；分组 screencast 9 / discovery 4 / player 3 / http 3 / browser 3 / failures 3 / media 2 / rules 2 / **network 2** / logs 1）；官方规则包 3 → **4** 个。命令面本轮未动（Rust `#[tauri::command]` 66 条 `lib.rs:1373-1440` / Sidecar 注册 59 条 `commands.py:110-197` / `commands.ts` 导出 65 个）。
+- **新入库探针**（登记在 [tools/README.md](tools/README.md) §1.5/§1.6）：`tools/verify-rule-pack-live.py`（联网跑真实失败站点——采集站换皮就是静默失效，每次发版前重跑；已知失败站以 SKIP 记着，不许悄悄删判据）、`tools/verify-github-mirror-live.py`（四条契约：镜像可用 / 字节逐位一致 / 镜像死了能回退 / 关掉开关不走镜像。**只读**：开关用 `params` 的内存覆盖位演，落盘的 `hancast_setting.json` 一个字节都不动）、`tools/verify-error-wrap-ui.mjs`（按几何判据量折行与溢出，不比对文案）。`verify-params-ui.mjs` 随之扩到四类控件（新增 text）。
+- **验收（本轮真实输出，打 tag 之前做完）**：定向 `pytest tests/test_params.py tests/test_jsplugins.py tests/test_share_resolver.py tests/test_ghmirror.py` → **139 passed**；`node tools/verify-error-wrap-ui.mjs` **ALL PASS**（报错行折成 4 行 / 宽 336px，面板内宽 388px，左右边界都不溢出，截图 `/tmp/hancast-error-wrap.png`）；`node tools/verify-params-ui.mjs` **ALL PASS**（分组标题按 section 出现「屏幕投屏 / 浏览器播放器 / 解析规则 / GitHub 加速」，text 控件带上镜像前缀）；`tools/verify-github-mirror-live.py` **ALL PASS** 共 17 条（镜像索引与直连逐字节一致 `1352 vs 1352`、镜像 zip 对得上官方 sha256 `70e223a6ef25` 且能正常解包、`import_url` 经镜像装包成功、镜像与直连给出同一个最新版本 `v2.2.20`、把镜像地址改死之后仍能取到索引与装包并留下回退日志、关掉开关不走镜像）；`tools/verify-rule-pack-live.py` 装入 `hancast-cms-1.0.0.zip` 认出 2 条规则，并把 `.68` 台账里两条失败页解出可播直链——`66dpw.vip` → `https://vv.jisuzyv.com/play/ZdPgAx4b/index.m3u8`、`lvsc168.com` → `https://cdn.ryplay11.com/20240930/1543_e77c4196/2000k/hls/index.m3u8`，第三条 `qiakon.com` 按 SKIP 记（XCDN PoW + 源站 502，不是规则缺项）。`vue-tsc --noEmit` rc=0；`python3 tools/audit-doc-refs.py` 合计引用 **2883 处、可疑 0 处**。
+- **文档同轮修订**：AGENTS.md、README.md（32 项后台参数 + 解析规则包两条新说明）、docs/分享解析规则.md、docs/解析插件开发指南.md、rule-packs/README.md、docs/故障排查.md（§7.2 加「先开镜像开关」为第 0 步与新判据，§8.3 新增报错截断的修法）、docs/README.md、docs/HanCast-Frontend-API.md、docs/开发指南.md、docs/构建与发布.md、docs/架构总览.md、docs/屏幕投屏.md、docs/投屏确认.md、hancast-backend/README.md、tools/README.md。参数表插了 2 条导致行号整体后移，`discovery.guard_mx`、UA 默认值、`rules.index_timeout_s` 等引用按**被引原文逐条重导**后修，不是统一加偏移。
+- **本轮没闭合的口子（别当成已验）**：① `verify-github-mirror-live.py` 与 `verify-rule-pack-live.py` 跑的是**当时线上的 3 包索引**，`hancast-cms` 要等本轮 push 到 main 才在线上——程序内拿到 4 包的判据留到 tag 之后复跑。② 镜像开关只验到源码层与联网层，**产物层还没跑**：本轮把新增的 `utils/ghmirror.py` 补进了 `accept-macos-artifact.sh:35-44` 的逐文件 sha256 清单（29 → **30 项**，同步改了 [docs/构建与发布.md](docs/构建与发布.md) §6.5 与 [tools/README.md](tools/README.md) §2.2 的计数口径），但这一判据要等 CI 出包后跑 `accept-macos-artifact.sh 2.3.12` 才闭合。③ 公共镜像自己会抽风：本轮第一次跑就撞上 `ProxyError: gh-proxy.com … RemoteDisconnected`（本机 9565 间歇），ALL PASS 是重试那一次——默认值不等于 SLA。④ 通配兜底只覆盖「一套程序换域名再开一家」的采集站，带 PoW/签名风控的站仍需专属规则（`qiakon.com` 是现例）。⑤ 前端截断的判据来自 Vite dev server + mock 的浏览器实测，产物内前端 `strings` 拿不到（同 v2.3.10 那条限制）。
 
 ## v2.3.11 — 2026-10-15（本轮发布提交）
 

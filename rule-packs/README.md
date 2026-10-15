@@ -2,7 +2,7 @@
 
 > 这个目录回答一个问题：**官方解析规则包的「源 / 产物 / 索引」三件套是怎么组织的、怎么打包发布、用户机器上怎么装到**。写规则包的 API 细节不在这里。
 >
-> 最后校对：2026-10-15，对应版本 v2.3.6（`package.json:4`）
+> 最后校对：2026-10-15，对应版本 v2.3.12（`package.json:4`）
 
 ---
 
@@ -13,7 +13,7 @@
 | 规则包 | 一个 zip：`manifest.json` + 若干 `.js`，在 sidecar 的 QuickJS 沙箱里注册站点解析规则 |
 | Sidecar | Python 后台进程（`hancast-backend/`），由壳层用 stdin/stdout JSON 驱动 |
 | 壳层 | Rust/Tauri 那一层（`src-tauri/`），**不参与下载与校验**，只转发命令 |
-| 后台参数 | `hancast-backend/hancast_sidecar/params.py` 的 `PARAM_SPECS` 登记表暴露的可调项（当前 26 条，`params.py:35-201`） |
+| 后台参数 | `hancast-backend/hancast_sidecar/params.py` 的 `PARAM_SPECS` 登记表暴露的可调项（当前 32 条，`params.py:41-265`） |
 | 声明式规则 | `share_rules/*.json` 那种不写代码的站点规则，与规则包同一条管线（见 `docs/分享解析规则.md`） |
 
 **先记住这条产品契约**：程序里**没有任何编译进去的站点规则**，全新安装就是不解析任何站点，解析能力只能来自用户装的规则包（`hancast-backend/hancast_sidecar/media/rules/jsplugins.py:16-19`、`hancast-backend/scripts/build_sidecar.py:248-249`、`src/locales/zh-CN.json:81`）。所以这个目录不是「附属资源」，而是官方解析能力的**唯一出货口**。
@@ -30,11 +30,15 @@ rule-packs/
 ├── hancast-douyin/
 │   ├── manifest.json
 │   └── main.js
+├── hancast-cms/
+│   ├── manifest.json
+│   └── main.js
 ├── hancast-template/
 │   ├── manifest.json
 │   └── main.js
 ├── dist/                      ← 产物：tools/build-rule-packs.py 生成，入库
 │   ├── hancast-bilibili-1.1.0.zip
+│   ├── hancast-cms-1.0.0.zip
 │   ├── hancast-douyin-1.1.0.zip
 │   └── hancast-template-1.1.0.zip
 └── index.json                 ← 索引：设置页「检查规则包更新」读的就是它
@@ -83,7 +87,7 @@ dist/
 !rule-packs/dist/*.zip
 ```
 
-（`.gitignore:49-53`，注释是仓库原文。）换句话说：**zip 不提交上去，用户点「安装」就是 404**。提交时源目录、`dist/*.zip`、`index.json` 必须一起进（`docs/解析插件开发指南.md:328-329`）。
+（`.gitignore:49-53`，注释是仓库原文。）换句话说：**zip 不提交上去，用户点「安装」就是 404**。提交时源目录、`dist/*.zip`、`index.json` 必须一起进（`docs/解析插件开发指南.md:330-331`）。
 
 ### 1.4 安装后的落点
 
@@ -116,17 +120,17 @@ dist/
 
 ### 2.1 `manifest.json`
 
-三个官方包都是同一个 5 键形状（`name` / `version` / `author` / `description` / `scripts`）（`rule-packs/hancast-bilibili/manifest.json:1-7`、`hancast-douyin/manifest.json:1-7`、`hancast-template/manifest.json:1-7`）。约束分两处：**打包期**由 `tools/build-rule-packs.py` 挡，**导入期**由 `jsplugins.py` 挡，两边口径一致。
+四个官方包都是同一个 5 键形状（`name` / `version` / `author` / `description` / `scripts`）（`rule-packs/hancast-bilibili/manifest.json:1-7`、`hancast-douyin/manifest.json:1-7`、`hancast-cms/manifest.json:1-7`、`hancast-template/manifest.json:1-7`）。约束分两处：**打包期**由 `tools/build-rule-packs.py` 挡，**导入期**由 `jsplugins.py` 挡，两边口径一致。
 
 | 字段 | 类型 | 必填 | 含义 | 约束（含证据） |
 | --- | --- | --- | --- | --- |
 | `name` | string | ✓ | 包标识，同时是**用户机器上的安装目录名** | 必须等于源目录名，否则打包报错（`build-rule-packs.py:65-68`，理由：落盘用 `manifest.name`，不一致时索引里的包名和用户目录名对不上）；导入期还要求匹配 `^[A-Za-z0-9_-]{1,64}$`（`jsplugins.py:48`、`:506-509`） |
 | `version` | string | ✓ | 包版本，决定 zip 文件名与「是否提示升级」 | 不能为空（`build-rule-packs.py:69-71`）；进 zip 文件名（`:109-110`、`:127`）；更新比对按 `_version_key` 拆数字段比较，非数字段按 0、缺段不报错（`jsplugins.py:73-77`、`:383`） |
-| `author` | string | | 作者名，设置页展示 | 无校验，缺失按空串（`jsplugins.py:173`、`:256`）；三个官方包都填 `"HanCast"` |
+| `author` | string | | 作者名，设置页展示 | 无校验，缺失按空串（`jsplugins.py:173`、`:256`）；四个官方包都填 `"HanCast"` |
 | `description` | string | | 一句话说明，设置页展示，**并被抄进 `index.json`** | 无校验（`jsplugins.py:174`；`build-rule-packs.py:126`、`:151`） |
 | `scripts` | string[] | ✓\* | 要加载的 `.js` 文件名列表 | 不能为空（`build-rule-packs.py:72-75`）；每个文件必须真存在（`:76-78`）；条目必须是 `.js` 结尾的**纯文件名**，带路径或以 `.` 开头都拒（`jsplugins.py:512-514`、`:209-211`）；zip 内顺序固定为 manifest 在前、脚本按名排序（`build-rule-packs.py:82-87`） |
 | `main` | string | | `scripts` 的旧写法，二者取一 | 两处回退逻辑一致：`scripts` 缺了就取 `[manifest["main"]]`（`build-rule-packs.py:72-73`；`jsplugins.py:202-203`、`:510-511`）；两者都没有时，导入端按文件名排序加载包内全部 `.js`（`jsplugins.py:204-206`），而打包端直接报错（`build-rule-packs.py:74-75`）——**官方包必须显式声明** |
-| `update_url` | string | | 包自己的 zip 下载地址 | 官方索引里查不到这个包时，`pull` 退回用它（`jsplugins.py:176`、`:400`、`:401-402`）；三个官方包都不写，因为它们就在索引里 |
+| `update_url` | string | | 包自己的 zip 下载地址 | 官方索引里查不到这个包时，`pull` 退回用它（`jsplugins.py:176`、`:400`、`:401-402`）；四个官方包都不写，因为它们就在索引里 |
 
 \* `scripts` 与 `main` 至少要有一个；官方包一律写 `scripts`。
 
@@ -155,37 +159,55 @@ schema 就是一个 `packs` 数组，5 个键（`rule-packs/index.json:1-25`，�
 | `name` | string | 包名 | 不匹配 `^[A-Za-z0-9_-]{1,64}$` 的条目**直接丢掉**，不拖垮整页检查更新（`jsplugins.py:358-364`） |
 | `version` | string | 索引里的版本 | 与本机已装版本比大小，高了才进「可更新」堆（`jsplugins.py:383-384`） |
 | `url` | string | zip 下载地址 | **必须 https**，否则条目被丢掉（`jsplugins.py:363-364`）。理由：这是「下载来就要执行里面 JS」的入口，不给明文地址留门（`:333-336` docstring） |
-| `sha256` | string | zip 的 SHA-256 | 硬约束：下载完先比摘要，不符就报「包校验失败（sha256 不匹配，可能被劫持或索引过期）」且**不落盘**（`jsplugins.py:548-553`） |
+| `sha256` | string | zip 的 SHA-256 | 硬约束：下载完先比摘要，不符就报「包校验失败（sha256 不匹配，可能是镜像过期）」且**不落盘**（`jsplugins.py:574-579`） |
 | `description` | string | 展示文案 | 进设置页的两堆列表（`jsplugins.py:379-380`；`src/components/PluginSettings.vue:402`、`:417`） |
 
 **索引里没有的东西，别指望它出现**：
 
 | 参数 | 在不在 `index.json` | 真源 |
 | --- | --- | --- |
-| 索引地址本身 | ✗ | 后台参数 `rules.index_url`，默认值 `params.DEFAULT_RULES_INDEX`（`params.py:19-22`、`:182-192`）；`jsplugins.index_url()` 只读它，别处不再抄一遍（`jsplugins.py:55-61`） |
-| 拉索引的超时 | ✗ | 后台参数 `rules.index_timeout_s`，默认 40s、min 5、max 120（`params.py:196-200`）；`jsplugins.index_timeout()` 读它，读不到才回退 40.0（`jsplugins.py:64-70`） |
-| 包体积上限等 | ✗ | 写死在导入端：zip 2MB / 文件数 128 / 解压后 8MB / 单文件 2MB（`jsplugins.py:44-47`） |
+| 索引地址本身 | ✗ | 后台参数 `rules.index_url`，默认值 `params.DEFAULT_RULES_INDEX`（`params.py:19-22`、`:222-231`）；`jsplugins.index_url()` 只读它，别处不再抄一遍（`jsplugins.py:56-62`） |
+| 拉索引的超时 | ✗ | 后台参数 `rules.index_timeout_s`，默认 40s、min 5、max 120（`params.py:236-240`）；`jsplugins.index_timeout()` 读它，读不到才回退 40.0（`jsplugins.py:65-71`） |
+| GitHub 加速镜像 | ✓（v2.3.12） | 后台参数 `github.mirror_enabled`（默认关）+ `github.mirror_prefix`（默认 `https://gh-proxy.com/`），`params.py:245-264`；**不改这份索引，也不改任何 sha256**，只在发请求前给 GitHub 主机加前缀（`utils/ghmirror.py`） |
+| 包体积上限等 | ✗ | 写死在导入端：zip 2MB / 文件数 128 / 解压后 8MB / 单文件 2MB（`jsplugins.py:45-48`） |
 
-> `rules.index_timeout_s` 为什么默认 40 而不是 15：`params.py:193-195` 记了 2026-10-14 的实测——同一条索引冷启动首次 15s 直接 ReadTimeout，隧道热起来才 5.7–11.2s。卡在 15s 等于墙内点了必失败，而这个失败看起来像「没有更新」，用户不会怀疑是超时。
+> `rules.index_timeout_s` 为什么默认 40 而不是 15：`params.py:233-235` 记了 2026-10-14 的实测——同一条索引冷启动首次 15s 直接 ReadTimeout，隧道热起来才 5.7–11.2s。卡在 15s 等于墙内点了必失败，而这个失败看起来像「没有更新」，用户不会怀疑是超时。
 
-**索引地址允许 http，包地址不允许**：`params.py:185-186` 的注释写明——索引本身允许 http（内网镜像是正当用法），被强制 https 的是清单里每个包的下载地址。`fetch_index` 也照这个口径：索引地址只要求 `http(s)` 前缀（`jsplugins.py:343-344`），条目 `url` 必须 https（`:363-364`）。用自己的镜像时必须照抄官方条目的 sha256，否则装包被摘要拦下（`params.py:187-189`）。
+### 2.3 两条走镜像的路，代价不一样
+
+| 做法 | 改什么 | 要不要重签 sha256 |
+| --- | --- | --- |
+| 换 `rules.index_url` 指向自己的镜像 | 索引清单本身 | **要**——镜像里的 zip 条目得写自己的 https 地址，摘要照抄官方，否则 `pull` 当场拒落盘（`jsplugins.py:574-579`） |
+| 开 `github.mirror_enabled` | 只在请求前给 `github.com` / `raw.githubusercontent.com` / `api.github.com` / `codeload.github.com` / `objects.githubusercontent.com` 五个主机加前缀 | **不用**——清单与字节来源都没变，索引里那条官方地址仍是唯一真相 |
+
+开关覆盖的是**程序运行时对 GitHub 的四类请求**：规则包索引、规则包 zip、检查新版本、FFmpeg 按需下载。
+镜像失败一律自动退回直连，并把两条路的失败原因拼进同一条报错（`jsplugins.py:350-369` 索引、
+`jsplugins.py:549-590` 包下载、`commands.py:892-916` 更新检查、`hancast-backend/hancast_sidecar/utils/ffmpeg_deps.py`
+的 `_open_stream`）——只说「拉取失败」，用户分不清是镜像挂了还是线路挂了，而这两种动作完全不同。
+前缀可改是实测逼的：2026-10-15 本机不挂代理，`gh-proxy.com` 对 raw / dist zip /
+releases/download / `api.github.com` 四种形态都成立且字节与直连逐位一致，而 `ghfast.top`
+在 `api.github.com` 上回 403（探针 `tools/verify-github-mirror-live.py`）。
+
+**索引地址允许 http，包地址不允许**：`params.py:225-226` 的注释写明——索引本身允许 http（内网镜像是正当用法），被强制 https 的是清单里每个包的下载地址。`fetch_index` 也照这个口径：索引地址只要求 `http(s)` 前缀（`jsplugins.py:348`），条目 `url` 必须 https（`:377`）。用自己的镜像时必须照抄官方条目的 sha256，否则装包被摘要拦下（`params.py:227-231`）。
 
 ---
 
-## 3. 三个官方包现状
+## 3. 四个官方包现状
 
 | 包 | 版本 | 一句话能力 | `hosts` / `stage` | 证据 |
 | --- | --- | --- | --- | --- |
 | `hancast-bilibili` | 1.1.0 | B 站取流：iOS APP → TV APP → Web HTML5 三条线路依次试，appkey/appsec 做 md5 签名，反爬 Cookie（buvid3/buvid4）落盘缓存 1 小时复用；默认投 1080P（`qn=80`）并按接口回报的 `accept_quality` 给出可切档位 | `['bilibili.com','bilibili.tv','b23.tv']` / `'url'` | `index.json:3-9`；`rule-packs/hancast-bilibili/main.js:1-8`（docstring）、`:10-13`（REFERER / TTL）、`:16-24`（`QN_LABELS` 六档 + `DEFAULT_QN='80'`）、`:26-30`（`wantedQn` 白名单，脏值污染不了签名 query）、`:117-121`（`registerRule`） |
-| `hancast-douyin` | 1.1.0 | 抖音分享页解析：先空手领一次 `ttwid` 券（没这张券拿到的是验证码中间页），再从 `www.iesdouyin.com/share/video/<id>/` 的内嵌 JSON 里抠 `play_addr`，并对抖音按请求抽风做重试 | `['douyin.com','iesdouyin.com']` / `'page'` | `index.json:10-16`；`rule-packs/hancast-douyin/main.js:1-7`（docstring）、`:9-10`（`SHARE_ROOT` / `PLAY_ADDR` 正则）、`:12-16`（`registerRule`）、`:23-27`（领券，`host.getString` 共用解析会话）、`:29-30`（重试） |
-| `hancast-template` | 1.1.0 | **教学样例，不解析任何真实站点**：两条规则演示 `stage:'page'` 的正文正则取流与 `stage:'url'` 的「先调接口再取流」，含签名原语、缓存、多画质档位契约 | `['hancast-template.invalid']` ×2 / `'page'`、`'url'` | `index.json:17-23`（描述明写「只匹配保留域名 .invalid，不参与真实解析」）；`rule-packs/hancast-template/main.js:1-34`（一整段契约 docstring）、`:36-62`（第一条）、`:64-117`（第二条）、`:39`/`:67`（`.invalid` 保留 TLD） |
+| `hancast-cms` | 1.0.0 | **采集站通用兜底（不认域名）**：两条 `page` 规则覆盖真实在跑的两类播放器写法——苹果CMS/maccms 正文里的 `player_aaaa`（按 `encrypt` 解 URL 转义 / base64），以及 myui 模板外挂 share 播放器页里 `var main = "/…/index.m3u8?sign=…"` 这种**只拼相对路径**的写法。取证来自 Windows 上的解析失败台账 | `['*']` ×2 / `'page'` | `index.json:10-16`；`rule-packs/hancast-cms/main.js:1-17`（为什么用 `hosts: ["*"]`、抛异常只等于「这条不适用」）、`:19`（`STREAM_EXT` 扩展名白名单）、`:22-25`（`fieldOf`）、`:28-40`（花括号配对抠 JSON，跳过字符串与转义）、`:48-53`（第一条 `registerRule`，`priority: 8`）、`:101-106`（第二条） |
+| `hancast-douyin` | 1.1.0 | 抖音分享页解析：先空手领一次 `ttwid` 券（没这张券拿到的是验证码中间页），再从 `www.iesdouyin.com/share/video/<id>/` 的内嵌 JSON 里抠 `play_addr`，并对抖音按请求抽风做重试 | `['douyin.com','iesdouyin.com']` / `'page'` | `index.json:17-23`；`rule-packs/hancast-douyin/main.js:1-7`（docstring）、`:9-10`（`SHARE_ROOT` / `PLAY_ADDR` 正则）、`:12-16`（`registerRule`）、`:23-27`（领券，`host.getString` 共用解析会话）、`:29-30`（重试） |
+| `hancast-template` | 1.1.0 | **教学样例，不解析任何真实站点**：两条规则演示 `stage:'page'` 的正文正则取流与 `stage:'url'` 的「先调接口再取流」，含签名原语、缓存、多画质档位契约 | `['hancast-template.invalid']` ×2 / `'page'`、`'url'` | `index.json:24-30`（描述明写「只匹配保留域名 .invalid，不参与真实解析」）；`rule-packs/hancast-template/main.js:1-34`（一整段契约 docstring）、`:36-62`（第一条）、`:64-117`（第二条）、`:39`/`:67`（`.invalid` 保留 TLD） |
 
 几点值得单独说：
 
 - **模板包留在官方索引里是刻意的**：它是用户点「检查规则包更新」时能一键装到手的活文档，比 `docs/` 里的代码片段更不容易过时。它的 `hosts` 是保留 TLD `.invalid`，真实世界解析不到，不会误伤任何站点（`main.js:39`）。
-- **优先级只有两档**：包规则的 `priority` 缺省 5，并被钳在 **4–8**（`jsplugins.py:96`，`_clamp` 在 `:154`）；声明式规则固定 5（`media/rules/base.py:121` 的注释「包规则统一落在 4-8」，注册表按 `(priority, name)` 排序在 `:143-145`）。笔误或坏心的规则既插不了队也垫不到底。
-- **B 站包是多画质契约的现成参考**：档位 id 直接用 B 站自己的 `qn`，切档时客户端原样回传、包内再过一次白名单（`main.js:15`、`:26-30`），并如实回报实际交付的那一档。契约本身见 `docs/分享解析规则.md:172-178`。
-- 三个包都是 `author: "HanCast"`，`scripts: ["main.js"]`，单脚本。
+- **优先级只有两档**：包规则的 `priority` 缺省 5，并被钳在 **4–8**（`jsplugins.py:97`，`_clamp` 在 `:155`）；声明式规则固定 5（`media/rules/base.py:127` 的注释「包规则统一落在 4-8」，注册表按 `(priority, name)` 排序在 `:153`）。笔误或坏心的规则既插不了队也垫不到底。
+- **`hosts: ["*"]` 是作用域不是优先级**：兜底规则靠 `matching()` 的排序让位（`media/rules/base.py:160-170`），同阶段里站点专属规则永远先试，所以 `hancast-cms` 装在机器上不会改变 B 站/抖音的解析路径，只在「没人认领或全都失败」时多试一次。语义与代价见 `docs/分享解析规则.md` §2.1。
+- **B 站包是多画质契约的现成参考**：档位 id 直接用 B 站自己的 `qn`，切档时客户端原样回传、包内再过一次白名单（`main.js:15`、`:26-30`），并如实回报实际交付的那一档。契约本身见 `docs/分享解析规则.md:198-204`。
+- 四个包都是 `author: "HanCast"`，`scripts: ["main.js"]`，单脚本。
 
 ---
 
@@ -261,7 +283,7 @@ RAW_BASE = "https://raw.githubusercontent.com/pingod/HanCast/main/rule-packs/dis
 
 1. **产物必须落到 `main`**。用户机器上真正下载的是 `raw.githubusercontent.com/.../main/rule-packs/dist/<file>`——只在 tag 或 Release 上有 zip 而 `main` 上没有，点「安装」就是 404。Release 里那份是同字节的副本，随安装包一起归档。
 2. **`RAW_BASE` 故意写死不跟随当前分支**：换到别的分支时产物装不上，宁可当场炸出来，也不静默产出一份坏索引（`:36-37` 注释原文）。
-3. **索引地址可换、包地址的域名不可换**。默认索引 `params.py:21-22` 也指向 `main/rule-packs/index.json`；用户可以把 `rules.index_url` 改成自己的镜像（`params.py:182-192`），但镜像必须同时镜像 zip 并把 `url` 改成自己的 https 地址、sha256 照抄官方（`params.py:187-189`）。
+3. **索引地址可换、包地址的域名不可换**。默认索引 `params.py:21-22` 也指向 `main/rule-packs/index.json`；用户可以把 `rules.index_url` 改成自己的镜像（`params.py:222-231`），但镜像必须同时镜像 zip 并把 `url` 改成自己的 https 地址、sha256 照抄官方（`params.py:227-231`）；另一条不换手的路是打开 `github.mirror_enabled`（`params.py:245-264`）——它只给 GitHub 地址加镜像前缀，索引与摘要一个字都不动（见 §2.3）。
 
 ### 4.5 用户侧「检查规则包更新」的完整链路
 
@@ -367,20 +389,20 @@ v2.3.2（提交 `60f8432`「feat(plugins): 内置规则包随包播种 + 规则�
 | 冻结产物里没有任何解析规则 | `hancast-backend/scripts/build_sidecar.py:248-249`「产物里没有任何解析规则：站点规则全部由用户在设置页安装规则包（repo 根 `rule-packs/` 是官方包的源码与索引来源）」 |
 | 插件目录就是解析规则的全部家当 | `jsplugins.py:16-19`「**这个目录就是解析规则的全部家当**：程序里没有编译进去的站点规则，也没有『内置包』这种特殊身份——想让某个站被解析，就得往这里装包」 |
 | 旧状态键在读盘时就被丢弃 | `jsplugins.py:294` `state.pop("disabled_builtin", None)   # 内置规则这个概念已删` |
-| 规则总览只有两种来源 | `share_resolver.py:394-396` 返回 `{rules_dir, script_packs, declarative}`；`docs/解析插件开发指南.md:267-270` 说明单测断言过这个 key 集合 |
+| 规则总览只有两种来源 | `share_resolver.py:394-396` 返回 `{rules_dir, script_packs, declarative}`；`docs/解析插件开发指南.md:269-272` 说明单测断言过这个 key 集合 |
 | 界面文案照实说 | `src/locales/zh-CN.json:81`「解析能力全部来自规则包：程序本身不带任何站点规则」；`:89`「还没有规则包，所以现在任何站点链接都解析不了。用下面的『导入 ZIP』/『从 URL 导入』，或点『检查规则包更新』从官方索引安装」 |
 | 产物级验收反过来断言「退役干净」 | `tools/accept-macos-artifact.sh:49-58`：遍历 `media/rules/bili.py`、`media/rules/douyin.py`、`media/bili_resolver.py`、`rule_plugins`，**产物里有就 FAIL，tag 的 git 树里有也 FAIL**（防「提交漏了删除」）；`:175-188` 断言 `rule_inventory` 只报两种来源、`script_packs` 里不许出现 `"builtin"`、冻结 `commands.py` 里不许再注册 `rule_set_builtin_enabled` |
-| 新包发布清单也照这个口径 | `docs/解析插件开发指南.md:335-338`（第 8 条）把上述断言列成发布前必过项 |
+| 新包发布清单也照这个口径 | `docs/解析插件开发指南.md:337-340`（第 8 条）把上述断言列成发布前必过项 |
 
 ### 6.4 于是「装完首启」实际发生什么
 
 1. sidecar 起来，`ShareResolver` 建 `PluginManager(os.path.join(rules_dir, "plugins"))`（`share_resolver.py:341-344`），加载规则时调 `_load_external_rules()`（`:399-409`）；
 2. 那一步只 `os.makedirs(self.rules_dir)`——建的是 `share_rules/`，**不是 `plugins/`**（`share_resolver.py:402`）；`plugins/` 不存在时 `refresh()` 直接跳过扫描（`jsplugins.py:432`）、指纹函数返回 `None`（`:408-409`）。真正创建 `plugins/` 的只有 `import_zip_bytes` 里的 `os.makedirs(self.root)`（`jsplugins.py:521`）。**没有任何启动路径会往里填东西**；
 3. 设置页「解析插件」显示空态文案（`zh-CN.json:89`）与「检查规则包更新」按钮（`PluginSettings.vue:385-390`）；
-4. 用户点一次「检查规则包更新」，三个官方包全部落在「官方源里有、本机没装」那一堆（`jsplugins.py:381-382`），逐个点「安装」走 §4.5 的 10-16 步落盘；
+4. 用户点一次「检查规则包更新」，四个官方包全部落在「官方源里有、本机没装」那一堆（`jsplugins.py:381-382`），逐个点「安装」走 §4.5 的 10-16 步落盘；
 5. 落盘后 `refresh()` 热重载，规则立刻生效（`jsplugins.py:530-531`、`:425-446`），不需要重启。
 
-**所以：官方包从「随应用出货」变成了「从索引一键装」。** 好处是发新包不用发新版本应用（`docs/解析插件开发指南.md:333-334` 第 7 条：应用侧无需改动，清单与更新段都是数据驱动的，新包自动出现，i18n 也不用动）；代价是**全新安装在装包之前解析不了任何站点**，这是刻意接受的契约，不是 bug。
+**所以：官方包从「随应用出货」变成了「从索引一键装」。** 好处是发新包不用发新版本应用（`docs/解析插件开发指南.md:335-336` 第 7 条：应用侧无需改动，清单与更新段都是数据驱动的，新包自动出现，i18n 也不用动）；代价是**全新安装在装包之前解析不了任何站点**，这是刻意接受的契约，不是 bug。
 
 ---
 

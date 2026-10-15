@@ -179,7 +179,7 @@ const MOCK_DEVICES: Device[] = [
 const MOCK_SETTINGS: AppSettings = {
   usn: 'hancast-uuid-001',
   friendly_name: 'HanCast',
-  version: '2.3.11',
+  version: '2.3.12',
   media_port: 8080,
   default_device: null,
   network_interface: '',
@@ -223,6 +223,19 @@ function mockParamSpecs(): ParamSpec[] {
       label_zh: '规则包索引超时', label_en: 'Rule pack index timeout',
       help_zh: '拉索引和查更新时单次网络请求的等待上限',
       help_en: 'Per-request wait limit for fetching the index and update checks',
+    },
+    {
+      key: 'github.mirror_enabled', section: 'network', type: 'bool', default: false,
+      label_zh: 'GitHub 走国内镜像', label_en: 'Use GitHub mirror',
+      help_zh: '国内直连 GitHub 不通时打开：规则包索引与下载、检查新版本、FFmpeg 按需下载都先走镜像地址，镜像失败会自动回退直连并记日志。包的 sha256 仍按官方索引校验，镜像换包会被当场拦下',
+      help_en: "Route GitHub traffic (rule pack index and zips, update check, FFmpeg download) through the mirror prefix below; falls back to a direct request if the mirror fails. Pack sha256s are still verified",
+    },
+    {
+      key: 'github.mirror_prefix', section: 'network', type: 'text',
+      default: 'https://gh-proxy.com/',
+      label_zh: 'GitHub 镜像前缀', label_en: 'GitHub mirror prefix',
+      help_zh: '填镜像站根地址并以 / 结尾，最终请求 = 前缀 + 原地址（例：https://gh-proxy.com/https://raw.githubusercontent.com/…）。只有 GitHub 的地址会被改写，Gitee 等其它源原样通过',
+      help_en: 'Mirror root ending with /; the request becomes prefix + original URL. Only GitHub hosts are rewritten, other sources pass through untouched',
     },
   ]
   return base.map((s) => ({
@@ -602,8 +615,8 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
     case 'check_update':
       return {
         has_update: false,
-        current: '2.3.11',
-        latest: '2.3.11',
+        current: '2.3.12',
+        latest: '2.3.12',
         url: '',
         body: '',
         source: 'github',

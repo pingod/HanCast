@@ -4,7 +4,7 @@
 
 `tools/` 里放的是**可重复运行的验收 / 探针脚本**，不是一次性的 `/tmp` 手搓脚本。它们必须自适应当前机器——设备名、网卡、产物路径、参数条数都从现场现读，不写死。用法上的两条铁律：**修 bug 之前先跑它复现，修完之后再用它证明**。「证明」的对象是判据（退出码 / PASS-FAIL 行），不是截图，也不是「我点了一下看起来对」。
 
-当前分类表收录 **42 个顶层脚本 + 1 个目录型验收包**（`browser-channel-livecheck/`，4 个文件合写成 §1.7 的一行）。核对计数用 `git ls-files tools/`：现在是 48 项 = 43 个顶层脚本文件 + 验收包 4 个 + 本 README，其中 `audit-doc-refs.py` 是全仓文档体检工具，用法记在 `AGENTS.md:598` 与 [docs/README.md](../docs/README.md) §4，不进本索引的分类表。`ls tools/` 还多一个不入库的 `__pycache__/`。
+当前分类表收录 **45 个顶层脚本 + 1 个目录型验收包**（`browser-channel-livecheck/`，4 个文件合写成 §1.7 的一行）。核对计数用 `git ls-files tools/`：现在是 51 项 = 46 个顶层脚本文件 + 验收包 4 个 + 本 README；46 与 45 的差是那一个 `audit-doc-refs.py`——它是全仓文档体检工具，用法记在 `AGENTS.md:598` 与 [docs/README.md](../docs/README.md) §4，不进本索引的分类表。`ls tools/` 还多一个不入库的 `__pycache__/`。
 
 ---
 
@@ -89,16 +89,19 @@ ssh administrator@192.168.1.68 "schtasks /delete /tn <TASK> /f"      # 收尾
 | `probe-ts-skin-offset.py` | 定位「PNG 皮 + TS」的精确剥离偏移，并验证剥完能否被 ffmpeg 解封装 | `tools/probe-ts-skin-offset.py <m3u8_url> [--index N]` | `requests` + `ffmpeg`；外网；只读 |
 | `probe-dyrs-headers.sh` | dyrs 采集站分片防盗链矩阵：同一分片换不同的头/Range/Cookie，看到底哪种给真 TS（要搞清它认的是页面 Referer、Set-Cookie 会话、`Sec-Fetch-*` 还是 Range） | `tools/probe-dyrs-headers.sh <m3u8_url> [页面 referer]` | `curl` + `/usr/bin/python3`；外网；在 `mktemp -d` 里写临时文件；全程 `--noproxy '*'` |
 | `probe-dyrs-skin.sh` | 一次性复现：dyrs 采集站的分片到底是不是「披着 PNG 皮的 TS」，皮有多长（三种 Range 各拉一次，打头 32 字节 hex、是否 PNG、TS 同步偏移） | `tools/probe-dyrs-skin.sh <m3u8_url> [referer]` | 同上 |
+| `verify-rule-pack-live.py` | **出货形态**的规则包联网验收：读 `rule-packs/dist/<name>-<version>.zip`（索引里那个文件）→ `import_zip_bytes` → `refresh()` → `ShareResolver.resolve()`，打印每条链接由哪条规则命中。存在的理由：`build-rule-packs.py --check` 只证明产物与源一致、`pytest` 全程离线，而「包里的 JS 在真站上还抓不抓得到地址」只有联网才能证明——采集站换皮就是静默失效 | `hancast-backend/.venv/bin/python tools/verify-rule-pack-live.py`（默认包与默认地址表）<br>`… --pack hancast-cms`<br>`… --url https://x.example/play/1` | 后端 venv；**需外网**，本机走代理时带 `HTTPS_PROXY=http://127.0.0.1:9565`；规则装进临时目录，不碰用户 `share_rules/`；本地供流服务换成替身。站点自己挂了/上验证码闸门时记进脚本里的 `EXPECTED_FAIL` 并注明取证日期，**别把环境故障算成包坏了**。每次发版前重跑 |
+| `verify-github-mirror-live.py` | GitHub 镜像开关（v2.3.12）的联网验收，判据是四条契约而不是「镜像站打得开」：①开关打开时请求**真的先落到镜像前缀**（从日志认）；②镜像给的字节与直连**逐字节一致**（索引 JSON、包 zip，zip 还要对得上官方索引声明的 sha256）；③`api.github.com` 这类只有部分镜像代理支持的形态，开开关后检查更新照样拿得到最新版本号；④镜像死了（前缀指到 `127.0.0.1:1`）**自动回退直连** | `hancast-backend/.venv/bin/python tools/verify-github-mirror-live.py` | 后端 venv；**需外网**，走代理时带 `HTTPS_PROXY`。**只读**：不装包、不写台账、不碰用户配置——开关用 `params` 的内存覆盖位演，落盘的 `hancast_setting.json` 一个字节都不动 |
 
-> 关于代理：macOS 上 `requests` 会继承系统代理（`127.0.0.1:9565`），代理端口一失效解析就全挂（见 `docs/分享解析规则.md:156`）。需要显式走代理时用
+> 关于代理：macOS 上 `requests` 会继承系统代理（`127.0.0.1:9565`），代理端口一失效解析就全挂（见 `docs/分享解析规则.md:158`）。需要显式走代理时用
 > `HTTPS_PROXY=http://127.0.0.1:9565 python3 tools/<script>.py …`；
 > `probe-dyrs-*.sh` 反向操作，用 `curl --noproxy '*'` 明确绕开代理。
 
-### 1.6 后台参数与协议
+### 1.6 后台参数、界面与协议
 
 | 脚本 | 一句话用途 | 运行方式 | 前置环境 |
 |------|-----------|---------|---------|
-| `verify-params-ui.mjs` | 设置页「后台参数」区块的浏览器验收：用真实 Chromium（headless shell + CDP）渲染，不靠快照推断布局。走 vite dev 的 mock 通道，只验 UI 行为（展开 / 三类控件 / 待保存计数 / 保存回落 / 恢复默认） | `node tools/verify-params-ui.mjs [base-url]`（默认 `http://localhost:5199`） | 先起 vite：`node node_modules/vite/bin/vite.js --port 5199`；`~/.cache/puppeteer/chrome-headless-shell` 下有 `mac_arm-*` 构建；CDP 端口 9337；截图落 `/tmp/hancast-params-ui-*.png`；退出码 0 = 全部断言通过。**后端契约不由它负责**——那是 `hancast-backend/tests/test_params*.py` 与 `tools/accept-macos-artifact.sh` 的活 |
+| `verify-params-ui.mjs` | 设置页「后台参数」区块的浏览器验收：用真实 Chromium（headless shell + CDP）渲染，不靠快照推断布局。走 vite dev 的 mock 通道，只验 UI 行为（展开 / 四类控件 / 待保存计数 / 保存回落 / 恢复默认）。分组标题是**逐串比对**的（v2.3.12 起期望值含「GitHub 加速」），所以新增 section 忘了补 i18n 时它会红 | `node tools/verify-params-ui.mjs [base-url]`（默认 `http://localhost:5199`） | 先起 vite：`node node_modules/vite/bin/vite.js --port 5199`；`~/.cache/puppeteer/chrome-headless-shell` 下有 `mac_arm-*` 构建；CDP 端口 9337；截图落 `/tmp/hancast-params-ui-*.png`；退出码 0 = 全部断言通过。**后端契约不由它负责**——那是 `hancast-backend/tests/test_params*.py` 与 `tools/accept-macos-artifact.sh` 的活 |
+| `verify-error-wrap-ui.mjs` | 「解析失败原因」整行可见的浏览器验收（v2.3.12）：走 vite dev 的 mock 通道喂一条非媒体网页地址，mock 后端抛的就是真后端那条长错误，于是文案与样式都是真实形状。判据用**几何**不用文本——`textContent` 永远完整，截断只发生在渲染上，所以量「换了几行」「有没有一行的右边界超出元素盒子」，并在 **420px 窄窗**里测（宽窗会把老的 `nowrap` 样式也放过）<br>| `node tools/verify-error-wrap-ui.mjs [base-url]`（默认 `http://localhost:5199`） | 先起 vite：`node node_modules/vite/bin/vite.js --port 5199`；Chrome 同 §1.6 上一行；截图落 `/tmp/hancast-error-wrap.png`；退出码 0 = 全部断言通过 |
 | `verify-sidecar-utf8-protocol.py` | 验证 sidecar 的 stdin/stdout 协议在「父进程没有 locale」时仍走得通。登记表/错误文案全是中文，而 stdout 就是与 Rust 的通信通道；父进程没给 `LANG`/`LC_*` 时 Python 的 stdout 会退回 ASCII，`emit_response(..., ensure_ascii=False)` 直接抛 `UnicodeEncodeError`，表现为「命令永远失败」而不是「编码不对」 | `python3 tools/verify-sidecar-utf8-protocol.py [python 二进制]`（缺省用 `sys.executable`；可指向打包版 sidecar） | 后端源码可 import；无需外网、无需真机。判据：hostile env（`LC_ALL=C` 等）下 `get_params` 必须成功、条数不少于 18、中文标签原样回来；`stop_screen_cast`（空载）这种带中文提示的响应也必须回来。v2.2.18 用打包版实测撞到过 `{"id":2,"success":false,"error":"'ascii' codec can't encode characters …"}` |
 
 ### 1.7 反爬：TLS 指纹与浏览器通道
@@ -140,7 +143,7 @@ ssh administrator@192.168.1.68 "schtasks /delete /tn <TASK> /f"      # 收尾
 
 「产物验收」的定义就是**对打包结果而非源码的验证**。下面这些脚本的判据只有在产物上才成立：
 
-- `accept-macos-artifact.sh` — 读的是 `/Applications/HanCast.app/Contents/Resources/hancast_sidecar/`（`RES`，`:11`），并把里面的源文件与 `git show <tag>` 逐文件比 sha256（清单 `:35-44`，29 个文件）。跑源码等于没跑。
+- `accept-macos-artifact.sh` — 读的是 `/Applications/HanCast.app/Contents/Resources/hancast_sidecar/`（`RES`，`:11`），并把里面的源文件与 `git show <tag>` 逐文件比 sha256（清单 `:35-44`，30 个文件，v2.3.12 起含 `utils/ghmirror.py`）。跑源码等于没跑。
 - `install-macos-artifact.sh` — 输入就是 dmg。
 - `pull-rule-packs-installed.py` — 存在的理由原话：「手改 `share_rules/plugins/` 里的文件则是拿补丁冒充验收，产物里根本没跑过 `plugin_pull`」（`:5-8`）。
 - `verify-browser-segment-live.py`、`verify-watch-page-live.mjs`、`verify-dlna-stop-chain.py` — 都硬编码 `/Applications/HanCast.app/...` 下的 sidecar。
@@ -151,7 +154,7 @@ ssh administrator@192.168.1.68 "schtasks /delete /tn <TASK> /f"      # 收尾
 - `verify-windows-artifact.sh` — 读的是 .68 安装目录里那份 `.py` 与二进制，与 `git show v<tag>` 逐文件比哈希；本地工作树跟它无关。
 - `verify-ffmpeg-detect.ps1` — 打的是 `%LOCALAPPDATA%\HanCast\hancast-sidecar.exe`（Nuitka 冻结产物）。源码级那三层判定由 `tests/test_ffmpeg_deps.py` / `test_ffmpeg_download_e2e.py` 管，这个脚本存在的理由正是「产物里 `bundle.resources` 到底有没有把 ffmpeg 带进去、装好的 sidecar 在真机上认不认得到系统那份」——跑源码等于没跑。
 
-反过来，这些是**源码级/离线**的，不需要产物：`verify-dlna-volume-chain.py`、`verify-dshow-parse-offline.py`、`verify-sidecar-utf8-protocol.py`、`verify-params-ui.mjs`、`probe-hls-antileech.py`、`probe-ts-skin-offset.py`、`probe-dyrs-*.sh`、`ssdp_probe.py`、`dump-cgwindowlist.py`、`rust-check.sh`、`build-rule-packs.py`。
+反过来，这些是**源码级**的，不需要产物：`verify-dlna-volume-chain.py`、`verify-dshow-parse-offline.py`、`verify-sidecar-utf8-protocol.py`、`verify-params-ui.mjs`、`verify-error-wrap-ui.mjs`、`ssdp_probe.py`、`dump-cgwindowlist.py`、`rust-check.sh`、`build-rule-packs.py`。另有一类**联网但仍跑工作树代码**的：`share_resolve_probe.py`、`probe-hls-antileech.py`、`probe-ts-skin-offset.py`、`probe-dyrs-*.sh`、`verify-proxy-live.py`、`verify-rule-pack-live.py`、`verify-github-mirror-live.py`——后两个读的是 `rule-packs/dist/` 那份 zip 与真实解析管线，但都不碰 `/Applications/HanCast.app`，所以不能当产物验收用。
 
 ### 2.3 必须在 .68 Windows 测试机上跑的脚本
 
@@ -169,8 +172,8 @@ ssh administrator@192.168.1.68 "schtasks /delete /tn <TASK> /f"      # 收尾
 |------|--------|
 | 只 import `hancast_sidecar` 且用到 `requests`/`lxml` | `hancast-backend/.venv/bin/python`（系统 `python3` 没有这些依赖——`verify-dlna-volume-chain.py` 的 docstring 明写这条） |
 | 纯标准库 / 只用 `requests` | `python3` |
-| Node 脚本（CDP 驱动 Chromium） | `node`（`verify-params-ui.mjs`、`verify-watch-page-live.mjs`） |
-| `.mjs` 的 Chrome 定位 | 两个脚本都从 `~/.cache/puppeteer/chrome-headless-shell/mac_arm-*/` 现找，不写死版本号 |
+| Node 脚本（CDP 驱动 Chromium） | `node`（`verify-params-ui.mjs`、`verify-error-wrap-ui.mjs`、`verify-watch-page-live.mjs`） |
+| `.mjs` 的 Chrome 定位 | 三个脚本都从 `~/.cache/puppeteer/chrome-headless-shell/mac_arm-*/` 现找，不写死版本号 |
 
 ---
 
@@ -195,7 +198,7 @@ ssh administrator@192.168.1.68 "schtasks /delete /tn <TASK> /f"      # 收尾
 1. **别写死设备名。** `verify-win-screencast-tone-content.sh:3-8` 记着这条：系统声音不再按名字硬挑，因为「装了虚拟音效设备（FxSound 等）的机器上，默认渲染端点根本不是 Realtek，按 `Realtek.*Loopback` 挑中的是静音镜像，分片里只剩补出来的数字静音，会被读成『系统声音没采到』」。现在默认认枚举里标着「当前出声」(`default`) 的那块环回（提交 `bfe127a`）。名字只作为**可覆盖的默认值**暴露成位置参数/环境变量。
 2. **别写死条数。** 提交 `9787f2b`（`fix(tools): 参数表验收改为与 tag 源码逐键比对，不再写死条数`）的原话：写死 `"18"` 的断言在加了 `rules.index_url`（第 19 条）之后必然 FAIL，而**这条 FAIL 只证明脚本过期，证明不了产物有问题**——每轮加参数都得同步改脚本。改法是从**被测 tag 的 git 树现读基准**（`git show <tag>:hancast-backend/hancast_sidecar/params.py`），逐 key 逐 default 比对，这样能同时抓住产物**多带 / 漏带 / 带旧值**三种情况（四种变异体验证过）。实现见 `accept-macos-artifact.sh:102-123`。
    - 顺带一个实现坑，同处 `:111` 注释：临时文件**必须叫 `params.py`**——importlib 按后缀选 loader，无后缀的 `mktemp` 文件会静默读不出表。
-   - 下界断言（`len(specs) < 18` 这种「不少于」）不会因新增参数而假红，可以接受，但 docstring 里的数字要跟着更新——`verify-sidecar-utf8-protocol.py:11` 写的「18 项」已滞后于当前的 27 条（`params.py:35-209`），`:81` 的实际断言仍是 `< 18` 下界所以没坏。
+   - 下界断言（`len(specs) < 18` 这种「不少于」）不会因新增参数而假红，可以接受，但 docstring 里的数字要跟着更新——`verify-sidecar-utf8-protocol.py:11` 写的「18 项」已滞后于当前的 32 条（`params.py:41-265`），`:81` 的实际断言仍是 `< 18` 下界所以没坏。
 3. **别写死路径/版本号当唯一入口。** 产物路径要做成可覆盖参数（`pull-rule-packs-installed.py --app`、`verify-proxy-segment-decodable.py --root/--ffmpeg`、`verify-ssdp-offline-eviction.py --log`）；Chrome 从 `~/.cache/puppeteer/` 现找而非钉版本；triple 用 `rustc -vV` 现取（`rust-check.sh:38`）。
 
 ### 3.3 其它约定

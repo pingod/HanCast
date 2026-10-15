@@ -38,7 +38,7 @@ for rel in ssdp.py commands.py params.py security/guard.py protocol/dlna.py prot
            screencast/macos_tap.py utils/logger.py utils/config.py utils/ffmpeg_deps.py main.py \
            media/server.py media/share_resolver.py media/rules/__init__.py media/rules/base.py \
            media/rules/declarative.py media/rules/jsplugins.py media/rules/jsruntime.py \
-           utils/identity.py utils/httpclient.py utils/browser_channel.py; do
+           utils/identity.py utils/httpclient.py utils/browser_channel.py utils/ghmirror.py; do
   want=$(git show "$TAG:hancast-backend/hancast_sidecar/$rel" | shasum -a 256 | cut -d' ' -f1)
   got=$(shasum -a 256 "$RES/$rel" 2>/dev/null | cut -d' ' -f1)
   chk "sha256 $rel" "${got:0:12}" "${want:0:12}"

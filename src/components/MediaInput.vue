@@ -698,9 +698,12 @@ function onFileSelected(e: Event) {
   font-size: 12px;
   color: #EF4444;
   max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* 失败原因是一整句话（站点 + 状态码 + 下一步动作），截断等于把最有用的后半句丢掉：
+     用户只剩「解析失败：https://www.66dpw.vip/…」，分不清是没规则、超时还是被风控。
+     长 URL 里没有可断点，所以要 overflow-wrap 才真能折下来。 */
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
 }
 
 .media-input__ledger-hint {

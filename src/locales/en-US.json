@@ -78,6 +78,7 @@
   "settings.paramsGroup.logs": "Logs",
   "settings.paramsGroup.rules": "Parsing rules",
   "settings.paramsGroup.failures": "Failure ledger",
+  "settings.paramsGroup.network": "GitHub acceleration",
   "settings.plugins": "Parse Plugins",
   "settings.pluginsToggle": "Manage parse plugins",
   "settings.pluginsHint": "All parsing comes from rule packs — the app itself ships no site rules. A JS rule pack (ZIP) registers stream rules for specific sites; it takes effect on import and hot-reloads.",

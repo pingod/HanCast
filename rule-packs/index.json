@@ -8,6 +8,13 @@
       "description": "B 站解析：APP 签名多线路取流 iOS → TV → Web HTML5，反爬 Cookie 落盘复用；默认投最高画质，投屏中可切换档位。"
     },
     {
+      "name": "hancast-cms",
+      "version": "1.0.0",
+      "url": "https://raw.githubusercontent.com/pingod/HanCast/main/rule-packs/dist/hancast-cms-1.0.0.zip",
+      "sha256": "7d3caa03a876ee56496f03986a8a8e586147e7c16ef6ee1856312243c483ccac",
+      "description": "采集站通用兜底规则（不认域名）：苹果CMS/maccms 的 player_aaaa 编码地址、myui 模板的 share 播放器页相对地址。站点专属规则没命中时最后试它。"
+    },
+    {
       "name": "hancast-douyin",
       "version": "1.1.0",
       "url": "https://raw.githubusercontent.com/pingod/HanCast/main/rule-packs/dist/hancast-douyin-1.1.0.zip",

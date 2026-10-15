@@ -10,6 +10,7 @@
 - 代理侧播放列表改写、防盗链占位图识别、Content-Range 总量
 - 站点规则：外置声明式 JSON 与装进来的 JS 脚本包（page 与 url 阶段、失效回退）；
   程序不编译进任何站点规则，空目录全新安装注册出零条规则
+- 兜底作用域 ``hosts: ["*"]``：不认域名的通用规则排在站点专属规则之后试
 - 规则命中防盗链站 / 电视裸拉不动 → 本地代理注册（Referer 随代理头带上）
 """
 
@@ -505,6 +506,77 @@ class TestSiteRules(unittest.TestCase):
                                         None, PAGE_HTML.encode())):
             info = self.resolver.resolve("https://off.example/p")
         self.assertEqual(info["via"], "page")   # 规则让路，通用提取接手
+
+    def _load(self):
+        """外置规则是「下一次解析时按需重载」的；断言注册表前必须先触发一次重载"""
+        rules_base.refresh_external(self.rules_dir)
+
+    def test_wildcard_host_rule_matches_any_domain(self):
+        """hosts:["*"] = 兜底作用域：不认域名，任何站都可能命中"""
+        self._write({"name": "generic", "hosts": ["*"], "path_regex": "^/play/",
+                     "output": "https://g.example/g.m3u8"})
+        url = "https://brand-new-site.example/play/9"
+        self._load()
+        self.assertEqual([r.name for r in rules_base.matching(url, "page")],
+                         ["generic"])
+        with patch.object(ShareResolver, "_open",
+                          return_value=(url, "text/html", None, b"<html></html>")):
+            info = self.resolver.resolve(url)
+        self.assertEqual(info["via"], "generic")
+        self.assertEqual(info["uri"], "https://g.example/g.m3u8")
+
+    def test_wildcard_rule_path_regex_still_gates(self):
+        """兜底规则不认域名，但 path_regex 仍是它的认领条件"""
+        self._write({"name": "generic", "hosts": ["*"], "path_regex": "^/play/",
+                     "output": "https://g.example/g.m3u8"})
+        url = "https://any.example/home"
+        self._load()
+        self.assertEqual(rules_base.matching(url, "page"), [])
+        self.assertEqual([r.name for r in
+                          rules_base.matching("https://any.example/play/1", "page")],
+                         ["generic"])
+        with patch.object(ShareResolver, "_open",
+                          return_value=(url, "text/html", None,
+                                        b'<script>{"u":"https://cdn.example'
+                                        b'/a.m3u8"}</script>')):
+            info = self.resolver.resolve(url)
+        self.assertEqual(info["via"], "page")   # 兜底规则没认领 → 通用提取接手
+
+    def test_site_specific_rule_is_tried_before_wildcard(self):
+        """两条都匹配时先试站点专属：靠 matching 的排序，不靠 priority
+
+        名字故意取 a-generic / z-exact —— 注册表按 (priority, name) 排的话
+        兜底那条在前，没有「专属在前」这个断言就会红。
+        """
+        self._write({"name": "a-generic", "hosts": ["*"],
+                     "output": "https://g.example/g.m3u8"}, name="generic")
+        self._write({"name": "z-exact", "hosts": ["prec.example"],
+                     "output": "https://p.example/s.m3u8"}, name="exact")
+        url = "https://prec.example/play/1"
+        self._load()
+        self.assertEqual([r.name for r in rules_base.matching(url, "page")],
+                         ["z-exact", "a-generic"])
+        with patch.object(ShareResolver, "_open",
+                          return_value=(url, "text/html", None, b"<html></html>")):
+            info = self.resolver.resolve(url)
+        self.assertEqual(info["via"], "z-exact")
+
+    def test_wildcard_runs_when_site_rule_fails(self):
+        """站点专属规则拿不下（正文改版）→ 兜底规则接手，而不是直接报错"""
+        self._write({"name": "exact-broken", "hosts": ["stale.example"],
+                     "steps": [{"regex": "早就不存在的标记", "as": "x"}],
+                     "output": "{x}"}, name="exact")
+        self._write({"name": "z-generic", "hosts": ["*"],
+                     "output": "https://g.example/g.m3u8"}, name="generic")
+        url = "https://stale.example/play/1"
+        self._load()
+        self.assertEqual([r.name for r in rules_base.matching(url, "page")],
+                         ["exact-broken", "z-generic"])
+        with patch.object(ShareResolver, "_open",
+                          return_value=(url, "text/html", None,
+                                        b'<video src="https://g.example/g.m3u8">')):
+            info = self.resolver.resolve(url)
+        self.assertEqual(info["via"], "z-generic")
 
 
 class TestStreamExtraction(unittest.TestCase):
