@@ -11,6 +11,7 @@ import re
 import io
 import sys
 import json
+import time
 import wave
 import ctypes
 import logging
@@ -66,6 +67,94 @@ def _parse_screen_region(source_id: str) -> Optional[tuple]:
     if w <= 0 or h <= 0:
         return None
     return x, y, w, h
+
+
+def _parse_window_hwnd(source_id: str) -> Optional[int]:
+    """解析窗口源 id "window:0x<hex>" 里的 hwnd。
+
+    只有整串是 "0x" + 十六进制才算数——老客户端回传的 "window:<标题>"
+    （标题里带 0x 也不该误判）解析不出来，走标题兜底路径。
+    """
+    if not source_id.startswith("window:"):
+        return None
+    m = re.fullmatch(r"0x([0-9A-Fa-f]{1,16})", source_id[len("window:"):])
+    if not m:
+        return None
+    hwnd = int(m.group(1), 16)
+    return hwnd or None
+
+
+def _window_capture_rect(hwnd: int) -> Optional[Tuple[int, int, int, int]]:
+    """Windows：hwnd → gdigrab 区域抓取用的 (x, y, w, h)。
+
+    gdigrab 的窗口模式（`-i title=`）内部是 GetDC(窗口)+BitBlt，DWM 时代对
+    GPU 合成的窗口（浏览器 / Electron 这类）取不到内容——.68 实测同一窗口
+    hwnd 模式纯黑/纯白，同矩形抓桌面则完整。所以窗口捕获一律换算成
+    「窗口矩形 + `-offset_x/-offset_y/-video_size` 抓 desktop」。
+    坐标口径与 gdigrab 相同（虚拟桌面绝对坐标）；窗口被别的窗口盖住时抓到的
+    是遮挡物，故切入前尽力把窗口置前。窗口已关闭 / 在其它虚拟桌面 / 矩形
+    退化时返回 None（调用方报「请刷新重选」）。
+
+    只从验证过的 HDC/几何 API 取坐标，不做任何猜测：GetWindowRect 走的是与
+    显示器枚举（GetMonitorInfoW）同一套坐标系，二者混用不会错位。
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    if not user32.IsWindow(ctypes.c_void_p(hwnd)):
+        return None
+    try:
+        dwm = ctypes.windll.dwmapi
+    except Exception:  # noqa: BLE001 - 没有 dwmapi 按普通窗口处理
+        dwm = None
+
+    if dwm is not None:
+        cloaked = ctypes.c_int(0)
+        if dwm.DwmGetWindowAttribute(
+                ctypes.c_void_p(hwnd), 14,  # DWMWA_CLOAKED
+                ctypes.byref(cloaked), ctypes.sizeof(cloaked)) == 0 \
+                and cloaked.value:
+            # 别的虚拟桌面上的窗口：BitBlt 只会得到黑帧，不如直接说清楚
+            return None
+
+    if user32.IsIconic(ctypes.c_void_p(hwnd)):
+        user32.ShowWindow(ctypes.c_void_p(hwnd), 9)  # SW_RESTORE
+        time.sleep(0.15)  # 恢复是异步的，矩形晚一拍才对
+
+    # 尽力置前：区域抓取拍到的是屏幕上这块矩形，被遮住就拍成遮挡物。
+    # 前台锁可能让它失败（返回 0），失败也不拦——照抓，用户自己可见。
+    if not user32.SetForegroundWindow(ctypes.c_void_p(hwnd)):
+        logger.debug("[ScreenCast] SetForegroundWindow 未生效，照常抓取")
+
+    rect = wintypes.RECT()
+    ok = False
+    if dwm is not None:
+        # 9 = DWMWA_EXTENDED_FRAME_BOUNDS：可见边框（不含 DWM 阴影和 8px
+        # 隐形 resize 边），比 GetWindowRect 更贴画面
+        ok = dwm.DwmGetWindowAttribute(
+            ctypes.c_void_p(hwnd), 9,
+            ctypes.byref(rect), ctypes.sizeof(rect)) == 0
+    if not ok or rect.right <= rect.left or rect.bottom <= rect.top:
+        rect = wintypes.RECT()
+        if not user32.GetWindowRect(ctypes.c_void_p(hwnd), ctypes.byref(rect)):
+            return None
+
+    vx = user32.GetSystemMetrics(76)   # SM_XVIRTUALSCREEN
+    vy = user32.GetSystemMetrics(77)
+    vw = user32.GetSystemMetrics(78)
+    vh = user32.GetSystemMetrics(79)
+    x1 = max(vx, rect.left)
+    y1 = max(vy, rect.top)
+    x2 = min(vx + vw, rect.right)
+    y2 = min(vy + vh, rect.bottom)
+    w = x2 - x1
+    h = y2 - y1
+    if w < 80 or h < 80:
+        # 最小化残留矩形 (-32000,-32000…) 或被拖到屏幕外
+        return None
+    # 偶数宽高：没走 scale 滤镜的路径也能过 x264 的 yuv420p 初始化
+    return x1, y1, w - (w & 1), h - (h & 1)
 
 
 def _avf_screen_no(source_id: str) -> int:
@@ -489,7 +578,7 @@ class FfmpegManager:
         返回:
             {
               "screens": [{"id": "desktop"|"screen:x,y,w,h", "title": str, ...}],
-              "windows": [{"id": "window:<title>", "title": "<title>"}],
+              "windows": [{"id": "window:0x<hwnd>", "title": "<title>"}],
               "audio_inputs": [{"name": "...", "kind": "mic|system"}],
               "ffmpeg": {...check()},
             }
@@ -675,7 +764,10 @@ class FfmpegManager:
                 return True
             if not _castable(hwnd, (rect.left, rect.top, *size)):
                 return True
-            windows.append({"id": f"window:{title}", "title": title})
+            # id 里带 hwnd 而不是标题：起播时按 hwnd 换成「窗口矩形 + 抓
+            # desktop」的区域抓取（见 _window_capture_rect），窗口标题中途
+            # 变了也不影响；标题只作显示与旧格式兜底
+            windows.append({"id": f"window:0x{int(hwnd):X}", "title": title})
             return True
 
         WNDENUMPROC = ctypes.WINFUNCTYPE(
@@ -899,7 +991,7 @@ class FfmpegManager:
         """构造视频捕获输入参数（gdigrab / avfoundation / x11grab）
 
         source: {"type": "screen"|"window",
-                 "id": "desktop"|"screen:x,y,w,h"|"window:<title>", "title": str}
+                 "id": "desktop"|"screen:x,y,w,h"|"window:0x<hwnd>", "title": str}
         fps: 目标帧率
         scale_vf: 缩放滤镜串（见 build_scale_filter），窗口抓取时 crop 排在它前面
         ffmpeg_path: 用于 macOS 动态枚举屏幕设备索引
@@ -916,10 +1008,26 @@ class FfmpegManager:
         if os.name == "nt":
             args += ["-f", "gdigrab"]
             if source.get("type") == "window":
-                title = source.get("title") or source.get("id", "").replace("window:", "", 1)
-                # -framerate 是 gdigrab 的选项，必须排在 -i 前面：不给的话
-                # gdigrab 默认 1fps，窗口投屏就变成幻灯片
-                args += ["-framerate", str(fps), "-i", f"title={title}"]
+                hwnd = _parse_window_hwnd(source.get("id") or "")
+                if hwnd is not None:
+                    rect = _window_capture_rect(hwnd)
+                    if rect is None:
+                        raise ValueError(
+                            "选中的窗口已关闭或不可见（最小化/其它虚拟桌面），"
+                            "请刷新窗口列表重选")
+                    x, y, w, h = rect
+                    # -framerate 是 gdigrab 的选项，必须排在 -i 前面：不给的话
+                    # gdigrab 默认 1fps，窗口投屏就变成幻灯片
+                    args += ["-framerate", str(fps),
+                             "-offset_x", str(x), "-offset_y", str(y),
+                             "-video_size", f"{w}x{h}", "-i", "desktop"]
+                else:
+                    # 旧客户端回传的 "window:<标题>" 格式：gdigrab 的 title=
+                    # 走 FindWindowW 精确匹配（标题一变就 I/O error），且 DWM
+                    # 下对浏览器这类 GPU 合成窗口只能抓到黑帧。新列表已带
+                    # hwnd，正常不会走到这里
+                    title = source.get("title") or source.get("id", "").replace("window:", "", 1)
+                    args += ["-framerate", str(fps), "-i", f"title={title}"]
             else:
                 args += ["-framerate", str(fps)]
                 region = _parse_screen_region(source.get("id") or "")

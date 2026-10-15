@@ -1,6 +1,6 @@
 # Changelog
 
-> 最后校对：2026-10-15，对应版本 v2.3.13（`package.json:4`）
+> 最后校对：2026-10-15，对应版本 v2.3.14（`package.json:4`）
 
 本文件记录 HanCast 的版本历史。口径说明：
 
@@ -8,6 +8,22 @@
 - 版本号唯一来源是 **`package.json` 的 `version`**（`scripts/sync-version.cjs:4,17`），`npm run version:set <x.y.z>` 把它刷进 7 处契约点：`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`（本地包那条，v2.3.8 起收进来——此前每版都靠人肉补）、`hancast-backend/pyproject.toml`、`hancast_sidecar/utils/config.py:39`、`src/api/commands.ts`（mock）、`src/stores/settings.ts`。`scripts/check-version.cjs` 自称以 `tauri.conf.json` 为源（口径相反），但全仓无人调用，是未接线的孤儿脚本——判定以 `sync-version.cjs` 为准。详见 [docs/构建与发布.md](docs/构建与发布.md) §1。
 - 下表「提交」列即 `git tag <版本>` 指向的提交；细节以 `git show <提交>` 为准，本文只留用户可感知的变化。
 - 新加版本时**同一次提交**里补这里，并按 [docs/README.md](docs/README.md) §4 的约定同步对应文档。
+
+---
+
+## v2.3.14 — 2026-10-15（本轮发布提交）
+
+两条投诉各修一处：浏览器观看页不再钉死静音（带声起播失败才要用户点一下），Windows 窗口投屏不再走黑帧路径（改按 hwnd 换算矩形抓屏）。
+
+- **观看页声音**（`www/index.html`，214 行）：旧 `<video>` 标签硬编码 `autoplay playsinline muted`——`muted` 是给「自动播放策略只放过免手势静音起播」当保险的，代价是**任何浏览器里都永远没声音**，且脚本里两处 `video.play().catch(function(){})` 把失败吞得无迹可循。现在去掉硬编码，起播统一走 `tryStart()`（`:117-140`）：先试带声 `play()`，被自动播放策略拒绝才 `fallbackToMuted()`（`:110-115`）静音兜底，并亮出悬浮的「点击开启声音」按钮（`:59` 定义、`showVideo()` `:155` 亮出）；按钮点击（`:102-108`）或原生控件解除静音都算手势，`volumechange`（`:95-100`）收到 `!muted` 就收起按钮。两条边角：个别引擎的 `play()` 被拦下时既不 resolve 也不 reject，1.2 秒保险丝（`:132-139`）盯住「已定性/已出画面」两个标志，别让用户干等；已知本浏览器拦带声起播时（重连路径 `:118-121`）直接静音起播，不重复挨拒。`startNative`（`:164`）与 `MANIFEST_PARSED`（`:179-180`）两条起播路径都改走 `tryStart()`。
+- **Windows 窗口投屏**（`ffmpeg_manager.py`，1156 行）：窗口源 id 从 `window:<标题>` 改为 `window:0x<hwnd>`（`_list_windows` `:770`），抓取从 gdigrab 的 `-i title=` 窗口模式改为**按 hwnd 换算矩形、抓 desktop 区域**（`build_video_input` 窗口分支 `:1010-1030`）。矩形由 `_window_capture_rect(hwnd)`（`:87-157`）给出：`IsWindow` 验活 → `DWMWA_CLOAKED` 挡掉其它虚拟桌面/隐藏窗口 → 最小化先 `SW_RESTORE` 再等 0.15s → `DWMWA_EXTENDED_FRAME_BOUNDS`(9) 优先、`GetWindowRect` 兜底 → clamp 到虚拟桌面 → 宽高 <80 拒 → 偶数化。窗口没了（已关闭/最小化/异虚拟桌面）抛 `ValueError` 点名「选中的窗口已关闭或不可见（最小化/其它虚拟桌面），请刷新窗口列表重选」（`:1015-1017`）；旧客户端回传的 `window:<标题>` 仍保留 `title=` 兜底（`:1024-1030`，注释里写明正常不会走到）。转换函数 `_parse_window_hwnd`（`:72-84`）对 `desktop`、无 hwnd 的旧格式、`0x0`、带尾巴等 7 种坏格式一律判 `None`。
+- **为什么必须换**（.68 真机取证，`tools/verify-win-capture-sources.ps1` 逐变体抓 PNG）：gdigrab 的窗口模式走 `GetDC(hwnd)` + BitBlt，在 DWM/DComp 下对 GPU 合成窗口取不到帧——抖音窗口 `hwnd` 抓 20,864 B（纯白+鼠标指针）vs `region` 抓 1,462,990 B（完整界面）；Vivaldi 13,640 vs 204,463 B；连 Program Manager 都是 46,213 vs 1,780,819 B。区域模式读的是 DWM 合成后的屏幕内容，天然拿到真实画面。抓取参数排在 `-i` 之前（`:1019-1023` 注释：`-framerate` 是 gdigrab 选项，不给就退 1fps 幻灯片）。
+- **`-i title=` 还附带一个真 bug**：`FindWindowW` 精确匹配窗口标题，标题一变（浏览器换标签、播放器换曲）就 I/O error 断流——hwnd 形态没有这个问题，标题仅供展示（`:768` 注释）。
+- **测试**（`tests/test_screencast.py`，1045 行，+4 条）：`test_parse_window_hwnd`（`:215-221`，含 7 个坏格式判 `None`）、`test_window_hwnd_reaches_region_grab`（`:223-243`，patch 矩形 `(100,50,996,1288)` 后断言 `-offset_x/-offset_y/-video_size/-framerate` 全部到达且排在 `-i` 前、不再出现 `title=`）、`test_window_hwnd_gone_raises`（`:245-256`，窗口没了抛 `ValueError`）、`test_build_video_input_window_legacy_title`（`:208-213`，旧格式在 nt 下保留 `title=记事本` 兜底）。
+- **验收（本轮真实输出）**：`uv run python -m pytest tests/test_screencast.py -q` → **72 passed in 5.08s**；`node tools/verify-watch-page-sound.mjs`（真实 Chromium，双 pass）→ **RESULT: ALL PASS**——pass A 最严策略 `document-user-activation-required` 下 11 条断言全 PASS（静音兜底起播 → 按钮亮出 → CDP 合成点击后 `muted=false` → 按钮收起 → 画面持续推进），pass B `no-user-gesture-required` 下 7 条全 PASS（直接带声起播、按钮不出现）；`.68` 抓图四变体对照见上（desktop 1,634,198 B / 副屏区域 1,417,366 B / 三窗口 hwnd vs region 对照）。
+- **没闭合的口子（别当成已验）**：①「单屏（区域）投屏浏览器黑屏」的坐标错位假说**被排除**——三方坐标系实测一致（PowerShell awareness=unaware / ffmpeg desktop=4000x2571 / sidecar 屏幕参数 dpi 96 无缩放）、副屏区域抓取 1.42 MB 有画面；用户那次会话黑屏的最终解释没锁定，本轮对单屏路径无修复动作，复现时按 `tools/verify-win-capture-sources.ps1` 抓图定位。②观看页声音验的是**源码 `www/index.html`**（替换占位符）跑真实 Chromium；产物层判据是 `accept-macos-artifact.sh` 的逐文件 sha256 比对（`screencast/www/index.html` 在清单里），不是直接播放打包版 HLS。③Windows 窗口投屏的**生产链路**（装好的 2.3.14 + 真窗口走 sidecar）在 .68 装机后复测，脚本本身验的是原生 ffmpeg 四变体。
+- **文档同轮修订**：docs/屏幕投屏.md（§3.3 窗口抓取机制、§5.1 报错文案、§8.3 判据表新增两行、§8.4 测试类表与行数）、docs/故障排查.md（§2 症状索引两行、§6.1 Windows 窗口源行、§6.2 第 5 条观看页声音）、AGENTS.md、tools/README.md（两个新工具登记 + 计数）。
+- **新入库工具**：`tools/verify-watch-page-sound.mjs`（268 行，真实 Chromium 双 pass 验起播出声，需有头运行——headless 没有自动播放豁免）；`tools/verify-win-capture-sources.ps1`（227 行，.68 交互会话逐变体抓 PNG：`desktop` / 显示器区域 / 旧 gdigrab 窗口模式 / 窗口矩形区域 + manifest，exit code = 失败抓取数）；`tools/probe-win-window-picker.py` 随之更新（hwnd 列表与区域换算合约）。
 
 ---
 

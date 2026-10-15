@@ -6,18 +6,17 @@
      它们可见、有尺寸、有标题、无 owner、没被遮挡，用「任务栏那套判据」滤不掉，
      选到了就是黑屏。--survey 把每个窗口的 style/exstyle/矩形全打出来，判据
      从实测数据里挑，不靠猜；
-  2. 中文 / 冒号 / 与号 / 引号 / 括号逗号这些标题能不能交给 gdigrab：它的输入是
-     "title=<标题>"，特殊字符若把参数解析切开，症状不是报错而是抓错画面；
-  3. 抓到的画面尺寸 == 客户区，且不是全黑（探针窗口底色纯白，YAVG 应接近
-     235，任何「抓到黑屏」都藏不住）。两条实测纠正了最初的假设：
-       · 期望值不能取 GetWindowRect —— 它还含一圈不可见的缩放边（实测
-         2576x1408 的窗口，gdigrab 抓到 2560x1392，差的正是左右各 8px + 底 8px）；
-         更准的是客户区：探针窗口实测 900x620 → 884x581，少的 16x39 是边框+标题栏。
-       · gdigrab 抓的是屏幕上那块矩形，不是窗口自己的 buffer —— 别的窗口压在
-         它上面，投出去的就是那个压着的窗口（不置顶时同一份代码两轮亮度
-         235 vs 45）。所以抓取前探针会把自己置顶，界面也必须提醒用户
-         「选中后请把该窗口保持在最前面」。
-  4. 不存在的标题必须让 ffmpeg 快速失败，而不是安静地产出黑屏。
+  2. 列表 id 的形状是 "window:0x<hwnd>"（hwnd 编进 id，标题只作显示）。起播时按
+     hwnd 换算窗口矩形、用 `-offset_x/-offset_y/-video_size` 抓 desktop 区域
+     （见 ffmpeg_manager._window_capture_rect）——gdigrab 的窗口模式
+     （`-i title=`，FindWindowW 精确匹配 + GetDC(hwnd)）在 DWM 下对浏览器这类
+     GPU 合成窗口只能抓到纯黑/纯白，且标题一变就 I/O error（.68 实测）；
+  3. 抓到的画面尺寸 ≈ 窗口矩形（DWM 可见边框），且不是全黑（探针窗口底色纯白，
+     YAVG 应接近 235，任何「抓到黑屏」都藏不住）。注意区域抓取读的是屏幕上那块
+     矩形，不是窗口自己的 buffer —— 别的窗口压在它上面，投出去的就是那个压着的
+     窗口（实测不置顶时同一份代码两轮亮度 235 vs 45）。抓取前生产代码会尽力把
+     窗口置前，探针也会自己置顶；
+  4. 已关闭的窗口必须让起播快速失败（可读的中文报错），而不是安静地产出黑屏。
 
 窗口由探针进程自己 RegisterClass + CreateWindowExW 开出来：标题直接进 Win32 API，
 不经 shell —— 用 cmd 的 title 命令造带引号的标题会先把探针自己截断。
@@ -262,9 +261,9 @@ def analyze(ffmpeg: str, path: str) -> tuple:
     return frames, w, h, (max(luma) if luma else 0.0)
 
 
-def grab(ffmpeg: str, title: str, seconds: float, out: str) -> tuple:
+def grab(ffmpeg: str, src_id: str, title: str, seconds: float, out: str) -> tuple:
     """按生产代码同一条命令行抓窗口"""
-    src = {"type": "window", "id": f"window:{title}", "title": title}
+    src = {"type": "window", "id": src_id, "title": title}
     # build_video_input 只给输入段参数，滤镜要排在所有 -i 之后（抓屏不缩放，忽略第二项）
     args, _vf = FfmpegManager.build_video_input(src, 15, ffmpeg_path=ffmpeg)
     cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", *args,
@@ -301,7 +300,8 @@ def report(ffmpeg: str, title: str, hwnd, luma_min: float = 4.0) -> None:
     out = os.path.join(OUT, f"{abs(hash(title)) % 10**8}.mp4")
     full, client = frame_bounds(hwnd), client_bounds(hwnd)
     raise_topmost(hwnd)
-    rc, frames, w, h, lum, err = grab(ffmpeg, title, 2.0, out)
+    rc, frames, w, h, lum, err = grab(ffmpeg, f"window:0x{int(hwnd):X}", title,
+                                      2.0, out)
     print(f"\n── {title!r} 整窗 {full} / 客户区 {client} → rc={rc} 帧={frames} "
           f"实得={(w, h)} YAVG={lum:.1f}")
     if err:
@@ -344,8 +344,9 @@ def main() -> int:
     dump(table, kept)
     check(sw > 0, "取到桌面分辨率（脚本跑在交互会话里）")
     check(len(wins) > 0, "过滤后仍有可投窗口")
-    check(all(str(w["id"]).startswith("window:") and w["title"] for w in wins),
-          "每项都是 window:<标题> 且有标题")
+    check(all(re.fullmatch(r"window:0x[0-9A-F]+", str(w["id"])) and w["title"]
+              for w in wins),
+          "每项 id 都是 window:0x<hwnd> 且有标题")
     check(not [t for t in kept if table.get(t, {}).get("iconic")],
           "列表里没有最小化窗口")
     check(not [t for t in kept if table.get(t, {}).get("owned")],
@@ -400,12 +401,20 @@ def main() -> int:
         if real:
             report(ffmpeg, real[0], real[1])
 
-        ghost = os.path.join(OUT, "ghost.mp4")
-        rc, frames, w, h, _l, _e = grab(
-            ffmpeg, "HanCast 不存在的窗口标题 12345", 2.0, ghost)
-        print(f"\n── 不存在的标题 → rc={rc} 帧={frames} 尺寸={w}x{h}")
-        check(rc != 0 or frames == 0,
-              "不存在的标题会失败（否则用户选错窗口只会看到黑屏）")
+        # 已关闭的窗口：真关掉一个探针窗口，再拿它的 hwnd 去起播 —— 必须在拼
+        # 命令行之前就报「窗口已关闭」，而不是等 ffmpeg 安静地产出黑屏
+        dead = int(host.hwnds["HanCast 探针:冒号"])
+        user32.PostMessageW(ctypes.c_void_p(dead), 0x0010, 0, 0)  # WM_CLOSE
+        time.sleep(0.8)
+        dead_err = None
+        try:
+            FfmpegManager.build_video_input(
+                {"type": "window", "id": f"window:0x{dead:X}"}, 15)
+        except ValueError as e:
+            dead_err = str(e)
+        print(f"\n── 已关闭窗口 → {dead_err!r}")
+        check(dead_err is not None,
+              "已关闭的窗口快速报错（否则用户选错窗口只会看到黑屏）")
     finally:
         host.close()
         print(f"\n产物目录: {OUT}")

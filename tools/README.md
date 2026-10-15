@@ -4,7 +4,7 @@
 
 `tools/` 里放的是**可重复运行的验收 / 探针脚本**，不是一次性的 `/tmp` 手搓脚本。它们必须自适应当前机器——设备名、网卡、产物路径、参数条数都从现场现读，不写死。用法上的两条铁律：**修 bug 之前先跑它复现，修完之后再用它证明**。「证明」的对象是判据（退出码 / PASS-FAIL 行），不是截图，也不是「我点了一下看起来对」。
 
-当前分类表收录 **46 个顶层脚本 + 1 个目录型验收包**（`browser-channel-livecheck/`，4 个文件合写成 §1.7 的一行）。核对计数用 `git ls-files tools/`：现在是 52 项 = 47 个顶层脚本文件 + 验收包 4 个 + 本 README；47 与 46 的差是那一个 `audit-doc-refs.py`——它是全仓文档体检工具，用法记在 `AGENTS.md:605` 与 [docs/README.md](../docs/README.md) §4，不进本索引的分类表。`ls tools/` 还多一个不入库的 `__pycache__/`。
+当前分类表收录 **48 个顶层脚本 + 1 个目录型验收包**（`browser-channel-livecheck/`，4 个文件合写成 §1.7 的一行）。核对计数用 `git ls-files tools/`：现在是 54 项 = 49 个顶层脚本文件 + 验收包 4 个 + 本 README；49 与 48 的差是那一个 `audit-doc-refs.py`——它是全仓文档体检工具，用法记在 `AGENTS.md:605` 与 [docs/README.md](../docs/README.md) §4，不进本索引的分类表。`ls tools/` 还多一个不入库的 `__pycache__/`。
 
 ---
 
@@ -45,6 +45,7 @@
 | `dump-cgwindowlist.py` | 原样 dump `CGWindowListCopyWindowInfo`，用来核对 `darwin_windows()` 的过滤条件 | `python3 tools/dump-cgwindowlist.py` | 仅 macOS；**故意不用 pyobjc**——这台机器没装 Quartz 绑定，而打包 sidecar 走的就是 ctypes + CoreFoundation，必须复刻同一条读取路径，否则差异说明不了问题 |
 | `verify-browser-segment-live.py` | 真机验证「浏览器通道分片时长可配置且不必重编译」：默认必须是 1 秒分片；`save_params` 把 `screencast.browser_segment_seconds` 改成 4 后同一份二进制停开一次必须变 4 秒；最后改回默认并清掉覆盖项 | `python3 tools/verify-browser-segment-live.py` | 仅 macOS 打包产物（`.app` 内的 sidecar）；**会整体退出 HanCast**（GUI 与 sidecar 抢 8080），结束把应用开回来；屏幕捕获依赖父进程的「录屏」权限，被拒时 start 直接报错、判据如实 FAIL |
 | `verify-watch-page-live.mjs` | 浏览器通道观看页真机验收（1 秒分片）：驱动打包版 sidecar 起真实屏幕投屏，再用真实 Chromium（headless shell + CDP）打开观看页，看画面是否真在动、有没有卡死、端到端延迟多少 | `node tools/verify-watch-page-live.mjs [segmentSeconds]`（默认 1 = 出厂契约；传 4 会先 `save_params` 覆盖再测） | 仅 macOS 打包产物；`~/.cache/puppeteer/chrome-headless-shell` 下有 `mac_arm-*` 构建；**会整体退出 HanCast**，结束自动打开回来；截图落 `/tmp/hancast-watch-live.png`；退出码 0 = 全部断言通过 |
+| `verify-watch-page-sound.mjs` | 观看页**出声**验收（v2.3.14）：真实 Chromium 双 pass 跑源码 `www/index.html`（替换占位符，hls.min.js 同目录现取）——pass A 最严自动播放策略下必须「静音兜底起播 → 「点击开启声音」按钮亮出 → CDP 合成点击解除静音（`muted=false`）→ 按钮收起 → 画面持续推进」，pass B 全放行策略下直接带声起播且不出按钮 | `node tools/verify-watch-page-sound.mjs` | 仅 macOS（本机实测）；ffmpeg 在 PATH（现生成 24s / 1s 分片 HLS 素材：testsrc2 1280x720@25 + 440Hz 音轨）；**必须「有头」**——headless 系连 muted 自动播放豁免都没有（连 muted 起播都 NotAllowedError），窗口会在屏幕上闪约 40 秒；Chrome 从 `~/.cache/puppeteer/chrome/mac_arm-*/` 现找（`HANCAST_VERIFY_CHROME` 可覆盖）；截图落 `/tmp/hancast-watch-sound-{A,B}.png`；退出码 0 = 两 pass 全过 |
 
 ### 1.4 屏幕投屏 — Windows（.68 测试机）
 
@@ -67,7 +68,8 @@ ssh administrator@192.168.1.68 "schtasks /delete /tn <TASK> /f"      # 收尾
 |------|-----------|---------|---------|
 | `probe-wasapi-loopback.py` | WASAPI 环回真机探针，验三件事：默认渲染设备的 loopback 能否开到 int16/48k/立体声；真在放声音时能否读到非零采样；**静音期** PortAudio 是照实时节奏交付零块还是阻塞（第三点决定 ffmpeg 侧要不要在 Python 里按单调时钟补零） | `python tools/probe-wasapi-loopback.py` | 仅 Windows（.68）；需 `pyaudiowpatch` |
 | `probe-win-audio-pipe.py` | Windows 系统声音链路真机探针，用仓库里的真实代码覆盖最容易在打包后才崩的那段：`loopback.open_stream` → `build_audio_input` 的 `pipe:0` 与 amix 图 → ffmpeg stdin → HLS 里真带一条可解码音频流 | `set "PYTHONIOENCODING=utf-8"& set "HANCAST_SRC=D:\Temp\pkg"& D:\Temp\pa-probe\Scripts\python.exe D:\Temp\probe-win-audio-pipe.py` | 仅 Windows（.68）；`HANCAST_SRC` 指向被测代码根（缺省回落到仓库的 `hancast-backend`）；不碰 gdigrab，视频输入用 `lavfi testsrc` 顶替；判据是播 440Hz 时 HLS 解出的该频点分量显著高于不播时的基线 |
-| `probe-win-window-picker.py` | Windows「投屏指定窗口」真机探针，验四件事：`_list_windows()` 交出来的窗口任务栏里是否真有（裸 `EnumWindows` 会混进 `CHeadBarWindow`、`com.han.hancast-siw` 这类影子输入窗口，选到就是黑屏）；中文/冒号/与号/引号/括号逗号能否交给 gdigrab；抓到的尺寸 == 客户区且非全黑；不存在的标题必须让 ffmpeg 快速失败 | `run-winpick.cmd --survey`（只枚举并打印属性表，用来定过滤判据）<br>`run-winpick.cmd`（完整跑） | 仅 Windows（.68）**桌面会话**；必须用 `schtasks … /it` 投递（脚本头给了 `HANCAST_WINPICK` 的完整命令）；窗口由探针自己 `RegisterClass` + `CreateWindowExW` 开出来，标题直接进 Win32 API 不经 shell；探针会把自己置顶——gdigrab 抓的是屏幕上那块矩形，不是窗口自己的 buffer |
+| `probe-win-window-picker.py` | Windows「投屏指定窗口」真机探针（v2.3.14 起按 hwnd→区域合约重写），验四件事：`_list_windows()` 交出来的窗口任务栏里是否真有（裸 `EnumWindows` 会混进 `CHeadBarWindow`、`com.han.hancast-siw` 这类影子输入窗口，选到就是黑屏）；列表 id 是 `window:0x<hwnd>` 且起播按 hwnd 换算矩形抓 desktop 区域（生产路径 `_window_capture_rect`）——gdigrab 的 `-i title=` 窗口模式在 DWM 下对 GPU 合成窗口只出黑帧、标题一变就 I/O error，已弃用；抓到的画面尺寸 ≈ 窗口矩形（DWM 可见边框）且非全黑；真关掉一个探针窗口后拿它的 hwnd 起播必须**快速报错**（可读中文），而不是安静产出黑屏 | `run-winpick.cmd --survey`（只枚举并打印属性表，用来定过滤判据）<br>`run-winpick.cmd`（完整跑） | 仅 Windows（.68）**桌面会话**；必须用 `schtasks … /it` 投递（脚本头给了 `HANCAST_WINPICK` 的完整命令）；窗口由探针自己 `RegisterClass` + `CreateWindowExW` 开出来，标题直接进 Win32 API 不经 shell；探针会把自己置顶——区域抓取读的是屏幕上那块矩形，不是窗口自己的 buffer |
+| `verify-win-capture-sources.ps1` | 屏幕捕获四变体对照取证（v2.3.14 窗口黑屏的根因判据）：同一台机器逐变体抓 PNG——`desktop`（DWM 合成）、每显示器区域、`-i hwnd=0x…` 窗口模式（GetDC(hwnd)，产品旧路径的行为）、窗口矩形区域（新修法）——外加 manifest（本进程 DPI awareness / 显示器矩形 / 窗口表 / 每个 PNG 的真实像素尺寸），让人自己判「哪条路径出黑帧」 | 经 `schtasks /create /f /tn hc_capchk /tr "powershell -NoProfile -ExecutionPolicy Bypass -File D:\Temp\verify-win-capture-sources.ps1" /sc once /sd 2999-01-01 /st 00:00 /ru Administrator /it` 投递后 `schtasks /run /tn hc_capchk`（收尾 `schtasks /delete /tn hc_capchk /f` + `rmdir /s /q D:\Temp\capture-check`） | 仅 Windows（.68）**交互桌面**（服务/ssh 会话没有桌面，gdigrab 抓黑）；输出默认 `D:\Temp\capture-check\`（`-OutDir` 可换）、`-Ffmpeg` 可指定用哪份；保持 ASCII-only；exit code = 失败抓取数 |
 | `verify-screencast-audio-order.cmd` | 验证「屏幕 + 麦克风/系统声音」的 ffmpeg **参数顺序**：`-vf` 夹在两个 `-i` 之间会被判给下一个输入（麦克风）并以 `Option vf cannot be applied to input url audio=…` 死掉。三个 case：OLD 必须 FAIL（复现 v2.2.22 及以前）、A（仅麦克风）必须 PASS、B（麦克风 + 环回 s16le + `-filter_complex amix`）必须 PASS | 按上面的通用投递方式，任务名 `HANCAST_VFT`，脚本落 `D:/Temp/hcvf.cmd` | 仅 Windows（.68）交互桌面；ffmpeg 不再随包（v2.3.11），脚本自己按「依赖面板下载到 `%APPDATA%\HanCast\bin\ffmpeg.exe` → PATH 上的系统 ffmpeg」取那一份；结果看 `D:\Temp\hcvf-out.txt`：`OLD_EXIT` 非 0、`A_EXIT`/`B_EXIT` 为 0，且 `a.m3u8`/`b.m3u8` 各报一条视频 + 一条 aac |
 | `verify-screencast-audio-order.ps1` | 上面那三个 case 的结果读取器：数每个 `m3u8` 的分片条数，并用 ffmpeg 打印 `Input #` / `Stream #` | `powershell -File verify-screencast-audio-order.ps1`（在 .68 上） | 仅 Windows（.68）；`D:\Temp\hcvf\{old,a,b,c}.m3u8` 已由 `.cmd` 那轮产出；缺文件打 `MISSING` 后跳过 |
 | `verify-win-loopback-feed.cmd` | 分离「stdin 静默但打开」与「实时涓流」两种喂料方式：产品命令在 .68 上 8 秒不落播放列表（2.2.23），而同一套参数布局在 `verify-screencast-audio-order.cmd` 里能跑，唯一差别就是 `pipe:0` 的字节从哪来 | 按通用投递方式，任务名 `HANCAST_FEED`，脚本落 `D:/Temp/hcfeed.cmd` | 仅 Windows（.68）交互桌面；结果看 `D:\Temp\hcfeed-out.txt`：`D_*` 是空 stdin 下播放列表是否出现，`E_*` 是实时涓流基线；这里 loglevel 用 `info` 而非 `error`，好让 stall 原因可见 |
@@ -130,6 +132,7 @@ ssh administrator@192.168.1.68 "schtasks /delete /tn <TASK> /f"      # 收尾
 | `pull-rule-packs-installed.py` | **写用户插件目录** `<share_rules>/plugins/`，并**退出/重启 GUI** | 先干净退出 GUI，否则会同时跑两个 sidecar，1900 端口与媒体服务互相干扰、验收日志被上一轮假象污染；`--no-relaunch` 可只拉不重启 |
 | `verify-browser-segment-live.py` / `verify-watch-page-live.mjs` | **整体退出 HanCast**（抢 8080），并**写 `hancast_setting.json`** 覆盖后台参数 | 脚本结束把应用开回来；`verify-browser-segment-live.py` 最后把参数改回默认，且覆盖项应当被**清掉**，不是留一个 `== 默认值` 的脏键 |
 | `verify-dlna-stop-chain.py` | 向局域网真实 renderer **推流并下发停止** | 要求先整体退出 HanCast；测试媒体固定在 `/tmp/hc_media/test.mp4`（不是用户路径） |
+| `verify-watch-page-sound.mjs` | 用 ffmpeg 生成临时 HLS 素材、在 `127.0.0.1` 起随机端口 HTTP 服务、**弹出有头 Chromium 窗口**（屏幕上闪约 40 秒）与一次性浏览器 profile | 素材/浏览器 profile 全在 `mkdtemp` 临时目录、退出即删（`finally` + `rmSync`）；不碰用户配置、`/Applications` 产物与真实屏幕投屏 |
 | `verify-ssdp-offline-eviction.py` | 在本机**起一台假 MediaRenderer**并监听端口 | LOCATION 故意写 `127.0.0.1`；替身端口可指定（`--port`） |
 | `share_resolve_probe.py --serve/--play`、`verify-proxy-live.py` | **真起 MediaServer**，占本机端口、写临时文件 | 默认模式（不带 `--serve`/`--play`）用替身代理，不占端口不起服务 |
 | `share_resolve_probe.py`（解析失败时） | 往**用户解析失败台账** `parse_failures.json` 追加一条 | 默认把 `failures.SETTING_DIR` 重定向到临时目录并在退出时删除，真实台账一个字节都不动；只有显式 `--keep-ledger` 才写用户数据。pytest 同理由 `tests/conftest.py` 的 session fixture 隔离，测试用的假地址不得出现在用户设置页 |
@@ -155,13 +158,13 @@ ssh administrator@192.168.1.68 "schtasks /delete /tn <TASK> /f"      # 收尾
 - `verify-windows-artifact.sh` — 读的是 .68 安装目录里那份 `.py` 与二进制，与 `git show v<tag>` 逐文件比哈希；本地工作树跟它无关。
 - `verify-ffmpeg-detect.ps1` — 打的是 `%LOCALAPPDATA%\HanCast\hancast-sidecar.exe`（Nuitka 冻结产物）。源码级那三层判定由 `tests/test_ffmpeg_deps.py` / `test_ffmpeg_download_e2e.py` 管，这个脚本存在的理由正是「产物里 `bundle.resources` 到底有没有把 ffmpeg 带进去、装好的 sidecar 在真机上认不认得到系统那份」——跑源码等于没跑。
 
-反过来，这些是**源码级**的，不需要产物：`verify-dlna-volume-chain.py`、`verify-dshow-parse-offline.py`、`verify-sidecar-utf8-protocol.py`、`verify-params-ui.mjs`、`verify-error-wrap-ui.mjs`、`ssdp_probe.py`、`dump-cgwindowlist.py`、`rust-check.sh`、`build-rule-packs.py`。另有一类**联网但仍跑工作树代码**的：`share_resolve_probe.py`、`probe-hls-antileech.py`、`probe-ts-skin-offset.py`、`probe-dyrs-*.sh`、`verify-proxy-live.py`、`verify-rule-pack-live.py`、`verify-github-mirror-live.py`——后两个读的是 `rule-packs/dist/` 那份 zip 与真实解析管线，但都不碰 `/Applications/HanCast.app`，所以不能当产物验收用。
+反过来，这些是**源码级**的，不需要产物：`verify-dlna-volume-chain.py`、`verify-dshow-parse-offline.py`、`verify-sidecar-utf8-protocol.py`、`verify-params-ui.mjs`、`verify-error-wrap-ui.mjs`、`verify-watch-page-sound.mjs`（真实 Chromium 但页面是源码 `www/index.html`——产物层由 `accept-macos-artifact.sh` 的逐文件 sha256 兜）、`ssdp_probe.py`、`dump-cgwindowlist.py`、`rust-check.sh`、`build-rule-packs.py`。另有一类**联网但仍跑工作树代码**的：`share_resolve_probe.py`、`probe-hls-antileech.py`、`probe-ts-skin-offset.py`、`probe-dyrs-*.sh`、`verify-proxy-live.py`、`verify-rule-pack-live.py`、`verify-github-mirror-live.py`——后两个读的是 `rule-packs/dist/` 那份 zip 与真实解析管线，但都不碰 `/Applications/HanCast.app`，所以不能当产物验收用。
 
 ### 2.3 必须在 .68 Windows 测试机上跑的脚本
 
 `192.168.1.68`（脚本里简称 `.68`）：
 
-- **必须在 .68 的交互桌面会话里跑**（gdigrab 抓不到 session 0，所以必须经 `schtasks … /it` 投递）：`verify-screencast-audio-order.cmd`、`verify-win-loopback-feed.cmd`、`verify-win-screencast-audio-live.cmd`、`probe-win-window-picker.py`
+- **必须在 .68 的交互桌面会话里跑**（gdigrab 抓不到 session 0，所以必须经 `schtasks … /it` 投递）：`verify-screencast-audio-order.cmd`、`verify-win-loopback-feed.cmd`、`verify-win-screencast-audio-live.cmd`、`probe-win-window-picker.py`、`verify-win-capture-sources.ps1`
 - **必须在 .68 上跑但不需要桌面**：`probe-wasapi-loopback.py`、`probe-win-audio-pipe.py`（后者显式避开 gdigrab，视频输入用 `lavfi testsrc` 顶替）、`verify-screencast-audio-order.ps1`（读已产出的 m3u8）、`verify-ffmpeg-detect.ps1`（只发 stdin/stdout JSON 给 sidecar，可直接 ssh `powershell -File` 跑，不用 `schtasks /it`）
 - **从 macOS/Linux 远程打 .68**：`verify-windows-artifact.sh`（产物验收）、`verify-win-screencast-dwell.sh`、`verify-win-screencast-tone-content.sh`（两者 `HOST` 默认 `192.168.1.68`，走 ssh + 产品的 `http://<host>:8765/hls/<session>/` 通道）
 - **不需要 .68**：`verify-dshow-parse-offline.py`（离线回放 .68 抓来的文本，设计上就是在 Mac 上跑）、`gen-win-screencast-live-req.py`（只生成 ASCII 请求文本）
@@ -173,8 +176,8 @@ ssh administrator@192.168.1.68 "schtasks /delete /tn <TASK> /f"      # 收尾
 |------|--------|
 | 只 import `hancast_sidecar` 且用到 `requests`/`lxml` | `hancast-backend/.venv/bin/python`（系统 `python3` 没有这些依赖——`verify-dlna-volume-chain.py` 的 docstring 明写这条） |
 | 纯标准库 / 只用 `requests` | `python3` |
-| Node 脚本（CDP 驱动 Chromium） | `node`（`verify-params-ui.mjs`、`verify-error-wrap-ui.mjs`、`verify-watch-page-live.mjs`） |
-| `.mjs` 的 Chrome 定位 | 三个脚本都从 `~/.cache/puppeteer/chrome-headless-shell/mac_arm-*/` 现找，不写死版本号 |
+| Node 脚本（CDP 驱动 Chromium） | `node`（`verify-params-ui.mjs`、`verify-error-wrap-ui.mjs`、`verify-watch-page-live.mjs`、`verify-watch-page-sound.mjs`） |
+| `.mjs` 的 Chrome 定位 | 前三个从 `~/.cache/puppeteer/chrome-headless-shell/mac_arm-*/` 现找，`verify-watch-page-sound.mjs` 必须用**有头**那份 `~/.cache/puppeteer/chrome/mac_arm-*/`（headless 系没有 muted 自动播放豁免，见其头部注释）；都从 `~/.cache/puppeteer` 现找，不写死版本号 |
 
 ---
 

@@ -25,6 +25,16 @@
     width: 100%; height: 100%; object-fit: contain; background: #0d0f14;
     display: none;
   }
+  /* 自动播放策略只能免手势静音起播，解除静音要点一下 —— 按钮悬浮在画面下缘 */
+  #soundBtn {
+    display: none; position: absolute; z-index: 2;
+    left: 50%; bottom: 12%; transform: translateX(-50%);
+    padding: 10px 20px; border: none; border-radius: 999px;
+    background: rgba(91,140,255,.95); color: #fff;
+    font-size: 15px; cursor: pointer;
+    box-shadow: 0 6px 20px rgba(0,0,0,.45);
+  }
+  #soundBtn:hover { background: #7ba4ff; }
   .placeholder { text-align: center; color: #8a91a5; padding: 24px; }
   .placeholder .pulse {
     width: 48px; height: 48px; margin: 0 auto 16px; border-radius: 50%;
@@ -45,7 +55,8 @@
 </head>
 <body>
   <div class="stage">
-    <video id="video" autoplay playsinline muted controls></video>
+    <video id="video" playsinline controls></video>
+    <button id="soundBtn" type="button">点击开启声音</button>
     <div class="placeholder" id="placeholder">
       <div class="pulse"></div>
       <div>正在接入投屏画面…</div>
@@ -65,11 +76,68 @@
   var m3u8 = "/hls/" + encodeURIComponent(sessionId) + "/live.m3u8";
   var video = document.getElementById("video");
   var placeholder = document.getElementById("placeholder");
+  var soundBtn = document.getElementById("soundBtn");
   var statusText = document.getElementById("statusText");
   var dot = document.getElementById("dot");
   var errText = document.getElementById("errText");
   var hls = null;
   var stopped = false;
+
+  // 自动播放策略只放过免手势的静音起播，出声必须由用户手势触发。
+  // 起播先试带声（Safari 允许自动播放时能直接出声、完全无感），被拒才
+  // 退回静音起播并亮出「点击开启声音」按钮；按钮点击或原生控件解除静音
+  // 都算手势，解除后就收起按钮。
+  var needManualSound = false;   // 当前是静音起播的，等着用户点按钮出声
+  var playHandled = false;       // 本次起播已定性（成功或已退回静音）
+  var playingStarted = false;
+
+  video.addEventListener("playing", function () { playingStarted = true; });
+  video.addEventListener("volumechange", function () {
+    if (!video.muted) {
+      needManualSound = false;
+      soundBtn.style.display = "none";
+    }
+  });
+
+  soundBtn.addEventListener("click", function () {
+    // 真实手势下的解除静音不会再被策略拦。play() 万一失败（流刚结束等）
+    // 就跟回去保持静音，错误路径另有处理，这里不炸即可
+    video.muted = false;
+    var p = video.play();
+    if (p && p.catch) p.catch(function () { video.muted = true; });
+  });
+
+  function fallbackToMuted() {
+    needManualSound = true;
+    video.muted = true;
+    var p = video.play();
+    if (p && p.catch) p.catch(function () {});
+  }
+
+  function tryStart() {
+    if (needManualSound) {  // 已知本浏览器拦带声起播（重连时别重复挨拒）
+      fallbackToMuted();
+      return;
+    }
+    playHandled = false;
+    var p = video.play();
+    if (p && p.then) {
+      p.then(function () { playHandled = true; }).catch(function () {
+        if (!playHandled) {
+          playHandled = true;
+          fallbackToMuted();
+        }
+      });
+    }
+    // 保险丝：个别引擎的 play() 被拦下时既不 resolve 也不 reject（要等
+    // 有数据才表态），1.2 秒画面还没起来就切静音路径，别让用户干等
+    setTimeout(function () {
+      if (!playHandled && !playingStarted) {
+        playHandled = true;
+        fallbackToMuted();
+      }
+    }, 1200);
+  }
 
   function setStatus(text, cls) {
     statusText.textContent = text;
@@ -84,6 +152,7 @@
     placeholder.style.display = "none";
     video.style.display = "block";
     setStatus("正在观看", "ok");
+    if (needManualSound) soundBtn.style.display = "block";
   }
 
   function nativeHls() {
@@ -92,7 +161,7 @@
 
   function startNative() {
     video.src = m3u8;
-    video.play().catch(function () {});
+    tryStart();
     video.addEventListener("playing", showVideo);
     video.addEventListener("error", function () {
       setError("投屏已结束或画面源不可用");
@@ -108,7 +177,7 @@
       fragLoadingMaxRetry: 4,
     }, playerCfg));
     hls.on(Hls.Events.MANIFEST_PARSED, function () {
-      video.play().catch(function () {});
+      tryStart();
     });
     hls.on(Hls.Events.FRAG_BUFFERED, showVideo);
     hls.on(Hls.Events.ERROR, function (_ev, data) {

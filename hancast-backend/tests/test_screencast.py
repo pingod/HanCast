@@ -26,7 +26,7 @@ from hancast_sidecar.screencast import capture as capture_mod
 from hancast_sidecar.screencast.manager import HLS_MIME, ScreenCastManager
 from hancast_sidecar.screencast.capture import FfmpegCapture
 from hancast_sidecar.screencast.ffmpeg_manager import (
-    FfmpegManager, _parse_screen_region)
+    FfmpegManager, _parse_screen_region, _parse_window_hwnd)
 from hancast_sidecar.screencast.httpd import ScreenCastHttpd
 from hancast_sidecar.protocol.dlna import build_didl_item
 
@@ -205,11 +205,55 @@ class TestFfmpegManager(unittest.TestCase):
             self.assertIn("gdigrab", args)
             self.assertIn("desktop", args)
 
-    def test_build_video_input_window(self):
+    def test_build_video_input_window_legacy_title(self):
+        # 旧格式 id（无 hwnd）：保留 title= 兜底，新列表不会再产出这种 id
         args, _vf = FfmpegManager.build_video_input(
             {"type": "window", "title": "记事本"}, 10, "")
         if os.name == "nt":
             self.assertIn("title=记事本", args)
+
+    def test_parse_window_hwnd(self):
+        self.assertEqual(_parse_window_hwnd("window:0x1B1F0"), 0x1B1F0)
+        self.assertEqual(_parse_window_hwnd("window:0xdeadBEEF"), 0xDEADBEEF)
+        for bad in ("desktop", "window:记事本", "window:0x0", "window:",
+                    "window:0xABC — Firefox", "window:0x1B1F0extra",
+                    "screen:0,0,100,100"):
+            self.assertIsNone(_parse_window_hwnd(bad))
+
+    def test_window_hwnd_reaches_region_grab(self):
+        # 窗口抓取 = hwnd 换算矩形 + 抓 desktop：gdigrab 的 title= 在 DWM 下
+        # 对浏览器这类 GPU 合成窗口只能抓到黑帧，且标题一变就 I/O error（.68 实测）
+        old = os.name
+        try:
+            os.name = "nt"
+            with patch("hancast_sidecar.screencast.ffmpeg_manager._window_capture_rect",
+                       return_value=(100, 50, 996, 1288)):
+                args, _vf = FfmpegManager.build_video_input(
+                    {"type": "window", "id": "window:0x1B1F0",
+                     "title": "哔哩哔哩"}, 15, "")
+        finally:
+            os.name = old
+        self.assertEqual(args[args.index("-offset_x") + 1], "100")
+        self.assertEqual(args[args.index("-offset_y") + 1], "50")
+        self.assertEqual(args[args.index("-video_size") + 1], "996x1288")
+        self.assertEqual(args[args.index("-framerate") + 1], "15")
+        # 抓取参数必须排在 -i 之前
+        self.assertLess(args.index("-video_size"), args.index("desktop"))
+        self.assertFalse(any("title=" in a for a in args),
+                         "不再把标题交给 gdigrab")
+
+    def test_window_hwnd_gone_raises(self):
+        old = os.name
+        try:
+            os.name = "nt"
+            with patch("hancast_sidecar.screencast.ffmpeg_manager._window_capture_rect",
+                       return_value=None):
+                with self.assertRaises(ValueError) as ctx:
+                    FfmpegManager.build_video_input(
+                        {"type": "window", "id": "window:0x1B1F0"}, 15, "")
+        finally:
+            os.name = old
+        self.assertIn("窗口", str(ctx.exception))
 
     def test_scale_filter_keeps_aspect_and_even_dims(self):
         # 桌面尺寸常为奇数（多屏并集实测 4000x2571），x264 会直接拒绝初始化

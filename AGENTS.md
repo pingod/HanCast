@@ -3,7 +3,7 @@
 > 旧名 `CLAUDE.md`（Claude Code 私有约定），2026-10-15 改名为跨工具的 `AGENTS.md`；
 > `CLAUDE.md` 现在只留三行指针指向本文件。
 
-> 最后校对：2026-10-15，对应版本 v2.3.13（`package.json:4`）。
+> 最后校对：2026-10-15，对应版本 v2.3.14（`package.json:4`）。
 > 本文件是速览与硬约束；逐模块的深度内容在 **docs/README.md** 的索引里，别在这里找细节。
 
 ## 项目概述
@@ -124,7 +124,7 @@ HanCast/
 │   │   ├── screencast/
 │   │   │   ├── manager.py       # 会话编排、观看链接（/r/<session_id>）
 │   │   │   ├── capture.py       # 窗口/屏幕抓取源
-│   │   │   ├── ffmpeg_manager.py # FFmpeg 命令拼装与 HLS 切片（1048 行；检测委托 utils/ffmpeg_deps.py）
+│   │   │   ├── ffmpeg_manager.py # FFmpeg 命令拼装与 HLS 切片（1156 行；检测委托 utils/ffmpeg_deps.py）
 │   │   │   ├── loopback.py      # Windows 系统声音（WASAPI 环回，pyaudiowpatch）
 │   │   │   ├── macos_tap.py     # macOS 屏幕/音频原生 helper
 │   │   │   ├── httpd.py         # 观看页 HTTP 服务（默认 8765，绑 0.0.0.0）
@@ -151,7 +151,7 @@ HanCast/
 │   ├── index.json               # 官方索引；线上地址是 main 分支 raw 路径 `https://raw.githubusercontent.com/pingod/HanCast/main/rule-packs/index.json`（`params.py:21`）
 │   └── dist/                    # 打包 zip（CI 随 draft Release 发布）
 ├── scripts/                     # 壳层脚本：sync-version / check-version / sync-sidecar / check-resources（均为 .cjs）
-├── tools/                       # 47 个顶层脚本 + 1 个目录型验收包（browser-channel-livecheck/），索引与计数口径见 tools/README.md
+├── tools/                       # 49 个顶层脚本 + 1 个目录型验收包（browser-channel-livecheck/），索引与计数口径见 tools/README.md
 ├── mpv/                         # 本地放置的 MPV（`.gitignore:86-87` 只留 portable_config/）
 │   └── portable_config/mpv.conf # 入库：弹幕/OSD 脚本、着色器、字体
 ├── docs/                        # 设计文档，**入口是 docs/README.md**
@@ -605,7 +605,7 @@ node tools/verify-params-ui.mjs        # 参数表与 tag 源码逐键比对（U
 python3 tools/audit-doc-refs.py        # 文档引用的 文件:行号 是否还成立
 ```
 
-`tools/` 下 47 个顶层脚本（+ `browser-channel-livecheck/` 目录型验收包）按用途分类见 tools/README.md（计数口径同那里）；端到端验收脚本的判据写在
+`tools/` 下 49 个顶层脚本（+ `browser-channel-livecheck/` 目录型验收包）按用途分类见 tools/README.md（计数口径同那里）；端到端验收脚本的判据写在
 docs/构建与发布.md §6 与各专题文档，不要凭脚本退出码 0 就当作功能可用。
 
 ## 窗口配置
