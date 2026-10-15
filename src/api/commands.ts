@@ -13,6 +13,8 @@ import type {
   ScreenSources,
   ScreenCastState,
   ScreenCastStartParams,
+  FfmpegStatus,
+  FfmpegDownloadTask,
 } from '@/types/screencast'
 
 // ── Helpers ──
@@ -177,7 +179,7 @@ const MOCK_DEVICES: Device[] = [
 const MOCK_SETTINGS: AppSettings = {
   usn: 'hancast-uuid-001',
   friendly_name: 'HanCast',
-  version: '2.3.10',
+  version: '2.3.11',
   media_port: 8080,
   default_device: null,
   network_interface: '',
@@ -228,6 +230,76 @@ function mockParamSpecs(): ParamSpec[] {
     value: mockParamOverrides[s.key] ?? s.default,
     overridden: s.key in mockParamOverrides,
   }))
+}
+
+// FFmpeg 运行依赖的 dev mock。默认「本机已装」，免得其他流程被牵动；
+// URL 加 ?mockFfmpeg=missing 演缺失态（含下载中/下载失败两条分支），
+// ?mockFfmpeg=fail 让「下载并继续」直接失败，用来验错误块里的网络异常原文。
+let mockFfmpegMode: 'ok' | 'missing' = 'ok'
+let mockFfmpegFail = false
+if (typeof window !== 'undefined') {
+  const q = new URLSearchParams(window.location.search).get('mockFfmpeg')
+  if (q === 'missing' || q === 'fail') mockFfmpegMode = 'missing'
+  mockFfmpegFail = q === 'fail'
+}
+const mockFfmpegDownload = { active: false, ticks: 0, done: false }
+let mockFfmpegManual: string | null = null
+
+function mockFfmpegStatus(): FfmpegStatus {
+  const installed = mockFfmpegMode === 'ok' || mockFfmpegDownload.done || mockFfmpegManual !== null
+  const platform = /Mac|iPhone|iPad/.test(navigator.platform) ? 'darwin' : 'win32'
+  const managedDir = platform === 'darwin'
+    ? '/Users/mock/Library/Application Support/HanCast/bin'
+    : 'C:\\Users\\mock\\AppData\\Local\\HanCast\\bin'
+  const source = mockFfmpegManual !== null
+    ? 'manual'
+    : (mockFfmpegMode === 'ok' ? 'system' : 'downloaded')
+  const items = [
+    {
+      key: 'ffmpeg',
+      label: 'FFmpeg',
+      required: true,
+      found: installed,
+      path: installed ? (mockFfmpegManual ?? (mockFfmpegMode === 'ok' ? '/opt/homebrew/bin/ffmpeg' : `${managedDir}/ffmpeg`)) : null,
+      source: installed ? source : null,
+      version: installed ? 'ffmpeg version 7.1' : null,
+    },
+    {
+      key: 'ffprobe',
+      label: 'FFprobe',
+      required: false,
+      found: mockFfmpegMode === 'ok',
+      path: mockFfmpegMode === 'ok' ? '/opt/homebrew/bin/ffprobe' : null,
+      source: mockFfmpegMode === 'ok' ? 'system' : null,
+      version: mockFfmpegMode === 'ok' ? 'ffprobe version 7.1' : null,
+    },
+  ]
+  return {
+    ok: installed,
+    path: items[0].path,
+    version: items[0].version,
+    source: items[0].source,
+    ffprobe_path: items[1].path,
+    items,
+    missing: installed ? [] : ['FFmpeg'],
+    optional_missing: items[1].found ? [] : ['FFprobe'],
+    managed_dir: managedDir,
+    platform,
+    arch: 'arm64',
+    install_commands: installed
+      ? []
+      : platform === 'darwin'
+        ? ['brew install ffmpeg']
+        : ['winget install --id Gyan.FFmpeg -e'],
+    download: {
+      available: true,
+      kind: platform === 'darwin' ? 'gz' : 'zip',
+      url: platform === 'darwin'
+        ? 'https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/ffmpeg-darwin-arm64.gz'
+        : 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip',
+    },
+    error: installed ? null : '未检测到 FFmpeg：屏幕投屏需要它，可自己安装后点「重新检测」，或让本程序下载一份',
+  }
 }
 
 const MOCK_CAST_STATE: CastState = {
@@ -530,8 +602,8 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
     case 'check_update':
       return {
         has_update: false,
-        current: '2.3.10',
-        latest: '2.3.10',
+        current: '2.3.11',
+        latest: '2.3.11',
         url: '',
         body: '',
         source: 'github',
@@ -551,7 +623,7 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
           { name: '立体声混音', kind: 'system' },
         ],
         platform: /Mac|iPhone|iPad/.test(navigator.platform) ? 'darwin' : 'win32',
-        ffmpeg: { ok: true, path: 'ffmpeg', version: 'mock' },
+        ffmpeg: mockFfmpegStatus(),
       } as T
     case 'start_screen_cast':
       return { ok: true, target: 'browser', session_id: 'abc123', watch_url: 'http://127.0.0.1:8765/r/abc123' } as T
@@ -559,8 +631,69 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
       return { ok: true, control_failed: [], reasons: {} } as T
     case 'screen_cast_status':
       return { running: false, ffmpeg: { ok: true } } as T
-    case 'set_ffmpeg_path':
+    case 'set_ffmpeg_path': {
+      const p = String(args?.path ?? '').trim()
+      if (!p) return { ok: false, error: '请输入 FFmpeg 可执行文件路径' } as T
+      mockFfmpegManual = p
       return { ok: true } as T
+    }
+    case 'ffmpeg_status':
+      return mockFfmpegStatus() as T
+    case 'ffmpeg_download_start':
+      mockFfmpegDownload.active = true
+      mockFfmpegDownload.ticks = 0
+      return {
+        status: 'pending',
+        stage: 'connecting',
+        task_id: 'mock-ffmpeg-download',
+        url: mockFfmpegStatus().download.url,
+        error: null,
+      } as T
+    case 'ffmpeg_download_status': {
+      if (!mockFfmpegDownload.active && !mockFfmpegDownload.done) {
+        return { status: 'idle' } as T
+      }
+      if (mockFfmpegDownload.done) {
+        const s = mockFfmpegStatus()
+        return {
+          status: 'done',
+          stage: 'done',
+          percent: 100,
+          result: { ok: true, paths: [s.path ?? '', ''].filter(Boolean), dir: s.managed_dir },
+          error: null,
+        } as T
+      }
+      mockFfmpegDownload.ticks += 1
+      if (mockFfmpegFail && mockFfmpegDownload.ticks >= 3) {
+        mockFfmpegDownload.active = false
+        const failUrl = mockFfmpegStatus().download.url
+        return {
+          status: 'error',
+          stage: 'failed',
+          error: `连接下载源失败（${failUrl}）` +
+            ' — [Errno 8] nodename nor servname provided, or not known ← gaierror(-2)',
+          url: failUrl,
+        } as T
+      }
+      if (mockFfmpegDownload.ticks >= 8) {
+        mockFfmpegDownload.active = false
+        mockFfmpegDownload.done = true
+        return { status: 'pending', stage: 'verifying', percent: 100 } as T
+      }
+      const percent = mockFfmpegDownload.ticks * 12
+      return {
+        status: 'pending',
+        stage: percent < 100 ? 'downloading' : 'extracting',
+        received: percent * 11_477,
+        total: 114_768_076,
+        percent,
+        speed: 1_100_000,
+        elapsed: mockFfmpegDownload.ticks,
+        url: mockFfmpegStatus().download.url,
+      } as T
+    }
+    case 'open_ffmpeg_dir':
+      return { ok: true, path: mockFfmpegStatus().managed_dir } as T
     case 'add_device': {
       const addr = String(args?.address ?? '').trim()
       if (!addr) throw new Error('请输入设备 IP 或描述地址')
@@ -1189,4 +1322,27 @@ export async function getScreenCastStatus(): Promise<ScreenCastState> {
 export async function setFfmpegPath(path: string): Promise<{ ok: boolean; error?: string }> {
   const invoke = await initInvoke()
   return invoke('set_ffmpeg_path', { path })
+}
+
+/** FFmpeg/FFprobe 检测结果，供「需要下载运行依赖」弹窗与投屏门禁共用 */
+export async function ffmpegStatus(refresh = false): Promise<FfmpegStatus> {
+  const invoke = await initInvoke()
+  return invoke<FfmpegStatus>('ffmpeg_status', { refresh })
+}
+
+/** 起一次后台下载（立即返回，进度靠 ffmpegDownloadStatus 轮询） */
+export async function ffmpegDownloadStart(): Promise<FfmpegDownloadTask> {
+  const invoke = await initInvoke()
+  return invoke<FfmpegDownloadTask>('ffmpeg_download_start')
+}
+
+export async function ffmpegDownloadStatus(): Promise<FfmpegDownloadTask> {
+  const invoke = await initInvoke()
+  return invoke<FfmpegDownloadTask>('ffmpeg_download_status')
+}
+
+/** 在系统文件管理器里打开本程序存放依赖的目录 */
+export async function openFfmpegDir(): Promise<{ ok: boolean; path?: string; error?: string }> {
+  const invoke = await initInvoke()
+  return invoke('open_ffmpeg_dir')
 }

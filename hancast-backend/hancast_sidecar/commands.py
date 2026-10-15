@@ -187,6 +187,9 @@ class CommandHandler:
             "stop_screen_cast": self._stop_screen_cast,
             "screen_cast_status": self._screen_cast_status,
             "set_ffmpeg_path": self._set_ffmpeg_path,
+            "ffmpeg_status": self._ffmpeg_status,
+            "ffmpeg_download_start": self._ffmpeg_download_start,
+            "ffmpeg_download_status": self._ffmpeg_download_status,
 
             # 日志查看（排错）
             "get_logs": self._get_logs,
@@ -1054,6 +1057,23 @@ class CommandHandler:
     def _set_ffmpeg_path(self, params: dict) -> dict:
         """手动指定 FFmpeg 路径"""
         return self.screencast.set_ffmpeg_path(params)
+
+    def _ffmpeg_status(self, params: dict) -> dict:
+        """FFmpeg/FFprobe 检测报告：弹窗据此决定缺什么、给哪条安装命令
+
+        refresh=true 时重新扫一遍（用户自己装完点「重新检测」就走这条）。
+        """
+        refresh = bool(params.get("refresh"))
+        return self.screencast.ffmpeg.check(refresh=refresh)
+
+    def _ffmpeg_download_start(self, params: dict) -> dict:
+        """让程序自己把 FFmpeg 下到本程序目录（几百 MB，必须走后台任务）"""
+        from .utils import ffmpeg_deps
+        return ffmpeg_deps.start_download()
+
+    def _ffmpeg_download_status(self, params: dict) -> dict:
+        from .utils import ffmpeg_deps
+        return ffmpeg_deps.download_status()
 
     # ── 日志查看（排错）──
 

@@ -2,7 +2,7 @@
 
 > 回答一个问题：前端 `invoke()` 出去的每一条命令，究竟由壳层（Rust/Tauri）就地执行、还是转发给 Sidecar（Python 后台进程）；它的入参、返回结构、可能错误，以及 Sidecar 主动推给前端的事件分别是什么。
 >
-> 最后校对：2026-10-15，对应版本 v2.3.10（`package.json`，tag `v2.3.10`）
+> 最后校对：2026-10-15，对应版本 v2.3.11（`package.json`，tag `v2.3.11`）
 
 ---
 
@@ -10,17 +10,17 @@
 
 | 项 | 数量 | 出处 |
 | --- | --- | --- |
-| **命令总数** | **62** | `src-tauri/src/lib.rs:1307-1370`（`generate_handler!` 注册表，逐条数过） |
-| ├─ 壳层本地执行 | 8 | `minimize_window` / `close_window` / `read_clipboard` / `write_clipboard` / `export_logs` / `is_store_version` / `get_autostart` / `set_autostart` |
-| └─ 转发 Sidecar | 54 | 其余全部走 `sidecar.send_command(...)` |
+| **命令总数** | **66** | `src-tauri/src/lib.rs:1373-1440`（`generate_handler!` 注册表，逐条数过） |
+| ├─ 壳层本地执行 | 9 | `minimize_window` / `close_window` / `read_clipboard` / `write_clipboard` / `export_logs` / `is_store_version` / `get_autostart` / `set_autostart` / `open_ffmpeg_dir`（v2.3.11，先下发 `ffmpeg_status` 取目录再调系统文件管理器，`lib.rs:817-844`） |
+| └─ 转发 Sidecar | 57 | 其余全部走 `sidecar.send_command(...)` |
 | **事件总数** | **8** | 见 §3.1 表（Python 侧 6 + 壳层侧 2） |
-| 前端封装函数 | 61 | `src/api/commands.ts` 中 `export async function` 计数 |
+| 前端封装函数 | 65 | `src/api/commands.ts` 中 `export async function` 计数 |
 | ├─ 无独立封装的命令 | 3 | `get_resolve_result`（内联在 `resolveShare` / `pluginTest` 轮询里）、`check_mpv`、`set_mpv_path`（`src/` 下无任何调用点） |
 | └─ 一对多封装 | 1 | `plugin_import` → `pluginImportFile` / `pluginImportData` / `pluginImportUrl`（`commands.ts:797-813`） |
-| Sidecar 命令注册表条目 | 55 | `hancast-backend/hancast_sidecar/commands.py:109-190` |
-| 后台参数（`params.py`）条目 | 27 | `hancast-backend/hancast_sidecar/params.py:35-209` |
+| Sidecar 命令注册表条目 | 59 | `hancast-backend/hancast_sidecar/commands.py:110-197` |
+| 后台参数（`params.py`）条目 | 30 | `hancast-backend/hancast_sidecar/params.py:35-236` |
 
-**62 与 55 为什么对不上**：`parse_media_file` 与 `parse_media_url` 在壳层是两条命令，到 Sidecar 都归并成一条 `parse_media`（`lib.rs:229-252`），54 − 1 = 53；Sidecar 另有 `unhide_device`（`commands.py:381`）和 `get_hidden_devices`（`commands.py:387`）两条**没有对应的壳层命令，前端永远调不到**。53 + 2 = 55。此外 `exit` 不走注册表，是主循环直接拦下的特殊命令（`main.py:126-128`）。
+**66 与 59 为什么对不上**：57 条转发里，`parse_media_file` 与 `parse_media_url` 在壳层是两条命令、到 Sidecar 归并成一条 `parse_media`（`lib.rs:229-253`），57 − 1 = 56 个不同的 Sidecar 命令名；Sidecar 另有三条**没有对应壳层命令**——`unhide_device`、`get_hidden_devices`（`commands.py:120-121`，前端调不到）与 `browser_result`（`commands.py:166`，只由壳层的浏览器通道反向 RPC 下发）。56 + 3 = 59。此外 `exit` 不走注册表，是主循环直接拦下的特殊命令（`main.py:126-128`）。
 
 ---
 
@@ -36,8 +36,8 @@ src/api/commands.ts        前端封装层：initInvoke() → invoke<T>(cmd, arg
         │  Tauri IPC（JSON 序列化，参数名 camelCase）
         ▼
 src-tauri/src/lib.rs       壳层：#[tauri::command] 函数
-        │                   ├─ 8 条就地执行（剪贴板 / 窗口 / 托盘自启 / 日志导出 / 商店判定）
-        │                   └─ 54 条 → sidecar.send_command("cmd", json!({...}))
+        │                   ├─ 9 条就地执行（剪贴板 / 窗口 / 托盘自启 / 日志导出 / 商店判定 / FFmpeg 目录）
+        │                   └─ 57 条 → sidecar.send_command("cmd", json!({...}))
         ▼
 src-tauri/src/sidecar.rs   SidecarManager：stdin 写一行 JSON，oneshot 等一行 JSON
         │  子进程 stdin / stdout（行分隔 JSON，UTF-8）
@@ -45,7 +45,7 @@ src-tauri/src/sidecar.rs   SidecarManager：stdin 写一行 JSON，oneshot 等�
 hancast_sidecar/main.py    for line in sys.stdin → handler.execute(cmd, params)
         │
         ▼
-hancast_sidecar/commands.py  CommandHandler._commands 注册表（55 条）
+hancast_sidecar/commands.py  CommandHandler._commands 注册表（59 条）
 ```
 
 Sidecar 的启动方式：开发态 `uv run python -m hancast_sidecar.main`（`sidecar.rs:155-172`），打包态用 Nuitka 产物 `hancast-sidecar*`（`sidecar.rs:173-213`，macOS 在 `Contents/MacOS/` 下找，Windows/Linux 在 `resource_dir` 下找，`sidecar.rs:44-129`）。找不到二进制时 `setup()` 直接中止启动（`lib.rs:1147-1151`）。
@@ -168,7 +168,7 @@ Tauri 2 会把 JS 侧的 camelCase 自动映射到 Rust 的 snake_case 形参。
 
 壳层定义：`lib.rs:164-226`。Sidecar 处理函数：`commands.py:327-391`。
 
-Sidecar 侧还有两条**前端调不到**的命令：`unhide_device`（`commands.py:381-385`）、`get_hidden_devices`（`commands.py:387-389`）—— 壳层没有对应的 `#[tauri::command]`。隐藏是单向的，界面上没有「取消隐藏」入口。
+Sidecar 侧还有两条**前端调不到**的命令：`unhide_device`（`commands.py:388-392`）、`get_hidden_devices`（`commands.py:394-396`）—— 壳层没有对应的 `#[tauri::command]`。隐藏是单向的，界面上没有「取消隐藏」入口。
 
 `Device` 的键名坑见 §6.1。
 
@@ -211,17 +211,21 @@ Sidecar 侧还有两条**前端调不到**的命令：`unhide_device`（`command
 无法解析出可播放地址 — <host>: <原因>；…（可为该站点在 <rules_dir> 添加解析规则，或在设置页安装规则包）
 ```
 
-### 2.4 屏幕投屏（5 条）
+### 2.4 屏幕投屏与 FFmpeg 依赖（9 条）
 
 | 命令名 | 前端封装 | 入参 | 返回 | 执行层 | 可能的错误 |
 | --- | --- | --- | --- | --- | --- |
-| `list_screen_sources` | `listScreenSources()` `commands.ts:1160` | 无 | `{ screens: ScreenSourceItem[], windows: ScreenSourceItem[], audio_inputs: AudioDeviceItem[], ffmpeg: {...}, platform: "darwin"\|"win32"\|"linux" }`（`ffmpeg_manager.py:527-549`） | Sidecar | 通用 |
-| `start_screen_cast` | `startScreenCast(params)` `commands.ts:1165` | `params: ScreenCastStartParams`，**整个对象直接作为 Sidecar 的 params**（`lib.rs:748`，前端 `{ params }` → Rust 形参 `params` 原样下传） | 成功：dlna → `{ok:true, target:"dlna", device_id, session_id, url}`；browser → `{ok:true, target:"browser", session_id, watch_url, width, height, fps}`（`manager.py:322-339`）。失败：`{ok:false, error}` | Sidecar | **校验类错误全部走 `{ok:false,error}` 而不是异常**（`manager.py:92-169`）：`已有投屏正在进行，请先停止`、`未知目标类型: <t>`、FFmpeg 不可用原文、`窗口源缺少窗口信息`、`未选择系统声音设备（…）`、`未选择麦克风设备`、`选中的<麦克风/系统声音>设备已不可用：<名>；请重新选择（…）`、`麦克风采到的全是静音…`、`缺少目标设备 (device_id)`、`设备不存在或已离线: <id>`、`HTTP 服务启动失败`、`会话注册失败`、`屏幕捕获失败`、`电视拒绝播放（…），可换较低分辨率/码率后重试`、`启动失败: <异常>` |
-| `stop_screen_cast` | `stopScreenCast()` `commands.ts:1170` | 无 | `{ok:true, control_failed: string[], reasons: Record<string,string>}`；本来就没在跑 → `{ok:true, already_stopped:true}`（`manager.py:204-229`） | Sidecar | 幂等，不抛错。dlna 目标会复用 `_stop_cast` 的 `control_failed` 语义 |
-| `screen_cast_status` | `getScreenCastStatus()` `commands.ts:1175` | 无 | `_state` 全量 + `viewers`（仅 browser 通道）+ `pull`（有 session_id 时）+ `ffmpeg`（`manager.py:231-241`） | Sidecar | 通用 |
-| `set_ffmpeg_path` | `setFfmpegPath(path)` `commands.ts:1180` | `path: string` | `{ok:true, path, version}` 或 `{ok:false, error}`（`ffmpeg_manager.py:489-503`） | Sidecar | `缺少路径`（`manager.py:245-246`）；`文件不存在: <abs>`、`不是有效的 FFmpeg 可执行文件`（`ffmpeg_manager.py:492-495`） |
+| `list_screen_sources` | `listScreenSources()` `commands.ts:1302` | 无 | `{ screens: ScreenSourceItem[], windows: ScreenSourceItem[], audio_inputs: AudioDeviceItem[], ffmpeg: {...}, platform: "darwin"\|"win32"\|"linux" }`（`ffmpeg_manager.py:486-508`） | Sidecar | 通用 |
+| `start_screen_cast` | `startScreenCast(params)` `commands.ts:1307` | `params: ScreenCastStartParams`，**整个对象直接作为 Sidecar 的 params**（`lib.rs:744-752`，前端 `{ params }` → Rust 形参 `params` 原样下传） | 成功：dlna → `{ok:true, target:"dlna", device_id, session_id, url}`；browser → `{ok:true, target:"browser", session_id, watch_url, width, height, fps}`（`manager.py:322-339`）。失败：`{ok:false, error}` | Sidecar | **校验类错误全部走 `{ok:false,error}` 而不是异常**（`manager.py:92-169`）：`已有投屏正在进行，请先停止`、`未知目标类型: <t>`、FFmpeg 不可用原文、`窗口源缺少窗口信息`、`未选择系统声音设备（…）`、`未选择麦克风设备`、`选中的<麦克风/系统声音>设备已不可用：<名>；请重新选择（…）`、`麦克风采到的全是静音…`、`缺少目标设备 (device_id)`、`设备不存在或已离线: <id>`、`HTTP 服务启动失败`、`会话注册失败`、`屏幕捕获失败`、`电视拒绝播放（…），可换较低分辨率/码率后重试`、`启动失败: <异常>` |
+| `stop_screen_cast` | `stopScreenCast()` `commands.ts:1312` | 无 | `{ok:true, control_failed: string[], reasons: Record<string,string>}`；本来就没在跑 → `{ok:true, already_stopped:true}`（`manager.py:204-229`） | Sidecar | 幂等，不抛错。dlna 目标会复用 `_stop_cast` 的 `control_failed` 语义 |
+| `screen_cast_status` | `getScreenCastStatus()` `commands.ts:1317` | 无 | `_state` 全量 + `viewers`（仅 browser 通道）+ `pull`（有 session_id 时）+ `ffmpeg`（`manager.py:231-241`） | Sidecar | 通用 |
+| `set_ffmpeg_path` | `setFfmpegPath(path)` `commands.ts:1322` | `path: string` | `{ok:true, path, version}` 或 `{ok:false, error}`（`ffmpeg_manager.py:448-462`）；**只能设不能清**，落盘键 `screencast.ffmpeg_path` | Sidecar | `缺少路径`（`manager.py:243-247`）；`文件不存在: <abs>`、`不是有效的 FFmpeg 可执行文件`（`ffmpeg_manager.py:450-454`） |
+| `ffmpeg_status` | `ffmpegStatus(refresh)` `commands.ts:1328` | `refresh?: bool`（用户点「重新检测」时传 `true`） | 检测报告：`ok / path / version / source / ffprobe_path / items[] / missing[] / optional_missing[] / managed_dir / platform / arch / install_commands[] / download / error`（`ffmpeg_deps.py:189-252`） | Sidecar | 缺依赖不算异常：`ok:false` + 中文 `error`，前端据此弹窗 |
+| `ffmpeg_download_start` | `ffmpegDownloadStart()` `commands.ts:1334` | 无 | `{ok:true, task:{status, stage, ...}}`；已在下 → `already_running` | Sidecar | 起不来后台线程时 `{ok:false,error}`；压缩包 >512MB 直接拒（`ffmpeg_deps.py:448-469`） |
+| `ffmpeg_download_status` | `ffmpegDownloadStatus()` `commands.ts:1339` | 无 | 后台任务快照（`status/stage/received_bytes/total_bytes/speed/path/error`），`Command_TIMEOUT=60s` 所以下载绝不占住命令循环（`ffmpeg_deps.py:470-474`） | Sidecar | 通用 |
+| `open_ffmpeg_dir` | `openFfmpegDir()` `commands.ts:1345` | 无 | `{ok:true, path}`（回显目录，成败由调用方按「有没有窗口」判断） | **壳层就地**（`lib.rs:817-844`） | `Sidecar 未返回 FFmpeg 目录`、`目录创建失败: <e>`、`无法打开目录: <e>`；路径由 Sidecar 的 `managed_dir` 给出，**不接受前端传入**，否则等于开放「用资源管理器打开任意路径」；**只 spawn 不 wait**——`xdg-open` 活到文件管理器关闭为止，等它等于把按钮按死在命令循环里 |
 
-壳层定义：`lib.rs:733-778`。Sidecar 处理函数：`commands.py:1026-1046`，实现在 `screencast/manager.py`。
+壳层定义：`lib.rs:735-844`。Sidecar 注册 `commands.py:185-192`、处理函数 `commands.py:1041-1078`，投屏实现在 `screencast/manager.py`、依赖检测与下载在 `utils/ffmpeg_deps.py`。
 
 边界：屏幕投屏是**把本机画面推给别的设备**，与「接收投屏」（本机作为 DLNA 渲染端，靠 MPV）完全是两套代码。dlna 通道与 browser 通道共用一份 HLS 输出，但分片时长的后台参数不同（`screencast.dlna_segment_seconds` 默认 2s，`screencast.browser_segment_seconds` 默认 1s，`params.py:36-47`）。每次 `start` 都生成新的 `session_id`（`secrets.token_hex(3)`，`manager.py:157`）和新的 URL，旧链接立即失效。
 
@@ -716,7 +720,7 @@ async function toggleAutostart() {
 | `settings.ts` | 58 | 应用设置、网卡、后台参数 | `AppSettings`（对应 `config.to_dict()`）、`NetworkInterface` / `NetworkInterfacesInfo`、`ParamType = 'number'\|'bool'\|'enum'\|'text'\|'string'`、`ParamSpec`（含 `label_zh`/`label_en`/`help_zh`/`help_en`/`min`/`max`/`unit`/`options`/`value`/`overridden`）、`SaveParamsResult {ok, errors, specs}`、`DeviceLostEvent {id}`、`CastErrorEvent {message}`（**后者对应的事件从未被发出**，§3.2） |
 | `guard.ts` | 34 | 投屏确认 | `GuardDevice`（对应后端 `DeviceGuardEntry.to_dict()`，`guard.py:44-57`）、`GuardDevicesResponse {trusted, blacklisted}`、`GuardSettings {enabled, confirm_timeout}`、`CastConfirmRequest`（`cast_confirm_request` 事件载荷，`device` 只声明了 `ip`/`udn`/`friendly_name`/`model_name` 四个字段） |
 | `logs.ts` | 33 | 日志面板 | `LogLine {ts, module, level, msg, raw}`、`LogModule {id, label}`、`LogPage {lines, total, truncated, path, level, modules}`、`LogQuery {limit?, module?, level?, keyword?, include_older?}`。与 `logger.read_logs()` 返回体（`logger.py:207-215`）逐字段对应 |
-| `screencast.ts` | 70 | 屏幕投屏 | `ScreenSourceItem`（含显示器专用的 `width`/`height`/`primary`）、`AudioDeviceItem`（含 `tap`：macOS 自建 Audio Tap 环回；`loopback`：Windows WASAPI 环回；`default`）、`ScreenSources`（含 `platform`）、`ScreenCastState`、`ScreenCastStartParams`。`ScreenCastState` **缺 `pull` 字段**（§6.5） |
+| `screencast.ts` | 107 | 屏幕投屏 + FFmpeg 依赖 | `ScreenSourceItem`（含显示器专用的 `width`/`height`/`primary`）、`AudioDeviceItem`（含 `tap`：macOS 自建 Audio Tap 环回；`loopback`：Windows WASAPI 环回；`default`）、`ScreenSources`（含 `platform`）、`ScreenCastState`、`ScreenCastStartParams`；v2.3.11 去捆绑后新增 `FfmpegDepItem`（单个依赖的状态）、`FfmpegStatus`（`ffmpeg_status` 返回体，含 `items/missing/install_commands/download`）、`FfmpegDownloadTask`（后台下载任务快照）——三者都是「需要下载运行依赖」弹窗的数据源。`ScreenCastState` **缺 `pull` 字段**（§6.5） |
 | `update.ts` | 16 | 更新检查 | `UpdateInfo {has_update, current, latest, url, body, source}`（**缺后端会发的 `error`**，§6.6）、`UpdateModalState = 'hidden'\|'checking'\|'available'\|'latest'\|'error'` |
 
 `src/api/commands.ts` 里还自带一批**没有放进 `src/types/`** 的接口定义，用规则包/台账时要从那里 import：`ShareResolveResult`（`:661`）、`PluginRuleInfo`（`:710`）、`PluginInfo`（`:718`）、`PackIndexEntry`（`:730`）、`PackUpdateEntry`（`:739`）、`PackUpdateCheck`（`:743`）、`DeclarativeRuleInfo`（`:751`）、`RuleInventory`（`:761`）、`FailureEntry`（`:768`）、`FailureHost`（`:776`）、`FailureLedger`（`:784`）、`StopCastResult`（`:963`）、`StopWarning`（`:972`）。
@@ -787,7 +791,7 @@ Sidecar 实现了（`commands.py:381-389`）并注册在 `_commands` 里（`comm
 
 ---
 
-## 7. 快速参考表（62 条）
+## 7. 快速参考表（66 条）
 
 执行层：**壳** = 壳层本地，**SC** = Sidecar。
 
@@ -832,7 +836,7 @@ Sidecar 实现了（`commands.py:381-389`）并注册在 `_commands` 里（`comm
 | 37 | `get_settings` | 取应用设置 | SC |
 | 38 | `save_settings` | 存应用设置（改网卡会后台重启 SSDP） | SC |
 | 39 | `list_network_interfaces` | 枚举可选网卡及当前选定项 | SC |
-| 40 | `get_params` | 取 27 条后台参数登记表 + 当前值 | SC |
+| 40 | `get_params` | 取 30 条后台参数登记表 + 当前值 | SC |
 | 41 | `save_params` | 存后台参数，逐项校验、部分成功 | SC |
 | 42 | `check_update` | 检查新版本（壳层硬编码 github + gitee 双源） | SC |
 | 43 | `ignore_update_version` | 记录「此版本不再提示」 | SC |
@@ -849,12 +853,16 @@ Sidecar 实现了（`commands.py:381-389`）并注册在 `_commands` 里（`comm
 | 54 | `stop_screen_cast` | 停止屏幕投屏，报告电视是否真收到 Stop | SC |
 | 55 | `screen_cast_status` | 取屏幕投屏状态（含拉流统计与观众数） | SC |
 | 56 | `set_ffmpeg_path` | 手动指定 FFmpeg 路径 | SC |
-| 57 | `export_logs` | 弹保存对话框导出 Python 侧日志文件 | 壳 |
-| 58 | `get_logs` | 读日志尾部并按模块 / 级别 / 关键字过滤 | SC |
-| 59 | `set_log_level` | 运行时改日志级别 | SC |
-| 60 | `is_store_version` | 判定是否微软商店（MSIX）版本 | 壳 |
-| 61 | `get_autostart` | 读开机自启状态（MSIX / 经典两套实现） | 壳 |
-| 62 | `set_autostart` | 写开机自启状态，成功后 emit `autostart-changed` | 壳 |
+| 57 | `ffmpeg_status` | FFmpeg / FFprobe 检测报告（缺什么、装法、下载进度）| SC |
+| 58 | `ffmpeg_download_start` | 起一次 FFmpeg 后台下载，立即返回 | SC |
+| 59 | `ffmpeg_download_status` | 轮询 FFmpeg 下载任务 | SC |
+| 60 | `open_ffmpeg_dir` | 在系统文件管理器里打开程序自己的 FFmpeg 目录 | 壳 |
+| 61 | `export_logs` | 弹保存对话框导出 Python 侧日志文件 | 壳 |
+| 62 | `get_logs` | 读日志尾部并按模块 / 级别 / 关键字过滤 | SC |
+| 63 | `set_log_level` | 运行时改日志级别 | SC |
+| 64 | `is_store_version` | 判定是否微软商店（MSIX）版本 | 壳 |
+| 65 | `get_autostart` | 读开机自启状态（MSIX / 经典两套实现） | 壳 |
+| 66 | `set_autostart` | 写开机自启状态，成功后 emit `autostart-changed` | 壳 |
 
 **8 个事件**（详见 §3.1）：`ready`、`device_found`、`device_lost`、`cast_state_changed`、`cast_confirm_request`、`screen_cast_state_changed`、`update-available`、`autostart-changed`。
 

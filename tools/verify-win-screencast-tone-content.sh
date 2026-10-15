@@ -13,7 +13,7 @@
 # 「FFmpeg 还活着」；声音到底有没有进 HLS 分片，只能把分片拿回来量。
 # 做法：让 .68 循环播放「440Hz 与 3500Hz 同时发声」的提示音，用产品协议起一路投屏，
 # 从产品自己的 HTTP 通道（http://<host>:8765/hls/<会话>/）拉回两段中途分片，
-# 用打包内同一份 ffmpeg 分别做 420–460Hz / 3300–3700Hz 带通 + volumedetect：
+# 用本机检测到的那份 ffmpeg 分别做 420–460Hz / 3300–3700Hz 带通 + volumedetect：
 #   3.5kHz 带通有能量 → 提示音真被混进了输出，系统声音这条路通
 #   3.5kHz 带通 = -91 dB（数字静音）→ 输出里一点提示音都没有
 # 为什么是 3.5kHz：单频 440Hz 判不准，风扇与麦克风底噪的能量就堆在低频
@@ -25,12 +25,14 @@
 set -u
 HOST="${HOST:-192.168.1.68}"
 SSH="ssh -o ConnectTimeout=8 administrator@$HOST"
-INSTALL='C:\Users\Administrator\AppData\Local\HanCast'
 HLS='C:\Users\Administrator\AppData\Local\Temp\hancast_screencast_hls'
 WORK='D:\Temp\hctone'
-FFMPEG_BIN="${FFMPEG_BIN:-/Applications/HanCast.app/Contents/Resources/ffmpeg/ffmpeg}"
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 GEN="$REPO/tools/gen-win-screencast-live-req.py"
+# FFmpeg 自 v2.3.11 起不再随包。两边都按「依赖面板下载到配置目录 bin/ 的那份 → PATH 上的
+# 系统 ffmpeg」顺序找；显式给了 FFMPEG_BIN/WIN_FF 就用给的值，不再回退。
+FFMPEG_BIN="${FFMPEG_BIN:-$HOME/Library/Application Support/HanCast/bin/ffmpeg}"
+WIN_FF="${WIN_FF:-%APPDATA%\HanCast\bin\ffmpeg.exe}"
 NOPROXY=(env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy
          -u ALL_PROXY -u all_proxy)
 TMPD=$(mktemp -d /tmp/hctone.XXXXXX)
@@ -45,6 +47,14 @@ put() { "${NOPROXY[@]}" scp -q "$1" "administrator@$HOST:$2" 2>&1 |
 get() { "${NOPROXY[@]}" scp -q "administrator@$HOST:$1" "$2" 2>&1 |
         grep -v -i 'quantum\|store now\|upgraded'; }
 
+if [ ! -x "$FFMPEG_BIN" ]; then
+  FFMPEG_BIN="$(command -v ffmpeg || true)"
+  [ -n "$FFMPEG_BIN" ] || { echo "FAIL 本机没有 ffmpeg：先在依赖面板下载，或 brew install ffmpeg"; exit 2; }
+fi
+if ! rssh "if exist $WIN_FF (echo HAVE)" | grep -q HAVE; then
+  WIN_FF="ffmpeg"   # 这台机没用过依赖面板，退回 PATH 上的系统 ffmpeg
+fi
+
 SYS_RX="${2:-default}"
 MIC_RX="${3:-麦克风 .*Realtek}"
 MIC="${MIC:-on}"
@@ -58,7 +68,7 @@ TONEWAV="${TONEWAV:-tone-440x3500}"
 # ── 1. 提示音 + 循环播放器（这台机没有系统 python，PowerShell SoundPlayer 走默认输出设备）
 rssh "if not exist $WORK mkdir $WORK" >/dev/null
 if ! rssh "if exist $WORK\\$TONEWAV.wav (echo HAVE)" | grep -q HAVE; then
-  rssh "$INSTALL\\ffmpeg\\ffmpeg.exe -y -v error -f lavfi -i sine=frequency=440:duration=12 -f lavfi -i sine=frequency=3500:duration=12 -filter_complex [0:a][1:a]amix=inputs=2:duration=longest:normalize=0,volume=0.5 -ar 48000 -ac 2 $WORK\\$TONEWAV.wav" >/dev/null
+  rssh "$WIN_FF -y -v error -f lavfi -i sine=frequency=440:duration=12 -f lavfi -i sine=frequency=3500:duration=12 -filter_complex [0:a][1:a]amix=inputs=2:duration=longest:normalize=0,volume=0.5 -ar 48000 -ac 2 $WORK\\$TONEWAV.wav" >/dev/null
   rssh "if exist $WORK\\$TONEWAV.wav (echo HAVE)" | grep -q HAVE ||
     { echo "FAIL 提示音没生成"; exit 2; }
 fi

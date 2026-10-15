@@ -42,7 +42,6 @@ chmod +x "hancast-sidecar/hancast-sidecar-${TRIPLE}" 2>/dev/null || true
 # resources 里的每一项都要至少命中一个文件
 stub "mpv/mpv.app/Contents/MacOS/mpv"
 stub "mpv/portable_config/mpv.conf"
-stub "ffmpeg/ffmpeg"
 stub "libdummy.so"
 stub "libdummy.dylib"
 for pkg in certifi lxml charset_normalizer curl_cffi hancast_sidecar; do

@@ -3,7 +3,7 @@
 > 旧名 `CLAUDE.md`（Claude Code 私有约定），2026-10-15 改名为跨工具的 `AGENTS.md`；
 > `CLAUDE.md` 现在只留三行指针指向本文件。
 
-> 最后校对：2026-10-15，对应版本 v2.3.10（`package.json:4`，tag `v2.3.10`）。
+> 最后校对：2026-10-15，对应版本 v2.3.11（`package.json:4`，tag `v2.3.11`）。
 > 本文件是速览与硬约束；逐模块的深度内容在 **docs/README.md** 的索引里，别在这里找细节。
 
 ## 项目概述
@@ -12,7 +12,7 @@
 
 - **项目名**: HanCast
 - **作者**: lanzeweie@foxmail.com
-- **版本**: 2.3.10（版本 SSOT 是 `package.json` 的 `version`，`scripts/sync-version.cjs:4`；改版本只走 `npm run version:set`，见「版本管理」）
+- **版本**: 2.3.11（版本 SSOT 是 `package.json` 的 `version`，`scripts/sync-version.cjs:4`；改版本只走 `npm run version:set`，见「版本管理」）
 - **性质**: 二次开发（非原项目官方更新）
 - **原始代码**: [xfangfang/Macast](https://github.com/xfangfang/Macast)（原作者 xfangfang，最后更新 2022-01）。仓库里**不含** `Macast-main/`、`Macast-plugins-main/` 这些本地目录，1.x 源码只作为移植参考，见「原始代码复用情况」
 - **目标架构**: Tauri 2.0 前端 + Rust 桥接 + Python Sidecar（+ MPV 接收端播放、FFmpeg 屏幕抓取）
@@ -31,7 +31,7 @@
 | 后端服务 | Python Sidecar（Nuitka standalone 编译） | >= 3.11 |
 | 协议支持 | DLNA/UPnP/SSDP | — |
 | 媒体播放 | MPV（捆绑外部依赖，接收端播放） | CI 固定 v0.41.0 |
-| 屏幕抓取 | FFmpeg（HLS 切片）+ 原生 helper | ffmpeg-static b6.1.1 |
+| 屏幕抓取 | FFmpeg（HLS 切片）+ 原生 helper | **不随包**；运行时检测本机已装，缺失按需下载（`ffmpeg_deps.py`） |
 | 解析沙箱 | QuickJS（`quickjs` python 包，规则包 JS 执行） | >= 1.19.4 |
 | HTTP 指纹 | curl_cffi（JA3 伪装）+ aiohttp（HLS 供流） | — |
 
@@ -54,13 +54,14 @@ HanCast/
 │   ├── App.vue                  # 根组件（主题检测、设置加载、全局事件订阅）
 │   ├── api/
 │   │   └── commands.ts          # Tauri invoke 封装 + 浏览器 mock
-│   ├── components/              # 19 个组件，清单见 docs/HanCast-Frontend-Spec.md
+│   ├── components/              # 20 个组件，清单见 docs/HanCast-Frontend-Spec.md
 │   │   ├── TitleBar.vue         # 自定义标题栏（最小化、关闭、设置）
 │   │   ├── MediaInput.vue       # 拖拽 + URL 输入 + 剪贴板粘贴
 │   │   ├── DeviceList.vue / DeviceCard.vue / AddDeviceModal.vue   # 设备
 │   │   ├── CastControl.vue      # 投屏状态栏（播放/暂停/停止指示）
 │   │   ├── CastController.vue   # 投屏控制面板（音量、进度、停止）
 │   │   ├── ScreenCastPanel.vue  # 屏幕投屏（抓取源、观看链接、系统声音）
+│   │   ├── FfmpegDepsModal.vue  # 「需要下载运行依赖」弹窗（缺失清单、安装命令、按需下载）
 │   │   ├── GuardConfirmModal.vue / GuardDeviceList.vue  # 投屏确认与信任管理
 │   │   ├── PluginSettings.vue   # 规则包管理（导入、更新、启停）
 │   │   ├── LogsPanel.vue        # 后台日志面板
@@ -96,7 +97,7 @@ HanCast/
 │   ├── icons/                   # 应用图标
 │   └── src/
 │       ├── main.rs              # 入口，调用 hancast_lib::run()
-│       ├── lib.rs               # Tauri 应用设置 + 62 个 #[tauri::command]（清单见 generate_handler!，lib.rs:1307-1369）
+│       ├── lib.rs               # Tauri 应用设置 + 66 个 #[tauri::command]（清单见 generate_handler!，lib.rs:1373-1440）
 │       └── sidecar.rs           # Python Sidecar 管理器（stdin/stdout JSON，COMMAND_TIMEOUT=60s）
 │
 ├── hancast-backend/              # Python Sidecar 后端
@@ -105,8 +106,8 @@ HanCast/
 │   ├── README.md                # Sidecar 范围速查（协议信封、三条铁律、命令分组）
 │   ├── hancast_sidecar/
 │   │   ├── main.py              # Sidecar 入口（148 行：UTF-8 stdio、stdin/stdout JSON 循环、双击兜底）
-│   │   ├── commands.py          # CommandHandler — 命令路由（55 条注册表 commands.py:108-199）
-│   │   ├── params.py            # 后台参数 PARAM_SPECS（27 项，params.py:35-209）
+│   │   ├── commands.py          # CommandHandler — 命令路由（59 条注册表 commands.py:110-197）
+│   │   ├── params.py            # 后台参数 PARAM_SPECS（30 项，params.py:35-236）
 │   │   ├── ssdp.py              # SSDP 设备发现（1264 行）
 │   │   ├── protocol/
 │   │   │   ├── dlna.py          # DLNA 控制端实现（1229 行，AVTransport/RenderingControl SOAP）
@@ -123,7 +124,7 @@ HanCast/
 │   │   ├── screencast/
 │   │   │   ├── manager.py       # 会话编排、观看链接（/r/<session_id>）
 │   │   │   ├── capture.py       # 窗口/屏幕抓取源
-│   │   │   ├── ffmpeg_manager.py # FFmpeg 命令拼装与 HLS 切片（1089 行）
+│   │   │   ├── ffmpeg_manager.py # FFmpeg 命令拼装与 HLS 切片（1048 行；检测委托 utils/ffmpeg_deps.py）
 │   │   │   ├── loopback.py      # Windows 系统声音（WASAPI 环回，pyaudiowpatch）
 │   │   │   ├── macos_tap.py     # macOS 屏幕/音频原生 helper
 │   │   │   ├── httpd.py         # 观看页 HTTP 服务（默认 8765，绑 0.0.0.0）
@@ -136,13 +137,14 @@ HanCast/
 │   │   │   ├── httpclient.py    # 统一 HTTP 客户端（curl_cffi JA3 指纹 + 代理）
 │   │   │   ├── identity.py      # 设备身份（device_identity.json）
 │   │   │   ├── mpv_manager.py   # 捆绑 mpv 路径与进程管理
+│   │   │   ├── ffmpeg_deps.py   # FFmpeg 依赖：本机检测 + 缺失时按需下载（524 行）
 │   │   │   ├── platform_info.py # 平台探测
 │   │   │   └── logger.py        # 日志设置（滚动文件 + read_logs 取数）
 │   │   └── xml/                 # UPnP 描述 XML（Description / AVTransport / ConnectionManager / RenderingControl / SinkProtocolInfo.csv / setting.html）
 │   ├── scripts/
 │   │   ├── build_sidecar.py     # Nuitka 构建脚本 + flatten_dependencies()
 │   │   └── run_sidecar.py       # 独立 Sidecar 运行器
-│   └── tests/                   # 21 个 test_*.py + 2 个 smoke_*.py + conftest.py + data/（清单见 docs/开发指南.md）
+│   └── tests/                   # 23 个 test_*.py + 2 个 smoke_*.py + conftest.py + data/（清单见 docs/开发指南.md）
 │
 ├── rule-packs/                  # 官方规则包源码与产物
 │   ├── hancast-bilibili / hancast-douyin / hancast-template
@@ -152,7 +154,6 @@ HanCast/
 ├── tools/                       # 40 个探针与验收脚本（.py/.sh/.ps1/.mjs），索引进 docs/开发指南.md
 ├── mpv/                         # 本地放置的 MPV（`.gitignore:86-87` 只留 portable_config/）
 │   └── portable_config/mpv.conf # 入库：弹幕/OSD 脚本、着色器、字体
-├── ffmpeg/README.txt            # FFmpeg 放置说明；二进制不入库，构建时同步到 `src-tauri/ffmpeg/`
 ├── docs/                        # 设计文档，**入口是 docs/README.md**
 │   ├── README.md                # 按问题找文档 + 阅读路径 + 取代关系 + 文档维护约定
 │   ├── 架构总览.md / 开发指南.md / 故障排查.md / 构建与发布.md
@@ -168,7 +169,9 @@ HanCast/
 
 > 历史说明：早期清单里的 `Macast-main/`、`Macast-plugins-main/`、`_bmad/`、`_bmad-output/`
 > 已不在仓库中（1.x 源码只作上游参考，且 `.gitignore:82` 明确忽略 `Macast-main/`；BMad 产物已清理）；
-> `hancast_sidecar/types/` 实际目录名是 `models/`。
+> `hancast_sidecar/types/` 实际目录名是 `models/`；
+> 仓库根 `ffmpeg/`（曾放待捆绑的静态 ffmpeg，构建脚本同步到 `src-tauri/ffmpeg/`）连同
+> `ffmpeg/README.txt` 已于 **v2.3.11 删除**——FFmpeg 不再随包，改为本机检测 + 缺失按需下载。
 
 ## 核心架构
 
@@ -225,9 +228,9 @@ HanCast/
 前端合计监听 8 条。`ready` 两侧都没有订阅者（只作握手痕迹），`cast_error` 是前端遗留的死监听（`src/stores/cast.ts:637`）。
 完整清单与触发时机见 docs/HanCast-Frontend-API.md。
 
-### Tauri 命令列表（节选，完整清单以 `src-tauri/src/lib.rs` 的 `generate_handler!`（lib.rs:1307-1369，**62 条**）为准）
+### Tauri 命令列表（节选，完整清单以 `src-tauri/src/lib.rs` 的 `generate_handler!`（lib.rs:1373-1440，**66 条**）为准）
 
-Sidecar 侧的注册表是 **55 条**（`commands.py:108-199`）——差的那几条由 Rust 自己实现（窗口、剪贴板、开机自启、
+Sidecar 侧的注册表是 **59 条**（`commands.py:110-197`）——差的那几条由 Rust 自己实现（窗口、剪贴板、开机自启、
 Store 版判定、日志导出等），不下发 Python；`exit` 由 Sidecar 主循环拦下（`main.py:126-128`）。
 Rust 命令名与 Sidecar `cmd` 名不一定同名（例如 Rust 的 `plugin_list` 下发的是 Sidecar 的规则包命令），
 逐条对应关系见 docs/HanCast-Frontend-API.md。
@@ -250,12 +253,13 @@ Rust 命令名与 Sidecar `cmd` 名不一定同名（例如 Rust 的 `plugin_lis
 | 投屏 | `start_cast` / `stop_cast` / `pause_cast` / `resume_cast` / `seek_cast` | 播控 |
 | 投屏 | `get_cast_state` / `get_cast_url` / `set_volume` / `set_mute` | 状态与音量 |
 | 屏幕投屏 | `list_screen_sources` / `start_screen_cast` / `stop_screen_cast` / `screen_cast_status` | 抓取源列表、开关会话、状态轮询 |
-| 屏幕投屏 | `set_ffmpeg_path` | 指定外部 FFmpeg（默认用捆绑的 `ffmpeg/`） |
+| 屏幕投屏 | `set_ffmpeg_path` | 手动指定 FFmpeg 路径（优先级高于本机检测） |
+| 运行依赖 | `ffmpeg_status` / `ffmpeg_download_start` / `ffmpeg_download_status` / `open_ffmpeg_dir` | FFmpeg 检测报告、按需下载（后台任务 + 轮询）、打开本程序依赖目录 |
 | 投屏确认 | `respond_cast_confirm` | 前端回答未知设备的入站投屏请求 |
 | 投屏确认 | `get_guard_devices` / `remove_guard_device` / `set_guard_policy` | 信任 / 黑名单管理 |
 | 投屏确认 | `get_guard_settings` / `save_guard_settings` | 确认开关与超时档位 |
 | 设置 | `get_settings` / `save_settings` | 应用设置 |
-| 后台参数 | `get_params` / `save_params` | `PARAM_SPECS` 27 项（`params.py:35-209`） |
+| 后台参数 | `get_params` / `save_params` | `PARAM_SPECS` 30 项（`params.py:35-236`） |
 | 日志 | `get_logs` / `export_logs` / `set_log_level` | 面板取数、导出、级别 |
 | 播放环境 | `check_mpv` / `set_mpv_path` | 捆绑 MPV 探测与自定义路径 |
 | 更新与自启 | `check_update` / `ignore_update_version` / `is_store_version` / `get_autostart` / `set_autostart` | 自更新、Store 版判定、开机自启 |
@@ -269,7 +273,7 @@ Rust 命令名与 Sidecar `cmd` 名不一定同名（例如 Rust 的 `plugin_lis
 | Media Server | 0 = 自动选择 | 本地文件 HTTP 服务（Range + 边下边播代理），`config.media_port` 默认 0（`utils/config.py:112-114`、`commands.py:221`） |
 | Screencast HTTP | 默认 8765 | 观看页 + HLS 供流（`screencast/httpd.py:32,84`），观看链接带每会话新生成的短随机段 `/r/<session_id>` |
 | MPV Renderer | IPC | 通过 named pipe (Windows) / unix socket (Linux/macOS) 控制 MPV |
-| FFmpeg | 子进程 | 屏幕抓取切片成 HLS，由 `screencast/ffmpeg_manager.py` 拼装命令 |
+| FFmpeg | 子进程 | 屏幕抓取切片成 HLS，由 `screencast/ffmpeg_manager.py` 拼装命令；**不随包**，可执行文件由 `utils/ffmpeg_deps.py` 在运行时定位（手动路径 → 本机 PATH/常见安装目录 → 本程序下载的 `<配置目录>/bin/`） |
 
 **这些 HTTP 服务一律绑 `0.0.0.0`，不是回环**——电视要取描述文件与媒体流、浏览器观看页要拉 HLS，
 绑 `127.0.0.1` 等于功能全废。代价与缓解见「安全约束」。
@@ -376,16 +380,19 @@ npm run tauri build            # 或 npx tauri build --bundles <targets>
 ```
 
 步骤 3/4 的产物就是 `bundle.resources` 的 glob 目标，所以 Preflight 必须排在它们之后、
-`tauri build` 之前——放太晚只能等 `build.rs` 报含糊的 glob 错误（`.github/workflows/build.yml:266-281`）。
+`tauri build` 之前——放太晚只能等 `build.rs` 报含糊的 glob 错误（`.github/workflows/build.yml:238-252`）。
 
 **构建前还需要手工准备**（CI 里由 workflow 步骤自动下载）：
 
 1. `src-tauri/mpv/` 里要有 mpv 可执行文件；仓库根 `mpv/` 被 gitignore，只有 `portable_config/` 入库，
-   CI 会先把已提交的 `mpv/portable_config/` 补进 `src-tauri/mpv/portable_config/`（`build.yml:157-160`）。
-2. `src-tauri/ffmpeg/ffmpeg`（或 `ffmpeg.exe`）——屏幕投屏切片用，CI 从 `eugeneware/ffmpeg-static`
-   的 `b6.1.1` release 取静态单文件（`build.yml:210-225`）。
-3. macOS 只有 `mpv.app/` 是有效载荷：`mpv/*` 这种非递归 glob 能看见目录却不会递归，
+   CI 会先把已提交的 `mpv/portable_config/` 补进 `src-tauri/mpv/portable_config/`（`build.yml:156-160`）。
+2. macOS 只有 `mpv.app/` 是有效载荷：`mpv/*` 这种非递归 glob 能看见目录却不会递归，
    历史上因此打出过不含 mpv 的 app，`scripts/check-resources.cjs:12-21` 专门记录了这一坑。
+
+> **FFmpeg 不在准备清单里**：v2.3.11 起不再捆绑，`bundle.resources` 的 `ffmpeg/*` 与 CI 的
+> 「Download & unpack FFmpeg」步骤（曾从 `eugeneware/ffmpeg-static` 的 `b6.1.1` 取静态单文件）
+> 一并删除，安装包因此小掉一大截。运行时由 `utils/ffmpeg_deps.py` 检测本机 FFmpeg，
+> 缺失时前端弹「需要下载运行依赖」，用户自装或让程序下载到 `<配置目录>/bin/`。
 
 ### CI 构建（GitHub Actions）
 
@@ -679,8 +686,8 @@ docs/构建与发布.md §6 与各专题文档，不要凭脚本退出码 0 就�
    「文件找不到」要自己分辨是已退役的历史文件名（写成「曾经/已于 vX 删除」即可）还是真写错；
    运行时才生成的落盘文件（`hancast_setting.json`、`window_config.json` 等）脚本已放行。
 3. **每份文档头部留一行「最后校对：YYYY-MM-DD，对应版本 vX.Y.Z」**，改了内容就改这行。
-4. **数字必须写口径**。例：`#[tauri::command]` 62 条（`lib.rs:1307-1369`）/ Sidecar 注册 55 条
-   （`commands.py:108-199`）/ 前端 `commands.ts` 导出 61 个 / 事件 8 条（Python 6 + Rust 2）。
+4. **数字必须写口径**。例：`#[tauri::command]` 66 条（`lib.rs:1373-1440`）/ Sidecar 注册 59 条
+   （`commands.py:110-197`）/ 前端 `commands.ts` 导出 65 个 / 事件 8 条（Python 6 + Rust 2）。
    不写口径，下次改动看起来就像文档坏了。
 5. **别静默删证据**。被推翻的结论保留「历史一句」（为什么曾经这么做、哪一版改的），
    就像本文件「安全约束」第 3 条那样标注更正来源。

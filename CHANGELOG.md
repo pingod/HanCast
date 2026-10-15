@@ -1,6 +1,6 @@
 # Changelog
 
-> 最后校对：2026-10-15，对应版本 v2.3.10（`package.json:4`）
+> 最后校对：2026-10-15，对应版本 v2.3.11（`package.json:4`）
 
 本文件记录 HanCast 的版本历史。口径说明：
 
@@ -10,6 +10,25 @@
 - 新加版本时**同一次提交**里补这里，并按 [docs/README.md](docs/README.md) §4 的约定同步对应文档。
 
 ---
+
+## v2.3.11 — 2026-10-15（本轮发布提交）
+
+**彻底不再随包 FFmpeg**：安装包里的 `ffmpeg/` 整个删掉，改为检测本机已装的 FFmpeg；确实没有时弹「需要下载运行依赖」，用户自己装、或者让程序下载一份。屏幕投屏是 FFmpeg 的唯一用途，所以这是它唯一的闸门入口。
+
+- **删掉的东西**：仓库根 `ffmpeg/README.txt`、四个平台 `bundle.resources` 里的 `ffmpeg/*` glob、CI 的「Download & unpack FFmpeg」步骤（曾从 `eugeneware/ffmpeg-static` 的 `b6.1.1` 取静态单文件、Windows 改名 `ffmpeg.exe`），以及 `ffmpeg_manager.py` 里夹在中间的「随包目录」那两层（`_get_base_path()` / `_find_in_program_dir()`）。
+- **检测链**（新增 `hancast-backend/hancast_sidecar/utils/ffmpeg_deps.py`，524 行；`status()` 在 `:189-252`）：**手动指定 → 系统已装 → 本程序下载的那份**。② 是 `PATH` + 平台常见目录（`search_dirs()` `:104-117`），Windows 额外往 winget 包目录里下钻一层 `bin/`（`_walk_dirs()` `:120-139`）；③ 落在 `<SETTING_DIR>/bin/`（`managed_dir()` `:51-53`，命中则 `source="downloaded"`）。三层共同的判据是**真的跑一次 `-version`**（`read_version()` `:142-162`）——「文件在」不等于「能用」，装坏的 exe、平台不匹配的构建都会被跳过继续往下找，配置里失效的手填路径同样降级（`ffmpeg_manager.py:425-427`），不会把功能锁死。
+- **ffprobe 是可选依赖**（`REQUIRED=("ffmpeg",)`、`OPTIONAL=("ffprobe",)` `:43-44`）：macOS 那条 ffmpeg-static 产物本来就只有一个二进制，缺 ffprobe 只影响本地文件的时长探测（`media/parser.py` 用 `probe_path() or "ffprobe"`）。手动指定 ffmpeg 而系统里没有 ffprobe 时，会自动取**同目录**那份当搭档（`:219-225`）——gyan/BtbN 这类包就是两个二进制同目录分发。
+- **命令面**：Rust `#[tauri::command]` 62 → **66**（`lib.rs:1373-1440`）、Sidecar 注册 55 → **59**（`commands.py:110-197`）、`commands.ts` 导出 **65**。新增 `ffmpeg_status`（检测报告，同时是弹窗的数据源）、`ffmpeg_download_start`、`ffmpeg_download_status`、`open_ffmpeg_dir`。最后一条是「就地执行但要先问 Sidecar」：它下发 `ffmpeg_status` 拿 `managed_dir` 再调系统文件管理器（`lib.rs:817-844`），**路径不接受前端传入**——否则等于开放「用资源管理器打开任意路径」；它只 spawn 不 wait，因为 `xdg-open` 会活到文件管理器被关闭为止，等它等于把一个按钮按死在命令循环里，而 `explorer` 常返回非 0 却照样开窗，退出码本来就不是判据。
+- **下载走后台任务表 + 前端 1s 轮询**（`screencast.ts:114-128`、`:143-157`），理由与解析异步化同一条：归档几百 MB，而 Rust 侧 `COMMAND_TIMEOUT = 60s`（`src-tauri/src/sidecar.rs:18`）等不起。阶段 ∈ `connecting / downloading / extracting / verifying / done / failed`，进度带 `received/total/percent/speed/elapsed`；源按 `(sys_platform, machine)` 选（`_SOURCES` `:264-296`：win32/amd64 → gyan `ffmpeg-release-essentials.zip`，win32/arm64 → BtbN，darwin → ffmpeg-static `.gz`，linux → johnvansickle `tar.xz`）；`MAX_ARCHIVE_BYTES = 512MB`（`:32`）拦 Content-Length 撒谎的响应；解压只按 **basename** 匹配想要的名、不照归档里的路径落盘、`chmod 0o755`，归档无论如何用完即删；收尾必须 `verifying` 再跑一次 `-version`，跑不起来报的是「下载并解包成功，但这个 ffmpeg 跑不起来……多半是当前平台用不了这份构建」而不是假成功。
+- **失败给用户看底层异常原文**：`format_error()`（`:308-324`）沿 `__cause__`/`__context__` 逐层收集、去重、用 ` ← ` 连接（最多 3 段），所以弹窗里是 `连接下载源失败（https://…）— ConnectionError: …` 这种能据以判断的句子，不是一句「下载失败」。
+- **UI（截图里的功能全部落地）**：第 20 个组件 `src/components/FfmpegDepsModal.vue`（418 行）——缺失清单、按平台的**可复制**安装命令（Windows `winget install --id Gyan.FFmpeg -e` / `choco install ffmpeg -y`，macOS `brew install ffmpeg` / `port install ffmpeg`，Linux `apt install ffmpeg` / `dnf install ffmpeg`，`install_commands()` `:178-188`）、手动指定路径、重新检测、打开安装目录、「下载并继续」+ 进度条与实时速度、失败原文。两个入口：`ScreenCastPanel.vue:43-50`（面板加载后 `ffmpeg.ok=false` 自动弹一次，`depsPrompted` 保证关掉不追着弹）与 `:198-201`（错误条里的「打开依赖」按钮）。下载 `done` → 弹窗自动关 → 投屏闸门随即放开；旧的「手填 ffmpeg 路径」输入框由弹窗接管（手填本身还在，`onSetManual` 走 `set_ffmpeg_path`）。
+- **dev mock 补上缺失态**：`src/api/commands.ts:235-246` 新增 `?mockFfmpeg=missing|fail` 两条开关。此前 mock 无条件报「本机已装」，浏览器模式下永远走不到报错分支——这类功能根本没法在 dev 里验收。
+- **脚本与打包入口不再假设随包 ffmpeg**：`windows-build.ps1`（删掉「Step 4.6 同步 FFmpeg」与绿色版的 ffmpeg 复制）、`tools/gen-win-screencast-live-req.py`、`verify-screencast-audio-order.{cmd,ps1}`、`verify-win-loopback-feed.cmd`、`verify-win-screencast-tone-content.sh`、`verify-dlna-stop-chain.py`、`verify-proxy-segment-decodable.py`、`tools/rust-check.sh`（本地资源桩删掉 `ffmpeg/ffmpeg`，只剩 mpv + sidecar）共 9 处改为现读本机 ffmpeg。
+- **顺带修掉一条测试隔离 bug**：`tests/test_ffmpeg_deps.py` 的 `StatusContractTest.setUp` 把 `managed_dir` patch 起来却没 `addCleanup(...stop)`，mock 泄漏到后续用例——`tests/test_ffmpeg_download_e2e.py::test_gz_download_end_to_end` **只有两个文件同跑时**才失败（它的托管目录被指进了一个已删除的临时目录）。逐类 bisect 定位后补上 cleanup，产品代码无辜（曾怀疑的下载任务表跨线程竞争在生产路径上不成立：`start_download()` 在 `pending` 期间直接早退）。
+- **数字口径更正**（本轮没动参数表，是补文档滞后）：`PARAM_SPECS` 27 → **30**（`params.py:35-236`）。
+- **验收（代码层）**：定向 `pytest tests/test_screencast.py tests/test_commands.py tests/test_imports.py tests/test_ffmpeg_deps.py tests/test_ffmpeg_download_e2e.py` → **117 passed**。其中 e2e 那组是**真跑下载管线**：本地 HTTP 源 → 流式下载 → gz / zip / tar.xz 三种解包 → 落盘后真执行 `-version` → `status(refresh=True)` 立刻认出 `source="downloaded"`，另含两条失败分支（跑不起来的构建报「跑不起来」、端口没人听时错误里留着 `ConnectionError` 原文）。`vue-tsc --noEmit` rc=0。前端在 **Vite dev server + 浏览器 mock** 实测：缺失态自动弹窗 → 下载进度 → verifying → done 自动关窗 → 闸门放开；`?mockFfmpeg=fail` 的错误块渲染出网络异常原文；手填路径被采纳、「重新检测」、复制安装命令的「已复制」反馈。
+- **验收层级要说清**：上面全是源码层 + dev server 的证据，**不含装好的产物**。打包链目前只证明到「配置里再没有 ffmpeg glob、CI 不再有下载步骤、`node scripts/check-resources.cjs` 不再报 ffmpeg 相关缺失」（本机那次剩下的 MISSING 全是还没跑 `npm run build:sidecar` 的 Nuitka 产物）。三件事必须等 CI 产物与 .68 真机：① bundle 里确实不含 ffmpeg；② Windows 上能检出系统已装那份（`source="system"`）；③ 没有 ffmpeg 的机器上弹窗与「让程序下载」真的可用。产物层判据见 [docs/屏幕投屏.md](docs/屏幕投屏.md) §5.8 与 [docs/故障排查.md](docs/故障排查.md) §6.6，本轮发布后由 CI 产物 + .68 真机补证。
+- **已知边界**：`set_ffmpeg_path` 只能设不能清（§屏幕投屏 5.1），靠失效降级兜住；流式下载经 curl_cffi 时会打 `CurlCffiWarning: chunk_size is ignored`（curl 没有分块大小的概念），只影响进度粒度不影响字节；Linux 与 macOS 的产物路径本轮只在源码层验过，`_SOURCES` 的每条源没逐条真下载验证过（gyan 与 ffmpeg-static 两条在 CI/真机里验）。
 
 ## v2.3.10 — 2026-10-15（本轮发布提交）
 

@@ -141,13 +141,17 @@ CI publishes Windows (x64 NSIS installer), macOS (arm64 `.app` / `.dmg`) and Lin
 | [Python](https://python.org/) | >= 3.11 | Backend runtime |
 | [uv](https://docs.astral.sh/uv/) | Latest | Python package manager (recommended) |
 | [MPV](https://mpv.io/) | Any | Required for receive casting; optional for send casting |
-| [FFmpeg](https://ffmpeg.org/) | needs x264 + HLS | Required for screen casting |
+| [FFmpeg](https://ffmpeg.org/) | needs x264 + HLS | Required for screen casting; **not bundled** — detected at runtime |
 
-Packaging reads mpv from `src-tauri/mpv/` (the `mpv/*` entry in `bundle.resources`) and ffmpeg from
-`src-tauri/ffmpeg/`. For local development, drop `ffmpeg.exe` into the root `ffmpeg/` directory first
-(conventions in `ffmpeg/README.txt`; the build script syncs it over — without it the Sidecar falls back
-to ffmpeg on `PATH`, and the settings page can point at a path explicitly).
+Packaging reads mpv from `src-tauri/mpv/` (the `mpv/*` entry in `bundle.resources`).
 Then run `node scripts/check-resources.cjs` to confirm every glob resolves.
+
+**FFmpeg is no longer bundled (since v2.3.11)**: the Sidecar looks for it in
+"path set in Settings → this machine's `PATH` plus the usual install directories per platform →
+the copy this app downloaded into `<config dir>/bin/`". When nothing is found, the screen-casting panel
+opens a "runtime dependency" dialog offering the platform's package-manager command, a
+download-and-continue action, and a button to open the dependency directory.
+See [docs/屏幕投屏.md](docs/屏幕投屏.md).
 
 ### Install & Run
 
@@ -225,8 +229,8 @@ resources by `scripts/sync-sidecar.cjs`.
 | Player | MPV (external dependency) | Receiver playback, IPC control |
 | Capture | FFmpeg (external dependency) + WASAPI / Audio Tap | Screen & window capture, HLS segmentation |
 
-The frontend calls 62 Rust commands via Tauri `invoke()`; Rust talks to the Python Sidecar over
-stdin/stdout JSON (55 commands registered Sidecar-side, 8 events pushed back to the frontend).
+The frontend calls 66 Rust commands via Tauri `invoke()`; Rust talks to the Python Sidecar over
+stdin/stdout JSON (59 commands registered Sidecar-side, 8 events pushed back to the frontend).
 Full contract: [docs/HanCast-Frontend-API.md](docs/HanCast-Frontend-API.md).
 
 ---
@@ -236,7 +240,7 @@ Full contract: [docs/HanCast-Frontend-API.md](docs/HanCast-Frontend-API.md).
 ```
 HanCast/
 ├── src/                        # Vue 3 Frontend
-│   ├── components/             # UI Components (19; inventory in docs/HanCast-Frontend-Spec.md)
+│   ├── components/             # UI Components (20; inventory in docs/HanCast-Frontend-Spec.md)
 │   │   ├── TitleBar.vue        # Custom title bar
 │   │   ├── MediaInput.vue      # Media input (drag/link/paste)
 │   │   ├── DeviceList.vue      # Device list
@@ -252,13 +256,13 @@ HanCast/
 │   ├── src/
 │   │   ├── lib.rs              # Tauri commands (see generate_handler! for the list)
 │   │   └── sidecar.rs          # SidecarManager (Rust ↔ Python)
-│   ├── mpv/ ffmpeg/            # External player & capture binaries (placed before build)
+│   ├── mpv/                    # External player binary (placed before build; FFmpeg is not bundled)
 │   └── Cargo.toml
 │
 ├── hancast-backend/            # Python Backend (Sidecar)
 │   └── hancast_sidecar/
 │       ├── main.py             # Sidecar entry (stdin/stdout JSON loop)
-│       ├── commands.py         # Command router (registry of 55 commands lives here)
+│       ├── commands.py         # Command router (registry of 59 commands lives here)
 │       ├── params.py           # 27 background parameters
 │       ├── ssdp.py             # SSDP discovery (broadcast fallback when multicast fails)
 │       ├── protocol/
@@ -295,7 +299,7 @@ paths and states the maintenance rules. Frequently used:
 |----------|-------------|
 | [docs/架构总览.md](docs/架构总览.md) | Process layout, ports/threads/on-disk state, invariants |
 | [docs/开发指南.md](docs/开发指南.md) | Setup, run modes, test discipline, debugging, release rules |
-| [docs/HanCast-Frontend-API.md](docs/HanCast-Frontend-API.md) | Full contract of 62 invoke commands and 8 events |
+| [docs/HanCast-Frontend-API.md](docs/HanCast-Frontend-API.md) | Full contract of 66 invoke commands and 8 events |
 | [docs/HanCast-Frontend-Spec.md](docs/HanCast-Frontend-Spec.md) | Components / stores / views, styling, i18n |
 | [docs/故障排查.md](docs/故障排查.md) | Symptom-indexed: devices not found, cast won't start, won't stop, no audio… |
 | [docs/屏幕投屏.md](docs/屏幕投屏.md) · [docs/投屏确认.md](docs/投屏确认.md) | Behaviour contracts of the two subsystems |

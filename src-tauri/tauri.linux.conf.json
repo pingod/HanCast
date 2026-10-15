@@ -3,7 +3,6 @@
     "resources": [
       "mpv/*",
       "mpv/portable_config/**/*",
-      "ffmpeg/*",
       "*.so",
       "*.so.*",
       "hancast_sidecar/**/*",

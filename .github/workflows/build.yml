@@ -206,37 +206,9 @@ jobs:
           ls -la src-tauri/mpv
           ls -la src-tauri/mpv/portable_config
 
-      # ---------- 准备 FFmpeg（屏幕投屏依赖；resources 里 glob 为 ffmpeg/*）----------
-      # 从 eugeneware/ffmpeg-static 官方 Release 下载静态构建（单文件、无动态库依赖，
-      # 自带 gdigrab/avfoundation/x11grab 输入与 libx264/opus 编码器）。
-      # BtbN 的构建不含 macOS 资产，故统一用 ffmpeg-static。
-      - name: Download & unpack FFmpeg
-        shell: bash
-        env:
-          RUNNER_OS: ${{ matrix.runner-os }}
-        run: |
-          set -e
-          WS="$(pwd)"
-          case "$RUNNER_OS" in
-            Windows) asset="ffmpeg-win32-x64.gz" ;;
-            macOS)   asset="ffmpeg-darwin-arm64.gz" ;;
-            Linux)   asset="ffmpeg-linux-x64.gz" ;;
-          esac
-          url="https://github.com/eugeneware/ffmpeg-static/releases/download/b6.1.1/${asset}"
-          echo "Downloading: $url"
-          curl -fsSL -o ffmpeg.gz "$url"
-          rm -rf "$WS/src-tauri/ffmpeg" && mkdir -p "$WS/src-tauri/ffmpeg"
-          # gz 内是单个静态可执行文件
-          gzip -dc ffmpeg.gz > "$WS/src-tauri/ffmpeg/ffmpeg"
-          chmod +x "$WS/src-tauri/ffmpeg/ffmpeg"
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            mv -f "$WS/src-tauri/ffmpeg/ffmpeg" "$WS/src-tauri/ffmpeg/ffmpeg.exe"
-          fi
-          echo "FFmpeg files in src-tauri/ffmpeg:"
-          ls -la "$WS/src-tauri/ffmpeg"
-          # 校验：真实执行一次，静态二进制必须能跑
-          "$WS/src-tauri/ffmpeg/ffmpeg" -version 2>&1 | head -1 || \
-            "$WS/src-tauri/ffmpeg/ffmpeg.exe" -version 2>&1 | head -1
+      # FFmpeg 不再随包：产物里不含 ffmpeg/*，运行时由 sidecar 检测本机已装的
+      # FFmpeg（PATH + 各平台常见安装目录），缺了就在「需要下载运行依赖」弹窗里
+      # 让用户自行安装或让程序按需下载（hancast_sidecar/utils/ffmpeg_deps.py）。
 
       # ---------- 构建 ----------
       - name: Resolve version

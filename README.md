@@ -108,7 +108,7 @@ B 站投屏还能在播放中**切换画质**，切完自动续上进度。
 
 ![设置页](docs/images/settings.png)
 
-- 27 项后台参数（发现心跳、解析预算、索引超时、UA、分片时长等）在设置页集中可调，改完即时生效、只落本机配置
+- 30 项后台参数（发现心跳、解析预算、索引超时、UA、分片时长等）在设置页集中可调，改完即时生效、只落本机配置
 - 应用内日志面板直接看 sidecar 日志与级别切换，导出按钮一键打包诊断信息——出问题不用先猜日志在哪
 
 ## 下载应用
@@ -134,12 +134,15 @@ Windows（x64 NSIS 安装包）、macOS（arm64 `.app` / `.dmg`）、Linux（deb
 | [Python](https://python.org/) | >= 3.11 | 后端运行 |
 | [uv](https://docs.astral.sh/uv/) | 最新 | Python 包管理（推荐） |
 | [MPV](https://mpv.io/) | 任意 | 接收投屏需要，发送投屏可选 |
-| [FFmpeg](https://ffmpeg.org/) | 需带 x264 + HLS | 屏幕投屏需要 |
+| [FFmpeg](https://ffmpeg.org/) | 需带 x264 + HLS | 屏幕投屏需要；**程序不捆绑**，运行时自动检测本机已装的版本 |
 
-打包时 mpv 取自 `src-tauri/mpv/`（`bundle.resources` 的 `mpv/*` 指向这里），ffmpeg 取自
-`src-tauri/ffmpeg/`——本地开发先把 `ffmpeg.exe` 放进根目录 `ffmpeg/`（约定见
-`ffmpeg/README.txt`，构建脚本会同步过去；未放置时 Sidecar 回退到系统 PATH，也可在设置里指定路径）。
-放好后跑 `node scripts/check-resources.cjs` 自检每条 glob 是否命中。
+打包时 mpv 取自 `src-tauri/mpv/`（`bundle.resources` 的 `mpv/*` 指向这里）；放好后跑
+`node scripts/check-resources.cjs` 自检每条 glob 是否命中。
+
+**FFmpeg 不随包**（v2.3.11 起）：Sidecar 按「设置里手动指定的路径 → 本机 PATH 与各平台常见安装目录 →
+本程序下载到 `<配置目录>/bin/` 的那份」的顺序找可执行文件。找不到时，屏幕投屏面板会弹出
+「需要下载运行依赖」，给出本平台包管理器命令、一个「下载并继续」的按需下载入口，
+以及打开依赖目录的按钮。详见 [docs/屏幕投屏.md](docs/屏幕投屏.md)。
 
 ### 安装与运行
 
@@ -214,8 +217,8 @@ Sidecar 由 `npm run build:sidecar`（Nuitka）先行产出，再由 `scripts/sy
 | 播放器 | MPV (外部依赖) | 接收投屏播放、IPC 控制 |
 | 采集 | FFmpeg (外部依赖) + WASAPI/Audio Tap | 屏幕/窗口采集与 HLS 切片 |
 
-前端通过 Tauri `invoke()` 调用 Rust 命令（62 条），Rust 通过 stdin/stdout JSON 与 Python Sidecar 通信
-（Sidecar 侧注册 55 条，另有 8 个事件回推前端）。完整契约见 [docs/HanCast-Frontend-API.md](docs/HanCast-Frontend-API.md)。
+前端通过 Tauri `invoke()` 调用 Rust 命令（66 条），Rust 通过 stdin/stdout JSON 与 Python Sidecar 通信
+（Sidecar 侧注册 59 条，另有 8 个事件回推前端）。完整契约见 [docs/HanCast-Frontend-API.md](docs/HanCast-Frontend-API.md)。
 
 ---
 
@@ -224,13 +227,14 @@ Sidecar 由 `npm run build:sidecar`（Nuitka）先行产出，再由 `scripts/sy
 ```
 HanCast/
 ├── src/                        # Vue 3 前端
-│   ├── components/             # UI 组件（19 个，清单见 docs/HanCast-Frontend-Spec.md）
+│   ├── components/             # UI 组件（20 个，清单见 docs/HanCast-Frontend-Spec.md）
 │   │   ├── TitleBar.vue        # 自定义标题栏
 │   │   ├── MediaInput.vue      # 媒体输入（拖拽/链接/粘贴）
 │   │   ├── DeviceList.vue      # 设备列表
 │   │   ├── DeviceCard.vue      # 设备卡片（投屏/重命名/移除）
 │   │   ├── CastController.vue  # 投屏控制栏（含画质切换）
 │   │   ├── ScreenCastPanel.vue # 屏幕投屏面板
+│   │   ├── FfmpegDepsModal.vue # 「需要下载运行依赖」弹窗（FFmpeg 不随包）
 │   │   └── PluginSettings.vue  # 规则包管理与「检查规则包更新」
 │   ├── stores/                 # Pinia 状态管理（9 个）
 │   ├── locales/                # 国际化资源（zh-CN / en-US，键数必须相等）
@@ -240,14 +244,14 @@ HanCast/
 │   ├── src/
 │   │   ├── lib.rs              # Tauri 命令定义（清单见 generate_handler!）
 │   │   └── sidecar.rs          # SidecarManager（Rust ↔ Python）
-│   ├── mpv/ ffmpeg/            # 外部播放器与采集器（构建前放这里）
+│   ├── mpv/                    # 外部播放器（构建前放这里；FFmpeg 不随包）
 │   └── Cargo.toml
 │
 ├── hancast-backend/            # Python 后端（Sidecar）
 │   └── hancast_sidecar/
 │       ├── main.py             # Sidecar 入口（stdin/stdout JSON 循环）
-│       ├── commands.py         # 命令路由（55 条注册表见该文件）
-│       ├── params.py           # 27 项后台参数登记表
+│       ├── commands.py         # 命令路由（59 条注册表见该文件）
+│       ├── params.py           # 30 项后台参数登记表
 │       ├── ssdp.py             # SSDP 设备发现（组播失败回退子网广播）
 │       ├── protocol/
 │       │   ├── dlna.py         # DLNA 控制端与描述文件
@@ -282,7 +286,7 @@ HanCast/
 |------|------|
 | [docs/架构总览.md](docs/架构总览.md) | 三进程分层、端口/线程/落盘状态、架构不变量 |
 | [docs/开发指南.md](docs/开发指南.md) | 环境、跑法、测试口径、调试、提交与发版规矩 |
-| [docs/HanCast-Frontend-API.md](docs/HanCast-Frontend-API.md) | 62 条 invoke 命令与 8 个事件的全量契约 |
+| [docs/HanCast-Frontend-API.md](docs/HanCast-Frontend-API.md) | 66 条 invoke 命令与 8 个事件的全量契约 |
 | [docs/HanCast-Frontend-Spec.md](docs/HanCast-Frontend-Spec.md) | 组件 / store / 视图、样式与 i18n 约定 |
 | [docs/故障排查.md](docs/故障排查.md) | 按症状索引：发现不了、推不上去、停不下来、没声音…… |
 | [docs/屏幕投屏.md](docs/屏幕投屏.md) · [docs/投屏确认.md](docs/投屏确认.md) | 两个子系统的行为契约 |

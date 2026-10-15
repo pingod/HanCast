@@ -201,9 +201,9 @@ default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src '
 
 ---
 
-## 4. 组件清单（19 个，`src/components/`）
+## 4. 组件清单（20 个，`src/components/`）
 
-> 数量为实际 `ls` 清点结果：19 个 `.vue` 文件，一个不漏。「挂载者」列为模板中的实际引用位置。
+> 数量为实际 `ls` 清点结果：20 个 `.vue` 文件，一个不漏。「挂载者」列为模板中的实际引用位置。
 
 | # | 组件 | 职责 | props | emits | 依赖 store | 被谁挂载 |
 |---|---|---|---|---|---|---|
@@ -214,7 +214,7 @@ default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src '
 | 5 | `Footer.vue` | 底部提示，仅 `devices.length === 0` 时显示 | 无 | 无 | device | `HomeView.vue:54` |
 | 6 | `CastController.vue` | Teleport 模态投屏控制器：进度条（seek 锁定机制 :112-122，seek 后锁住直到轮询位置追近 3s 内，防止进度条被拉回）、音量 50ms 防抖（:88-95）、图片/视频两种模式、多设备切换 | 无 | 无 | cast、device | `HomeView.vue:56` |
 | 7 | `StopWarningBanner.vue` | 「已停止但电视可能还在播」黄色横幅 | `warning: StopWarning \| null` | `close` | 无（数据由父级传入） | `HomeView.vue:48-51`（数据源 `cast.stopWarning`）、`ScreenCastPanel.vue:394`、`CastControllerView.vue:89`（死代码） |
-| 8 | `ScreenCastPanel.vue` | 屏幕投屏面板（647 行）：目标 browser（HLS 观看链接）/ dlna（投电视）；源 screen/window；音频（麦克风/系统声音，平台差异见 §10.9-10.10）；分辨率/FPS/码率 CustomSelect；watch_url 邀请链接 + 三级降级复制（:167-184） | 无 | 无 | screencast、device | `HomeView.vue:58`；内嵌 `Modal`(:188) |
+| 8 | `ScreenCastPanel.vue` | 屏幕投屏面板（640 行）：目标 browser（HLS 观看链接）/ dlna（投电视）；源 screen/window；音频（麦克风/系统声音，平台差异见 §10.9-10.10）；分辨率/FPS/码率 CustomSelect；watch_url 邀请链接 + 三级降级复制（:167-184） | 无 | 无 | screencast、device | `HomeView.vue:58`；内嵌 `Modal`(:188)、`FfmpegDepsModal`(:419) |
 | 9 | `Modal.vue` | 通用模态基座：Teleport 到 body、overlay 点击关闭、图标/标题、4 档尺寸 `default/small/mini/wide`（wide `min-width: 520px`，:83-86，注意超过默认窗宽 434px，见 §10.5）、具名插槽按钮样式 btn-cancel/confirm/danger | `visible`、`title?`、`showIcon?`、`size?` | `close` | 无 | AddDeviceModal、AutostartPromptModal、DeviceCard(×2)、DownloadModal、LogsPanel、MediaInput、ScreenCastPanel、TitleBar、UpdateModal |
 | 10 | `CustomSelect.vue` | 手写下拉框：click-outside + Escape 关闭 | `modelValue`、`options`、`disabled?` | `update:modelValue` | 无 | SettingsView(×4：:273/:286/:325/:353/:448)、ScreenCastPanel(×8)、LogsPanel(×3) |
 | 11 | `AddDeviceModal.vue` | 手动添加设备弹窗：IP/端口表单，成功后 900ms 延迟关闭（:22）；显示已添加的 manualDevices 列表 | 无（visible 由 `deviceStore.showAddModal` 驱动） | 无 | device | `App.vue:42`；内嵌 `Modal`(:28) |
@@ -226,6 +226,7 @@ default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src '
 | 17 | `PluginSettings.vue` | 解析插件管理（847 行）：`rule_inventory` 双段列表（脚本规则包 + 声明式规则）；导入 zip（dialog → base64 `<input>` 降级 :51-83）或 URL 导入；单条规则开关；官方索引查更新 / `plugin_pull` 安装（sha256 校验在壳层/Sidecar）；两段式删除确认 4s（:168-178）；`plugin_test` 试跑；解析失败台账（按域名分组，删域名/删单条/清空/复制/timeAgo） | 无 | 无 | 无（组件内直接调 `api/commands.ts`） | `SettingsView.vue:522`（展开区） |
 | 18 | `AutostartPromptModal.vue` | 首次投屏成功后的自启询问弹窗：开启（`toggleAutostart`）/跳过，都会 `markAsked`（localStorage `has_asked_autostart`） | `visible` | `close` | settings | `HomeView.vue:60-63`；内嵌 `Modal`(:34) |
 | 19 | `CastControl.vue` | 旧版内嵌投屏控制条（427 行）：画质选择器（qualities ≥ 2 才显示）+ 进度条 + 播放控制。**死代码**——全仓 grep 无任何 import | — | — | — | 无（未被挂载） |
+| 20 | `FfmpegDepsModal.vue` | 「需要下载运行依赖」弹窗（418 行，v2.3.11 FFmpeg 去捆绑）：逐依赖显示检测状态与真实异常原文（`ffmpeg_status` 的 `items/missing`）；按平台给出包管理器安装命令（`install_commands`）与「打开安装目录」（`open_ffmpeg_dir`）；「重新检测」走 `refresh=true`；「下载并继续」起后台下载（`ffmpeg_download_start`）后按 1s 轮询 `ffmpeg_download_status`（`screencast.ts:122`；后端进度写入节流 0.4s，`ffmpeg_deps.py:373`）渲染进度/速度；`done` 时带 `refresh=true` 重测一次并**自动收起弹窗**（`:24` 的 watcher——「下载并继续」的「继续」是回到投屏面板，由用户再点一次开始投屏，程序不自动重放），安装命令可一键复制（`writeClipboardText`） | 无（visible 由 `screencastStore.showDepsModal` 驱动） | 无 | screencast | `ScreenCastPanel.vue:419`；内嵌 `Modal`(:4) |
 
 ---
 
@@ -243,7 +244,7 @@ default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src '
 | `theme.ts` | 49 | `mode: 'light'\|'dark'\|'system'`、`resolved` | `apply`/`toggle`(:33-35)；`persist`(:16-19)：`document.documentElement.setAttribute('data-theme', …)` + `localStorage 'hancast-theme'`；system 模式监听 `matchMedia('(prefers-color-scheme: dark)')` change（:41-46） | 无（matchMedia 非 Tauri 事件） | 无 | 无 |
 | `logs.ts` | 124 | `visible`、`page: LogPage\|null`、`query: LogQuery`、`level` | `open`/`close`、`refresh`（`TAIL_INTERVAL = 3000` :7；撞车时排队 `pendingRefresh` :33-36）、`toggleDebug`（setLogLevel DEBUG/INFO） | 无 | `get_logs`、`set_log_level`、`export_logs` | 无 |
 | `update.ts` | 131 | `info: UpdateInfo\|null`、`modalState: UpdateModalState`、`showModal`、`storeVersion` | `checkUpdate`（商店版跳过 :28-31）、`ignoreVersion`、`openDownload`(:71-76，window.open) | `update-available`(:94-97，Rust 启动 3s 后推送) | `check_update`、`ignore_update_version`、`is_store_version` | 无 |
-| `screencast.ts` | 200 | `state: ScreenCastState`、`sources: ScreenSources\|null`、`stopWarning` | `refreshSources`、`start`、`stop`(:87-120，`control_failed` → stopWarning，**借 `useDeviceStore` 把 device_id 翻译成设备名** :110)、`dismissStopWarning` | `screen_cast_state_changed`(:152-166) | `list_screen_sources`、`start_screen_cast`、`stop_screen_cast`、`screen_cast_status`、`set_ffmpeg_path` | **→ device**（唯一一处 store 间依赖，grep 验证） |
+| `screencast.ts` | 322 | `state: ScreenCastState`、`sources: ScreenSources\|null`、`stopWarning`、`showDepsModal`(:37)、`ffmpegReport: FfmpegStatus\|null`(:38)、`downloadTask: FfmpegDownloadTask\|null`(:39)、`downloading`(:40)、`reportLoading`(:41)；computed `ffmpegOk`(:46) | `fetchSources`(:56-70，顺带把 `sources.ffmpeg` 回填进 `ffmpegReport`)、`refreshFfmpegReport`(:73-88，`refresh=false` 吃后端 30s 缓存，弹窗首开秒出)、`startFfmpegDownload`(:114-127，起任务后 1s `setInterval` 轮询 `pollDownload` :97-111，`done` 自动重测)、`resumeDownloadPolling`(:143-157，定时器随组件卸载而死，重开面板必须向后端对齐一次，否则界面永停「下载中...」而后端早下完)、`openFfmpegDir`(:129-139)、`openDepsModal`/`closeDepsModal`(:159-167)、`start`(:177-196)、`stop`(:198-231，`control_failed` → stopWarning，**借 `useDeviceStore` 把 device_id 翻译成设备名** :221)、`setFfmpegPath`(:233-247)、`dismissStopWarning`(:320) | `screen_cast_state_changed`(:266-273) | `list_screen_sources`、`start_screen_cast`、`stop_screen_cast`、`screen_cast_status`、`set_ffmpeg_path`、`ffmpeg_status`、`ffmpeg_download_start`、`ffmpeg_download_status`、`open_ffmpeg_dir` | **→ device**（唯一一处 store 间依赖，grep 验证） |
 
 ---
 
@@ -451,7 +452,7 @@ default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src '
 
 ### 10.7 `stop_cast` 的 `control_failed` 不能吞
 
-`lib.rs:455-458` 注释：本地会话已释放、但电视没收到 Stop 时，前端要靠返回体里的 `control_failed` 解释「界面停了、电视还在播」。落点：`cast.ts:386-427`（stopCast 本地一律先释放 + 置 `stopWarning`）→ `StopWarningBanner`（`HomeView.vue:48-51`）；屏幕投屏同款逻辑 `screencast.ts:87-120`。类型定义 `StopCastResult`/`StopWarning` 在 `commands.ts:963-975`。
+`lib.rs:455-458` 注释：本地会话已释放、但电视没收到 Stop 时，前端要靠返回体里的 `control_failed` 解释「界面停了、电视还在播」。落点：`cast.ts:386-427`（stopCast 本地一律先释放 + 置 `stopWarning`）→ `StopWarningBanner`（`HomeView.vue:48-51`）；屏幕投屏同款逻辑 `screencast.ts:198-231`。类型定义 `StopCastResult`/`StopWarning` 在 `commands.ts:1103-1117`。
 
 ### 10.8 进度条与轮询的打架：seek 锁定
 
@@ -488,4 +489,4 @@ default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src '
 
 ## 附：本文档取证范围
 
-实读文件：`src-tauri/tauri.conf.json`、`src-tauri/capabilities/default.json`、`src-tauri/src/lib.rs`（1373 行全读）、`src-tauri/Cargo.toml`、`hancast-backend/pyproject.toml`、`package.json`、`vite.config.ts`、`tsconfig.json`、`env.d.ts`、`index.html`、`src/main.ts`、`src/App.vue`、`src/router/index.ts`、3 个视图（含 967 行 SettingsView 与 323 行 CastControllerView 全读）、19 个组件、9 个 store、`src/api/commands.ts`（1184 行全读）、`src/types/` 全部 9 个文件、`src/styles/` 2 个文件、`src/locales/` 2 个文件（脚本比对 key）、git 历史（`git log -S "unsafe-eval"`）。
+实读文件：`src-tauri/tauri.conf.json`、`src-tauri/capabilities/default.json`、`src-tauri/src/lib.rs`（1443 行全读）、`src-tauri/Cargo.toml`、`hancast-backend/pyproject.toml`、`package.json`、`vite.config.ts`、`tsconfig.json`、`env.d.ts`、`index.html`、`src/main.ts`、`src/App.vue`、`src/router/index.ts`、3 个视图（含 967 行 SettingsView 与 323 行 CastControllerView 全读）、20 个组件、9 个 store、`src/api/commands.ts`（1348 行全读）、`src/types/` 全部 9 个文件、`src/styles/` 2 个文件、`src/locales/` 2 个文件（脚本比对 key）、git 历史（`git log -S "unsafe-eval"`）。

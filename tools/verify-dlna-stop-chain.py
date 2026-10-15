@@ -7,9 +7,10 @@ Windows 上的 HanCast renderer，再从 renderer 自己那边确认 TransportSt
 1. 先整体退出 HanCast（`osascript -e 'tell application "HanCast" to quit'`）。
    sidecar 空载时要占 8080 做媒体/DLNA 服务器，GUI 还开着就是两个实例抢端口。
    验证完记得把应用开回来。
-2. 测试媒体默认在 /tmp/hc_media/test.mp4，可以用 .app 自带的 ffmpeg 生成：
-   /Applications/HanCast.app/Contents/Resources/ffmpeg/ffmpeg \
-     -f lavfi -i testsrc=size=640x360:rate=25:duration=30 -c:v libx264 -pix_fmt yuv420p /tmp/hc_media/test.mp4
+2. 测试媒体默认在 /tmp/hc_media/test.mp4，用本机检测到的那份 ffmpeg 生成（v2.3.11 起不再随包；
+   依赖面板下载的那份在 `<配置目录>/bin/ffmpeg`，macOS 即
+   `~/Library/Application Support/HanCast/bin/ffmpeg`；没有就用 PATH 上的系统 ffmpeg）：
+   ffmpeg -f lavfi -i testsrc=size=640x360:rate=25:duration=30 -c:v libx264 -pix_fmt yuv420p /tmp/hc_media/test.mp4
 3. 局域网里要有一台在跑的 Windows renderer（默认认 display_name 含 AMD-YES 或 IP 192.168.1.68）。
 
 判据：start_cast 后 renderer 自报 PLAYING，stop_cast 返回且 control_failed 为空，

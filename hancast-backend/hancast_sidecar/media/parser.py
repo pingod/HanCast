@@ -141,16 +141,20 @@ class MediaParser:
         """尝试用 ffprobe 获取时长 (可选)"""
         try:
             import subprocess
+            from ..utils.ffmpeg_deps import probe_path
             result = subprocess.run(
                 [
-                    "ffprobe", "-v", "quiet",
+                    probe_path() or "ffprobe", "-v", "quiet",
                     "-show_entries", "format=duration",
                     "-of", "csv=p=0", path
                 ],
                 capture_output=True, text=True, timeout=3,
                 # 中文路径会让 cp936 解码抛错，异常被上层吞掉后表现为
                 # 「时长永远取不到」
-                encoding="utf-8", errors="replace"
+                encoding="utf-8", errors="replace",
+                # 图形界面起的进程不保证有 PATH 上的 /opt/homebrew，所以用
+                # 检测出来的绝对路径，而不是裸命令名
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
             )
             if result.returncode == 0:
                 return float(result.stdout.strip())

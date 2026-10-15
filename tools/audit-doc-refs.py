@@ -37,7 +37,8 @@ HIST_MARKERS = ('曾', '删', '已于', '移除', '退役', '历史', '原 ', '�
 
 # 依赖包/上游 crate 内部的路径，本来就不在本仓
 DEPENDENCY_PREFIXES = ('macast/', 'macast_renderer/', 'tauri-utils',
-                       'lxml', 'certifi/', 'charset_normalizer/', 'urllib3/')
+                       'lxml', 'certifi/', 'charset_normalizer/', 'curl_cffi/',
+                       'urllib3/')
 
 # 运行时产物或占位名：HLS 切片、纯 x/数字组成的示例文件名
 RUNTIME_BASENAME_RE = re.compile(r'^(?:seg[\w%]*|\d[\dxX%]*|[xX]+)\.(?:ts|png|jpg|jpeg|m4s)$')

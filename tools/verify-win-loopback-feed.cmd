@@ -13,7 +13,10 @@ REM Result: D:\Temp\hcfeed-out.txt  -> D_* shows whether the playlist appears wi
 REM empty stdin; E_* shows the realtime-trickle baseline. loglevel is info here, not
 REM error, so the stall reason is visible.
 setlocal
-set FF=C:\Users\Administrator\AppData\Local\HanCast\ffmpeg\ffmpeg.exe
+REM Since v2.3.11 the app no longer ships ffmpeg. Take the one the dependency
+REM panel downloaded into the config dir; fall back to whatever is on PATH.
+set FF=%APPDATA%\HanCast\bin\ffmpeg.exe
+if not exist "%FF%" set FF=ffmpeg
 set OUT=D:\Temp\hcfeed
 set RES=D:\Temp\hcfeed-out.txt
 set MIC=audio=@device_cm_{33D9A762-90C8-11D0-BD43-00A0C911CE86}\wave_{965FC79E-DC31-4CFD-86F0-7C2E01B067EB}

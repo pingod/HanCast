@@ -17,10 +17,11 @@
   hancast-backend/.venv/bin/python3.12 tools/verify-proxy-segment-decodable.py \
       <m3u8_url> --referer <页面或源站地址> [--ffmpeg <路径>]
   # 验「已经装上的那份产物」（禁止拿工作树冒充验收）
+  #   --root 指到 bundle 里的 Python 资源目录；ffmpeg 自 v2.3.11 不随包，
+  #   不写 --ffmpeg 就用本机检测到的那份（配置目录 bin/ → PATH）
   hancast-backend/.venv/bin/python3.12 tools/verify-proxy-segment-decodable.py \
       <m3u8_url> --referer <页面> \
-      --root /Applications/HanCast.app/Contents/Resources \
-      --ffmpeg /Applications/HanCast.app/Contents/MacOS/ffmpeg/ffmpeg
+      --root /Applications/HanCast.app/Contents/Resources
   # 反例自检：喂一段「皮没剥」的字节，工具必须判 FAIL（判据没力气就别谈验收）
   hancast-backend/.venv/bin/python3.12 tools/verify-proxy-segment-decodable.py \
       --probe-only /path/to/skinned.ts
@@ -33,6 +34,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -40,6 +42,20 @@ import urllib.request
 
 _TS_PACKET = 188
 FAILS: list[str] = []
+
+
+def default_ffmpeg() -> str:
+    """v2.3.11 起产物里不再带 ffmpeg，探字节的那份按产品同样的顺序找：
+    程序自己下载到配置目录 bin/ 的那份 → PATH 上的系统 ffmpeg。"""
+    if sys.platform == "win32":
+        setting = os.path.join(os.environ.get("APPDATA", ""), "HanCast")
+    elif sys.platform == "darwin":
+        setting = os.path.expanduser("~/Library/Application Support/HanCast")
+    else:
+        setting = os.path.expanduser("~/.config/hancast")
+    exe = "ffmpeg.exe" if sys.platform == "win32" else "ffmpeg"
+    managed = os.path.join(setting, "bin", exe)
+    return managed if os.path.isfile(managed) else (shutil.which("ffmpeg") or exe)
 
 
 def say(msg: str) -> None:
@@ -152,13 +168,17 @@ def main() -> int:
     ap.add_argument("--ua", default="Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                                    "AppleWebKit/537.36 (KHTML, like Gecko) "
                                    "Chrome/124.0.0.0 Safari/537.36")
-    ap.add_argument("--ffmpeg", default="/Applications/HanCast.app/Contents/MacOS/ffmpeg/ffmpeg")
+    ap.add_argument("--ffmpeg", default="", help="判型用的 ffmpeg；v2.3.11 起产物不再自带，"
+                                                 "默认按产品同一顺序检测：配置目录 bin/ → PATH")
     ap.add_argument("--segments", type=int, default=2, help="验前几条分片")
     ap.add_argument("--packets", type=int, default=200, help="每条分片游走多少个 TS 包判对齐")
     ap.add_argument("--force-peek", type=int, default=0, metavar="字节",
                     help="把判型窗口强行压到这个长度（只在本进程内改，不落产品文件）。"
                          "v2.2.20 的窗口等效 400，用它复现那一次翻车，证明判据抓得住")
     args = ap.parse_args()
+    if not args.ffmpeg:
+        args.ffmpeg = default_ffmpeg()
+        say(f"判型用 ffmpeg: {args.ffmpeg}")
 
     if args.probe_only:
         if not os.path.isfile(args.probe_only):
@@ -227,7 +247,7 @@ def main() -> int:
                 path = os.path.join(tmp, os.path.basename(seg.split("?")[0]) + ".ts")
                 with open(path, "wb") as f:
                     f.write(body)
-                if os.path.isfile(args.ffmpeg):
+                if shutil.which(args.ffmpeg):
                     player_probe(path, args.ffmpeg)
                 else:
                     say(f"  （跳过解码验证：找不到 ffmpeg {args.ffmpeg}）")

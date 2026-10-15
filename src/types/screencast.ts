@@ -22,19 +22,56 @@ export interface AudioDeviceItem {
   default?: boolean
 }
 
+/** 「需要下载运行依赖」弹窗里的单个依赖项 */
+export interface FfmpegDepItem {
+  key: string
+  label: string
+  required: boolean
+  found: boolean
+  path: string | null
+  /** manual=用户指定 / system=本机已装 / downloaded=本程序下的 */
+  source: string | null
+  version: string | null
+}
+
+export interface FfmpegStatus {
+  ok: boolean
+  path?: string | null
+  version?: string | null
+  source?: string | null
+  ffprobe_path?: string | null
+  items: FfmpegDepItem[]
+  missing: string[]
+  optional_missing: string[]
+  managed_dir: string
+  platform: string
+  arch: string
+  install_commands: string[]
+  download: { available?: boolean; kind?: string; url?: string }
+  error?: string | null
+}
+
+export interface FfmpegDownloadTask {
+  status: 'idle' | 'pending' | 'done' | 'error'
+  stage?: string
+  task_id?: string
+  received?: number
+  total?: number
+  percent?: number | null
+  speed?: number
+  elapsed?: number
+  url?: string
+  error?: string | null
+  result?: { ok: boolean; paths: string[]; dir: string } | null
+}
+
 export interface ScreenSources {
   screens: ScreenSourceItem[]
   windows: ScreenSourceItem[]
   audio_inputs: AudioDeviceItem[]
   /** sidecar 的 sys.platform：'darwin' | 'win32' | 'linux' */
   platform?: string
-  ffmpeg: {
-    ok: boolean
-    path?: string | null
-    version?: string | null
-    source?: string
-    error?: string
-  }
+  ffmpeg: FfmpegStatus
 }
 
 export interface ScreenCastState {

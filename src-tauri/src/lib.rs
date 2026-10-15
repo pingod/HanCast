@@ -778,6 +778,70 @@ async fn set_ffmpeg_path(
         .await
 }
 
+/// FFmpeg/FFprobe 检测报告（refresh=true 时重新扫描本机）
+#[tauri::command]
+async fn ffmpeg_status(
+    sidecar: State<'_, SidecarManager>,
+    refresh: Option<bool>,
+) -> Result<serde_json::Value, String> {
+    sidecar
+        .send_command(
+            "ffmpeg_status",
+            serde_json::json!({"refresh": refresh.unwrap_or(false)}),
+        )
+        .await
+}
+
+#[tauri::command]
+async fn ffmpeg_download_start(
+    sidecar: State<'_, SidecarManager>,
+) -> Result<serde_json::Value, String> {
+    sidecar
+        .send_command("ffmpeg_download_start", serde_json::json!({}))
+        .await
+}
+
+#[tauri::command]
+async fn ffmpeg_download_status(
+    sidecar: State<'_, SidecarManager>,
+) -> Result<serde_json::Value, String> {
+    sidecar
+        .send_command("ffmpeg_download_status", serde_json::json!({}))
+        .await
+}
+
+/// 在系统文件管理器里打开「本程序下载 FFmpeg 用的目录」。
+/// 路径由 Sidecar 给出（程序自己的配置目录），不接受前端传路径——
+/// 否则等于开放「用资源管理器打开任意路径」。
+#[tauri::command]
+async fn open_ffmpeg_dir(
+    sidecar: State<'_, SidecarManager>,
+) -> Result<serde_json::Value, String> {
+    let report = sidecar
+        .send_command("ffmpeg_status", serde_json::json!({"refresh": false}))
+        .await?;
+    let dir = report
+        .get("managed_dir")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or("Sidecar 未返回 FFmpeg 目录")?
+        .to_string();
+    std::fs::create_dir_all(&dir).map_err(|e| format!("目录创建失败: {e}"))?;
+
+    // 只 spawn 不 wait：xdg-open 会活到文件管理器关掉为止，等它就等于把一个
+    // 按钮按死在命令循环里；而 explorer 常返回非 0 却照样开窗，退出码本来就不是判据。
+    if cfg!(target_os = "macos") {
+        std::process::Command::new("open").arg(&dir).spawn()
+    } else if cfg!(windows) {
+        std::process::Command::new("explorer").arg(&dir).spawn()
+    } else {
+        std::process::Command::new("xdg-open").arg(&dir).spawn()
+    }
+    .map_err(|e| format!("无法打开目录: {e}"))?;
+    // 成败由调用方按「有没有窗口」判断，这里只把路径回显出去。
+    Ok(serde_json::json!({"ok": true, "path": dir}))
+}
+
 // ── Export Logs ──
 
 /// 应用内查看日志（分模块/级别/关键字过滤），排错时不用再去翻文件
@@ -1362,6 +1426,10 @@ pub fn run() {
             stop_screen_cast,
             screen_cast_status,
             set_ffmpeg_path,
+            ffmpeg_status,
+            ffmpeg_download_start,
+            ffmpeg_download_status,
+            open_ffmpeg_dir,
             export_logs,
             get_logs,
             set_log_level,

@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import Modal from '@/components/Modal.vue'
 import CustomSelect from '@/components/CustomSelect.vue'
 import StopWarningBanner from '@/components/StopWarningBanner.vue'
+import FfmpegDepsModal from '@/components/FfmpegDepsModal.vue'
 import { useScreenCastStore } from '@/stores/screencast'
 import { useDeviceStore } from '@/stores/device'
 import { writeClipboardText } from '@/api/commands'
@@ -26,7 +27,7 @@ const width = ref(1280)
 const height = ref(720)
 const fps = ref(15)
 const bitrate = ref('2M')
-const ffmpegPathInput = ref('')
+const depsPrompted = ref(false)
 
 // ── 打开面板时刷新 ──
 function onOpen() {
@@ -39,7 +40,15 @@ function onOpen() {
   }
 }
 
-watch(() => sc.showPanel, (v) => { if (v) onOpen() })
+watch(() => sc.showPanel, (v) => { if (v) onOpen(); else depsPrompted.value = false })
+
+// FFmpeg 不在，投屏面板里所有选项都是白搭：直接把「需要下载运行依赖」弹窗推给用户，
+// 一次打开面板只推一次，用户自己关掉后就不再打扰
+watch(() => sc.sources?.ffmpeg?.ok, (ok) => {
+  if (!sc.showPanel || ok !== false || depsPrompted.value) return
+  depsPrompted.value = true
+  sc.openDepsModal()
+})
 
 // ── 音频设备默认值 ──
 watch(() => sc.sources?.audio_inputs, (devices) => {
@@ -158,12 +167,6 @@ async function onStop() {
   await sc.stop()
 }
 
-async function onSetFfmpeg() {
-  if (!ffmpegPathInput.value) return
-  await sc.setFfmpegPath(ffmpegPathInput.value)
-  ffmpegPathInput.value = ''
-}
-
 async function copyText(text: string) {
   try {
     await writeClipboardText(text)
@@ -191,13 +194,10 @@ async function copyText(text: string) {
     size="default"
     @close="sc.closePanel()"
   >
-    <!-- FFmpeg 不可用提示 -->
+    <!-- FFmpeg 缺失：细节与补齐入口都在依赖弹窗里，这里只留一句话和一个入口 -->
     <div v-if="!sc.ffmpegOk" class="sc-error">
       <div class="sc-error-title">{{ t('screencast.ffmpegMissing') }}</div>
-      <div class="sc-error-row">
-        <input v-model="ffmpegPathInput" :placeholder="t('screencast.ffmpegPathPlaceholder')" />
-        <button class="btn-mini" @click="onSetFfmpeg">{{ t('screencast.setPath') }}</button>
-      </div>
+      <button class="btn-mini" @click="sc.openDepsModal()">{{ t('screencast.deps.open') }}</button>
     </div>
 
     <!-- 目标类型 -->
@@ -415,6 +415,8 @@ async function copyText(text: string) {
       </button>
     </template>
   </Modal>
+
+  <FfmpegDepsModal />
 </template>
 
 <style scoped>
@@ -573,15 +575,6 @@ async function copyText(text: string) {
   font-size: 12px;
   color: #DC2626;
   margin-bottom: 6px;
-}
-
-.sc-error-row {
-  display: flex;
-  gap: 6px;
-}
-
-.sc-error-row .sc-input {
-  flex: 1;
 }
 
 .btn-mini {

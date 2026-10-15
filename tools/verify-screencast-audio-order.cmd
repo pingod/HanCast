@@ -4,9 +4,9 @@ REM
 REM Why a script: when -vf sits between two -i, ffmpeg assigns it to the NEXT input
 REM (the microphone) and dies with
 REM   Option vf cannot be applied to input url audio=... / Invalid argument
-REM Unit tests can only assert the order; only a real machine + the bundled
-REM ffmpeg 6.1.1 can prove it. Keep this file ASCII-only: cmd mis-slices byte
-REM offsets when a .cmd carries UTF-8 Chinese.
+REM Unit tests can only assert the order; only a real machine + a real ffmpeg
+REM (6.x, detected at run time) can prove it. Keep this file ASCII-only: cmd
+REM mis-slices byte offsets when a .cmd carries UTF-8 Chinese.
 REM
 REM Three cases:
 REM   OLD  -vf between inputs   -> must FAIL (reproduces v2.2.22 and earlier)
@@ -26,7 +26,10 @@ REM Result: D:\Temp\hcvf-out.txt  -> OLD_EXIT non-zero, A_EXIT/B_EXIT zero, and 
 REM of a.m3u8 / b.m3u8 reporting one video + one aac stream. Afterwards delete the
 REM task and D:\Temp\hcvf*.
 setlocal
-set FF=C:\Users\Administrator\AppData\Local\HanCast\ffmpeg\ffmpeg.exe
+REM Since v2.3.11 the app no longer ships ffmpeg: use the copy the dependency
+REM panel downloaded into the config dir, else whatever is on PATH.
+set FF=%APPDATA%\HanCast\bin\ffmpeg.exe
+if not exist "%FF%" set FF=ffmpeg
 set OUT=D:\Temp\hcvf
 set MIC=audio=@device_cm_{33D9A762-90C8-11D0-BD43-00A0C911CE86}\wave_{965FC79E-DC31-4CFD-86F0-7C2E01B067EB}
 set VF=scale=1280:720:force_original_aspect_ratio=decrease:force_divisible_by=2

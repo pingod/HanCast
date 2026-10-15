@@ -1,8 +1,9 @@
 """
 FFmpeg 管理器 — 检测 / 路径管理 / 捕获源枚举
 
-查找顺序与 MPV 一致：配置路径 → 捆绑目录（ffmpeg/）→ 系统 PATH。
-同时提供屏幕/窗口/音频设备的枚举能力（供前端选择投屏源）。
+查找顺序：手动指定路径 → 系统已装（PATH + 各平台常见安装目录）→ 本程序下载的
+那份（`<配置目录>/bin/`）。程序**不捆绑** FFmpeg，检测与补齐的实现在
+`utils/ffmpeg_deps.py`。同时提供屏幕/窗口/音频设备的枚举能力（供前端选择投屏源）。
 """
 
 import os
@@ -18,6 +19,7 @@ import subprocess
 from typing import Dict, List, Optional, Tuple
 
 from ..params import get as param
+from ..utils import ffmpeg_deps
 
 logger = logging.getLogger("hancast.screencast.ffmpeg")
 
@@ -411,75 +413,32 @@ class FfmpegManager:
     # 路径发现 / 校验
     # ────────────────────────────────────────
 
-    def _get_base_path(self) -> str:
-        """获取程序根目录（含 ffmpeg/ 子目录的层级），与 mpv_manager 一致"""
-        candidates = [
-            os.getcwd(),                       # Rust 设置的 current_dir
-            os.path.dirname(sys.executable),   # sidecar exe 所在目录
-        ]
-        for path in candidates:
-            exe = "ffmpeg.exe" if os.name == "nt" else "ffmpeg"
-            if os.path.isfile(os.path.join(path, "ffmpeg", exe)):
-                return path
-        # 开发环境：向上 4 级到项目根
-        return os.path.dirname(os.path.dirname(os.path.dirname(
-            os.path.dirname(os.path.abspath(__file__)))))
-
-    def _find_in_program_dir(self) -> Optional[str]:
-        base = self._get_base_path()
-        exe = "ffmpeg.exe" if os.name == "nt" else "ffmpeg"
-        candidates = [
-            os.path.join(base, "ffmpeg", exe),
-            os.path.join(base, "ffmpeg", "bin", exe),
-        ]
-        for p in candidates:
-            if os.path.isfile(p):
-                return os.path.abspath(p)
-        # 递归查找 ffmpeg/ 目录
-        ffmpeg_dir = os.path.join(base, "ffmpeg")
-        if os.path.isdir(ffmpeg_dir):
-            for root, _, files in os.walk(ffmpeg_dir):
-                for name in files:
-                    if name.lower() == exe:
-                        return os.path.join(root, name)
+    def _configured(self) -> Optional[str]:
+        """用户在设置里手动指定的 ffmpeg —— 优先级最高"""
+        if not self.config:
+            return None
+        cfg = self.config.get("screencast", {})
+        path = cfg.get("ffmpeg_path")
+        if not path:
+            return None
+        if self._validate(path):
+            return path
+        logger.warning(f"Configured FFmpeg path no longer valid: {path}")
         return None
 
-    def _find_in_path(self) -> Optional[str]:
-        exe = "ffmpeg.exe" if os.name == "nt" else "ffmpeg"
-        for dir_path in os.environ.get("PATH", "").split(os.pathsep):
-            candidate = os.path.join(dir_path, exe)
-            if os.path.isfile(candidate):
-                return candidate
-        return None
+    def check(self, refresh: bool = False) -> Dict:
+        """检测 FFmpeg：手动指定 → 系统已装 → 本程序下载的那份
 
-    def check(self) -> Dict:
-        """检查 FFmpeg 是否可用，返回 {path, version, ok}"""
-        # 1. 配置路径
-        if self.config:
-            cfg = self.config.get("screencast", {})
-            if cfg.get("ffmpeg_path"):
-                if self._validate(cfg["ffmpeg_path"]):
-                    self._path = cfg["ffmpeg_path"]
-                    self._version = self._get_version(self._path)
-                    return {"path": self._path, "version": self._version, "ok": True}
-                logger.warning(f"Configured FFmpeg path no longer valid: {cfg['ffmpeg_path']}")
-
-        # 2. 捆绑目录
-        local = self._find_in_program_dir()
-        if local and self._validate(local):
-            self._path = local
-            self._version = self._get_version(local)
-            return {"path": local, "version": self._version, "ok": True, "source": "bundled"}
-
-        # 3. 系统 PATH
-        system = self._find_in_path()
-        if system and self._validate(system):
-            self._path = system
-            self._version = self._get_version(system)
-            return {"path": system, "version": self._version, "ok": True, "source": "system"}
-
-        logger.warning("[ScreenCast] FFmpeg not found; screen casting unavailable")
-        return {"path": None, "version": None, "ok": False, "error": "FFmpeg 未找到，请在设置中指定 ffmpeg 路径"}
+        v2.3.11 起**不再捆绑** FFmpeg，原来的捆绑目录探测连同
+        `_get_base_path()` / `_find_in_program_dir()` 一起删了。返回值同时是
+        「需要下载运行依赖」弹窗的数据源，缺失清单、安装命令、下载地址都从这里出。
+        """
+        info = ffmpeg_deps.status(refresh=refresh, manual=self._configured())
+        self._path = info.get("path")
+        self._version = info.get("version")
+        if not info.get("ok"):
+            logger.warning("[ScreenCast] FFmpeg not found; screen casting unavailable")
+        return info
 
     def get_path(self) -> Optional[str]:
         if self._path is None:

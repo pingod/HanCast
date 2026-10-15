@@ -19,7 +19,10 @@ import json
 import re
 import sys
 
-FFMPEG = r"C:\Users\Administrator\AppData\Local\HanCast\ffmpeg\ffmpeg.exe"
+# v2.3.11 起产物不再自带 ffmpeg，请求里也不再硬写随包路径（旧值
+# C:\Users\Administrator\AppData\Local\HanCast\ffmpeg\ffmpeg.exe 已不存在）。
+# 默认不发 set_ffmpeg_path，让 .68 上的产品按「%APPDATA%\HanCast\bin → PATH」自己检测；
+# 要强行指定某一份时才用 --ffmpeg。
 
 # echo 会把这些字符当批处理语法；它们在 JSON 里只出现在字符串内部，转义后仍是合法 JSON
 _BATCH_UNSAFE = {"(": "\\u0028", ")": "\\u0029", "&": "\\u0026",
@@ -32,6 +35,16 @@ def line(payload: dict) -> str:
     for ch, esc in _BATCH_UNSAFE.items():
         s = s.replace(ch, esc)
     return s
+
+
+def prelude(ffmpeg: str) -> list:
+    """请求序列的头两条：可选的 set_ffmpeg_path + 设备枚举。
+    id 2 留给 list_screen_sources，后续从 3 开始编号（批处理按行序读，id 只需唯一）"""
+    req = []
+    if ffmpeg:
+        req.append({"id": 1, "cmd": "set_ffmpeg_path", "params": {"path": ffmpeg}})
+    req.append({"id": 2, "cmd": "list_screen_sources", "params": {}})
+    return req
 
 
 def audio_inputs(out_path: str):
@@ -129,8 +142,7 @@ def cmd_req(args) -> int:
         if which == "mic" and mic:
             rounds.append((mic, None))
 
-    req = [{"id": 1, "cmd": "set_ffmpeg_path", "params": {"path": FFMPEG}},
-           {"id": 2, "cmd": "list_screen_sources", "params": {}}]
+    req = prelude(args.ffmpeg)
     rid = 3
     # 一次 start 只测一路组合：正在投屏时 manager.start 直接拒绝，必须 stop 再开
     for mic_name, sys_name in rounds:
@@ -167,11 +179,9 @@ def write_req(text: str, output) -> None:
     print(f"wrote {output}")
 
 
-def cmd_phase1(output) -> int:
+def cmd_phase1(output, ffmpeg: str = "") -> int:
     """只要设备名：先把这三轮跑出来的 out.txt 交给 devices / req"""
-    req = [{"id": 1, "cmd": "set_ffmpeg_path", "params": {"path": FFMPEG}},
-           {"id": 2, "cmd": "list_screen_sources", "params": {}},
-           {"id": 3, "cmd": "exit", "params": {}}]
+    req = prelude(ffmpeg) + [{"id": 3, "cmd": "exit", "params": {}}]
     text = "\n".join(line(p) for p in req) + "\n"
     write_req(text, output)
     return 0
@@ -187,7 +197,9 @@ def main(argv) -> int:
     if sub == "phase1":
         ap = argparse.ArgumentParser()
         ap.add_argument("-o", "--output")
-        return cmd_phase1(ap.parse_args(argv[2:]).output)
+        ap.add_argument("--ffmpeg", default="", help="强行指定 .68 上的 ffmpeg 路径；不给就用产品检测的那份")
+        a = ap.parse_args(argv[2:])
+        return cmd_phase1(a.output, a.ffmpeg)
     if sub == "req":
         ap = argparse.ArgumentParser()
         ap.add_argument("from_out", help="phase-1 的 out.txt")
@@ -200,6 +212,7 @@ def main(argv) -> int:
                         help="第一轮（两路组合）之后再单独跑这一路，可重复给")
         ap.add_argument("--dwell", type=int, default=1,
                         help="每轮问几次状态（≈3 秒/次），用来把会话拉长到能观察分片增长")
+        ap.add_argument("--ffmpeg", default="", help="强行指定 .68 上的 ffmpeg 路径；不给就用产品检测的那份")
         ap.add_argument("-o", "--output")
         return cmd_req(ap.parse_args(argv[2:]))
     raise SystemExit(__doc__)

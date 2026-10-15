@@ -6,7 +6,6 @@
     "resources": [
       "mpv/mpv.app/**/*",
       "mpv/portable_config/**/*",
-      "ffmpeg/*",
       "*.so",
       "*.dylib",
       "hancast_sidecar/**/*",

@@ -1,6 +1,6 @@
 # HanCast Python Sidecar
 
-> 最后校对：2026-10-15，对应版本 v2.3.6（`package.json:4`，tag `v2.3.6`）。深度内容见 [../docs/README.md](../docs/README.md)。
+> 最后校对：2026-10-15，对应版本 v2.3.11（`package.json:4`，tag `v2.3.11`）。深度内容见 [../docs/README.md](../docs/README.md)。
 
 `hancast-backend/` 是 HanCast 的 Python 后端，以 **Sidecar 子进程**形式被 Tauri 壳层拉起，
 通过 stdin/stdout 的行分隔 JSON 与 Rust 通信。它负责 DLNA/SSDP、媒体服务、mpv 渲染、
@@ -20,17 +20,18 @@ Python `>= 3.11`（`pyproject.toml:13`）。
 hancast-backend/
 ├── hancast_sidecar/
 │   ├── main.py          # 入口：UTF-8 stdio 包裹 → ready 事件 → 命令主循环
-│   ├── commands.py      # 命令路由与 Sidecar 侧服务装配（注册 55 条命令）
-│   ├── params.py        # 后台参数登记表 PARAM_SPECS（27 项）
+│   ├── commands.py      # 命令路由与 Sidecar 侧服务装配（注册 59 条命令）
+│   ├── params.py        # 后台参数登记表 PARAM_SPECS（30 项）
 │   ├── ssdp.py          # SSDP 发现（M-SEARCH / NOTIFY alive+byebye / 陈旧摘除）
 │   ├── protocol/        # dlna.py（SOAP 控制与描述）、server.py（UPnP HTTP 服务）
 │   ├── renderer/        # mpv.py（接收端播放与 IPC）、base.py
 │   ├── media/           # parser.py、server.py（本地文件 HTTP + 链路内代理）、
 │   │                    # share_resolver.py（粘贴解析管线）、rules/（声明式 + JS 包 + 沙箱）、
 │   │                    # failures.py（解析失败台账）
-│   ├── screencast/      # 屏幕投屏：ffmpeg 采集、HLS 分片、aiohttp 供流、www 观看页
+│   ├── screencast/      # 屏幕投屏：ffmpeg 采集（可执行文件由 utils/ffmpeg_deps.py 定位）、
+│   │                    # HLS 分片、aiohttp 供流、www 观看页
 │   ├── security/        # guard.py（投屏确认）
-│   ├── models/ utils/   # 数据结构、日志、身份（UA/设备号）、协议 IO
+│   ├── models/ utils/   # 数据结构、日志、身份（UA/设备号）、协议 IO、FFmpeg 依赖检测与按需下载
 │   └── xml/             # UPnP 描述文件（随包数据）
 ├── scripts/
 │   ├── run_sidecar.py   # 本地直跑（等价于 -m hancast_sidecar.main）
@@ -49,8 +50,10 @@ uv run python scripts/run_sidecar.py     # 同上，脚本入口
 ```
 
 pip 用户：`pip install -r requirements.txt`。屏幕投屏还需要系统里有 **ffmpeg**，
-接收端播放需要 **mpv**——两者都是外部二进制，不打进 Python 依赖里
-（开发时从 `src-tauri/mpv/`、`src-tauri/ffmpeg/` 取，见 [../docs/开发指南.md](../docs/开发指南.md) §1）。
+接收端播放需要 **mpv**——两者都是外部二进制，不打进 Python 依赖里。
+mpv 随包（开发时从 `src-tauri/mpv/` 取，见 [../docs/开发指南.md](../docs/开发指南.md) §1）；
+**ffmpeg 自 v2.3.11 起不再随包**，由 `hancast_sidecar/utils/ffmpeg_deps.py` 在运行时定位：
+手动指定路径 → `PATH` + 各平台常见安装目录 → 本程序下载到 `<SETTING_DIR>/bin/` 的那份。
 
 从 `npm run tauri dev` 起的全栈开发不需要单独跑这里。
 
@@ -100,7 +103,8 @@ pip 用户：`pip install -r requirements.txt`。屏幕投屏还需要系统里�
 | 设备 | `get_devices` `refresh_devices` `add_device` `hide_device` `remove_device` `get_manual_devices` `list_network_interfaces` |
 | 投屏控制 | `start_cast` `stop_cast` `pause_cast` `resume_cast` `seek_cast` `get_cast_state` `get_cast_url` `set_volume` `set_mute` |
 | 媒体解析 | `parse_media_file` `parse_media_url` `resolve_share` `get_resolve_result` |
-| 屏幕投屏 | `start_screen_cast` `stop_screen_cast` `screen_cast_status` `list_screen_sources` |
+| 屏幕投屏 | `start_screen_cast` `stop_screen_cast` `screen_cast_status` `list_screen_sources` `set_ffmpeg_path` |
+| 运行依赖 | `ffmpeg_status` `ffmpeg_download_start` `ffmpeg_download_status`（FFmpeg 检测与按需下载，`utils/ffmpeg_deps.py`） |
 | 投屏确认 | `get_guard_devices` `get_guard_settings` `save_guard_settings` `set_guard_policy` `respond_cast_confirm` `remove_guard_device` |
 | 规则包与失败台账 | `plugin_list` `plugin_import` `plugin_pull` `plugin_check_updates` `plugin_test` `rule_inventory` `failure_list` `failure_delete` `failure_clear` |
 | 配置与运维 | `get_settings` `save_settings` `get_params` `save_params` `get_logs` `export_logs` `set_log_level` `check_update` `exit` |
