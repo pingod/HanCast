@@ -22,10 +22,11 @@
  * 验收是同一条命令的一部分（可用 --no-verify 关掉）：
  *   1. `pacman -Si` 逐个解析 depends —— 证明包名在 Arch 仓库里真的存在（写错依赖名
  *      是 Arch 包最常见的翻车方式，deb 的 `libwebkit2gtk-4.1-0` 直接抄过来在 Arch 不存在）。
- *   2. `pacman -U --nodeps` 真装进容器，再 `pacman -Qkk` 校验 .MTREE 与实际文件一致、
+ *   2. `pacman -U` 真装进容器，再 `pacman -Qkk` 校验 .MTREE 与实际文件一致、
  *      `pacman -Qo` 证明 /usr/bin/HanCast 归属本包。
- *   只 --nodeps 不装依赖：完整装会拉几百 MB 的 gtk/webkit，而我们验的是包格式与落盘，
- *   不是运行期（运行期由 deb/rpm 同一条链路负责）。
+ *   这里会把依赖真装上：原打算加 --nodeps 跳过，实测 pacman 7.1 的 -U 不吃这一套
+ *   （照样 resolve 出 124 个包并安装，CI 一次 9 秒、几百 MB 从镜像站拉完），
+ *   既然跳不过就顺势当成证据——Depends 名不但在仓库里存在，还真的能被解析并装进系统。
  *
  * 用法：
  *   node scripts/build-arch-pkg.cjs                      # 自动找 bundle/deb/*.deb
@@ -185,8 +186,19 @@ command -v fakeroot >/dev/null || { echo "fakeroot missing (base-devel)"; exit 1
 command -v bsdtar  >/dev/null || { echo "bsdtar missing (libarchive, pacman dep)"; exit 1; }
 command -v zstd    >/dev/null || { echo "zstd missing"; exit 1; }
 
-# makepkg 拒绝以 root 运行，所以固定落到一个非特权用户上
+# makepkg 拒绝以 root 运行，所以固定落到一个非特权用户上。
+# ⚠️ 这一步会把挂载进去的暂存目录属主从调用者（宿主用户）抢走：容器里的 build 是
+# uid 1000，而 GitHub runner 的宿主 uid 也是 1000 吗——实测不是，容器结束后宿主侧
+# readdirSync 直接 EACCES（CI 第一次跑就是这么红的：包已经出好、装端四条全绿，
+# 死的却是收尾清理）。所以退出时必须按传进来的 HOST_UID/HOST_GID 还原，
+# 而且要挂在 EXIT trap 上——构建失败时同样得把目录还给宿主，否则 rmSync 连
+# 清理都清不掉，/tmp 里会留下一堆别人删不了的目录。
 id build >/dev/null 2>&1 || useradd -m -u 1000 build
+restore() {
+  chown -R "\${HOST_UID:-0}:\${HOST_GID:-0}" /work 2>/dev/null || true
+  chmod -R u+rwX,go+rX /work 2>/dev/null || true
+}
+trap restore EXIT
 chown -R build:build /work
 
 # zstd 级别可覆盖：默认 19 与官方仓库一致，本地冒烟用 12 换取时间。
@@ -223,8 +235,9 @@ for d in ${DEPENDS.join(' ')}; do
   echo "  ok  $line"
 done
 
-echo "== pacman -U (real install, --nodeps to avoid pulling 600MB of GUI libs) =="
-pacman -U --noconfirm --nodeps "/work/$pkg"
+echo "== pacman -U (real install, deps resolved & installed from Arch repos) =="
+# 不加 --nodeps：实测 pacman 7.1 的 -U 依然会解析并安装依赖，加了是假开关（见文件头注释）
+pacman -U --noconfirm "/work/$pkg"
 
 echo "== integrity / ownership =="
 pacman -Q hancast
@@ -301,6 +314,11 @@ function main() {
       // 不接触任何密钥或宿主目录（唯一挂载点是暂存目录）。
       '--security-opt',
       'seccomp=unconfined',
+      // 容器里 chown 过暂存目录，退出时靠这两个值还原给真正的调用者（见容器脚本的 trap）
+      '-e',
+      `HOST_UID=${process.getuid ? process.getuid() : 0}`,
+      '-e',
+      `HOST_GID=${process.getgid ? process.getgid() : 0}`,
       '-v',
       `${stage}:/work`,
       '-w',
