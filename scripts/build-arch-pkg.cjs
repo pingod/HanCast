@@ -98,7 +98,7 @@ function readVersion() {
   return v;
 }
 
-/** pkgver 只能是 [A-Za-z0-9_.+] 且必须以数字开头；deb 里的 2.3.15 天然满足。 */
+/** pkgver 只能是 [A-Za-z0-9_.+] 且必须以数字开头；package.json 的 x.y.z 形态天然满足。 */
 function toPkgver(version) {
   const v = version.replace(/[^A-Za-z0-9_.+]/g, '.');
   if (!/^[0-9][A-Za-z0-9_.+]*$/.test(v)) fail(`cannot derive a valid pkgver from ${version} (got ${v})`);
