@@ -25,8 +25,9 @@
  *   2. `pacman -U` 真装进容器，再 `pacman -Qkk` 校验 .MTREE 与实际文件一致、
  *      `pacman -Qo` 证明 /usr/bin/HanCast 归属本包。
  *   这里会把依赖真装上：原打算加 --nodeps 跳过，实测 pacman 7.1 的 -U 不吃这一套
- *   （照样 resolve 出 124 个包并安装，CI 一次 9 秒、几百 MB 从镜像站拉完），
- *   既然跳不过就顺势当成证据——Depends 名不但在仓库里存在，还真的能被解析并装进系统。
+ *   （照样 resolve 并安装——CI run 38923996592 一次装进 124 个包，下载 164.36 MiB、
+ *    装完 861.84 MiB，事务约 11 秒），既然跳不过就顺势当成证据——
+ *   Depends 名不但在仓库里存在，还真的能被解析并装进系统。
  *
  * 用法：
  *   node scripts/build-arch-pkg.cjs                      # 自动找 bundle/deb/*.deb

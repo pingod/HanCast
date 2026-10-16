@@ -1,6 +1,6 @@
 # Changelog
 
-> 最后校对：2026-10-16，对应版本 v2.3.15（`package.json:4`）
+> 最后校对：2026-10-16，对应版本 v2.3.16（`package.json:4`）
 
 本文件记录 HanCast 的版本历史。口径说明：
 
@@ -8,6 +8,26 @@
 - 版本号唯一来源是 **`package.json` 的 `version`**（`scripts/sync-version.cjs:4,17`），`npm run version:set <x.y.z>` 把它刷进 7 处契约点：`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`（本地包那条，v2.3.8 起收进来——此前每版都靠人肉补）、`hancast-backend/pyproject.toml`、`hancast_sidecar/utils/config.py:39`、`src/api/commands.ts`（mock）、`src/stores/settings.ts`。`scripts/check-version.cjs` 自称以 `tauri.conf.json` 为源（口径相反），但全仓无人调用，是未接线的孤儿脚本——判定以 `sync-version.cjs` 为准。详见 [docs/构建与发布.md](docs/构建与发布.md) §1。
 - 下表「提交」列即 `git tag <版本>` 指向的提交；细节以 `git show <提交>` 为准，本文只留用户可感知的变化。
 - 新加版本时**同一次提交**里补这里，并按 [docs/README.md](docs/README.md) §4 的约定同步对应文档。
+
+---
+
+## v2.3.16 — 2026-10-16（本轮发布提交）
+
+GitHub CI 现在能打出 Arch 装得上的包：Linux 矩阵项在 tauri bundle 之后补一步，产出 `hancast-<版本>-1-x86_64.pkg.tar.zst` 并在同一次容器调用里真装真验。产品行为零变化（非文档 diff 只有 `scripts/build-arch-pkg.cjs`、`.github/workflows/build.yml` 与 8 处契约点的版本串）。
+
+- **为什么必须后处理**：tauri-bundler 根本没有 Arch 后端——上游 crate 的 `src/bundle/linux/` 下只有 `appimage/`、`debian.rs`、`rpm.rs`（不在本仓，`build.yml:420-422` 注释记录了这个事实），所以 `--bundles deb,rpm,appimage` 里**加不出** pacman 认的格式。补的步骤排在 `Tauri bundle` 之后（`build.yml:426-428`，`if: matrix.runner-os == 'Linux'`），**故意不加 `continue-on-error`**：这一步静默失败等于 Linux 少一个格式，用户只能去翻 AUR，宁可让 CI 红。
+- **输入直接复用 deb**：不重拼安装树，解 `bundle/deb/HanCast_<ver>_amd64.deb` 里的 `data.tar.gz`（那就是 tauri `debian::generate_data` 的产物）进 `$pkgdir`（`build-arch-pkg.cjs:162-163`）。自己按 `bundle.resources` 的 glob 重排等于复刻那份布局逻辑，以后改了 glob 不会同步报错，只会打出一个缺文件的包——**deb 对了包就对了**。License 单独 `install -Dm644` 到 `/usr/share/licenses/$pkgname/COPYING`（`arch-pkg` 硬要求，`:168`）。
+- **元数据交给 makepkg，不手写**：容器内 `makepkg -f --nodeps --skipchecksums --noextract`（`:217`），`.PKGINFO`/`.MTREE`/`.BUILDINFO` 由 Arch 自己的工具链生成。手写最坏的后果不是装不上（装不上看得见），而是 `pacman -Qkk` 永远报「missing MTREE data」这类**静默劣化**。两个 flag 坑：`--nodeps` 是给构建期依赖检查用的（本包 `package()` 只搬运，gtk/webkit 不在场也正常），装端验不验依赖另有判据；`--noextract` **不会把 source 拷进 `$srcdir`**，所以 `package()` 里显式在 `$srcdir`/`$startdir`/`$SRCDEST` 三处定位 deb（`:151-157`），否则 `bsdtar: Failed to open '/work/src/HanCast.deb'`。
+- **依赖名逐条映射，名字靠查不靠猜**：`libgtk-3-0→gtk3`、`libwebkit2gtk-4.1-0→webkit2gtk-4.1`、`libayatana-appindicator3-1→libayatana-appindicator`，再加 Arch 侧要显式写的 `hicolor-icon-theme`（deb 靠 dpkg trigger 隐式满足）（`:69-75`）。照抄 deb 包名是最常见的翻车方式——`libwebkit2gtk-4.1-0` 在 Arch 仓库里不存在，装的那一刻才炸；verify 阶段用 `pacman -Si` 逐条真查（`:232-237`）。
+- **非特权构建**：makepkg 拒绝以 root 跑，容器里 `id build || useradd -m -u 1000 build`（`:197`）再 `su - build`；`.PKGINFO` 里的 `packager` 靠 `~/.makepkg.conf` 的 `PACKAGER`，不设就是 `Unknown Packager`；压缩档 `COMPRESSZSTD=(zstd -T0 -19)`（`:210`，与官方包同级，`ARCH_ZSTD_LEVEL=12` 可降做本地冒烟）。
+- **验收内建在同一条命令**（`--no-verify` 才跳；本地与 CI 同一入口，判据表见 [docs/构建与发布.md](docs/构建与发布.md) §6.6）。**CI run 38923996592 / linux-x64 全绿实测**：出包 `hancast-2.3.16-1-x86_64.pkg.tar.zst` **51,418,890 字节（49.0 MiB）**，`.PKGINFO` 记 `pkgver = 2.3.16-1`、`size = 154,682,352`、`license = GPL-3.0-or-later`、`depend` 四条、`packager = HanCast CI <lanzeweie@foxmail.com>`、makepkg 7.1.0 + fakeroot 1.37.2；`pacman -Si` 四条依赖全命中（gtk3 `1:3.24.52-2`、webkit2gtk-4.1 `2.54.1-1`、libayatana-appindicator `0.6.1-1`、hicolor-icon-theme `0.18-1`）；`pacman -U` **真装**：**124 个包、下载 164.36 MiB、装完 861.84 MiB、约 11 秒**；`pacman -Qkk hancast` → **115 total files, 0 altered files**（`.MTREE` 与落盘字节一致）；`/usr/bin/HanCast`、`/usr/bin/hancast-sidecar`、`/usr/lib/HanCast/mpv/mpv` 属主都是 `root:root`（`:259` 断言）；四条存在性 ok（sidecar 可执行、捆绑 mpv、`.desktop`、license）；`pacman -Rn hancast` → `ok pacman -R clean`。产物落 `bundle/arch/`，随 `dist/` 进合一 artifact `bundle-HanCast-2.3.16-linux-x64`（354,334,288 字节）与拆分 artifact `HanCast-2.3.16-linux-x64.pkg.tar.zst`（zip 51,369,933 字节），release 上传 glob `artifacts/**/*.pkg.tar.zst`（`build.yml:601`）。
+- **`pacman -U --nodeps` 是个假开关（实测更正）**：本以为能跳过依赖解析，pacman 7.1 的 `-U` 照旧 resolve 并安装 124 个包。既然跳不过就去掉 flag，把这件事**当证据用**——Depends 不但名字存在，还真的能被解析并装进系统（`:27-30,240-241`）。此前所有「不会拉依赖」的注释与文档措辞同轮改掉。
+- **第一次 CI 失败是清理 bug，不是包**：run 38919966019 出包与装端四条全绿，红的在最后一行——宿主侧 `EACCES: scandir '/tmp/hancast-arch-2.3.16-XXXXXX'`。容器里为了跑 makepkg 把 bind mount 的暂存目录 chown 给了 uid 1000，而 runner 上的宿主 uid 不是 1000，**脚本删不掉自己造的目录**。修法：`docker run` 传 `-e HOST_UID/-e HOST_GID`（`:325`），容器内 `trap restore EXIT` 把属主还原并放开读权限（`:198-202`）；挂 EXIT trap 而不是只放在成功路径，是因为构建失败时同样得把目录还给宿主，否则连失败诊断都读不到。本地按同一路径复现：失败退出后暂存目录是 `drwxr-xr-x pavia wheel`，可读可删；复跑即绿。
+- **本地能验到哪一步（Rosetta 天花板，别把本机绿色当成装过）**：Apple Silicon 上这是 x86_64 容器走模拟，pacman 7 的下载沙箱固定报 `error restricting syscalls via seccomp: 22` → `switching to sandbox user 'alpm' failed`，`pacman -Sy` 第一步就失败；`--security-opt seccomp=unconfined`（`:321-322`）解不开——模拟层不允许在已有过滤器上再收窄，不是 Docker profile 的限制，而 `archlinux/archlinux` 也没有 arm64 变体可绕。所以本机只验到出包与归档层：v2.3.15 的 deb 出包 51,420,759 字节、`.PKGINFO`/`.MTREE`/`.BUILDINFO` 齐、归档内 118 个条目记录的属主全是 `root:root`、`.MTREE` 83 个带摘要条目抽检 5 个（HanCast / hancast-sidecar / mpv / `.desktop` / COPYING）SHA-256 全中，包内清单减 MTREE 清单为空。**同一版本本机与 CI 的字节数差在 KB 级**（本机 51,420,790 vs CI 51,418,890）：`zstd -T0` 的多线程分块随核数变，不是内容差异。
+- **镜像选型两处实测**：默认 `ghcr.io/archlinux/archlinux:base-devel`（`:40-48`）。① ghcr 而非 docker.io：同名 tag 内容逐字节相同（config digest `sha256:689ecdd6…`，层 `db96cd089ee2` + `db0a66162ecf`，2026-10-16 核对 manifest），但 docker.io 对匿名拉取有配额，共享 runner 出口 IP 撞上限会**连带整条 Linux 构建失败**；② base-devel 而非 `:latest`：makepkg 要 fakeroot，fakeroot 在 base-devel 里，纯 latest 进来先得 `pacman -Sy base-devel`（多一次联网、多一个失败面），脚本仍保留缺 fakeroot 时现补的兜底（`:180-183`），所以 `--image …:latest` 也能跑。换源走 `ARCH_PKG_IMAGE`（环境变量优先，CI 一处改全局）或 `--image`。
+- **临时落点守 v2.3.15 政策**：即抛的暂存目录走**显式** `/tmp` 路径（Windows 才落 `os.tmpdir()`）并由脚本自清（`:288-293,347-348`），不留 `--keep-stage` 之外的第三处落点。本轮另清掉上一轮尺寸调查留下的临时物：`/tmp/hc-arch/` 的三个镜像 tarball（721 MB → 151 MB）与 brew 装的 `squashfs` 4.7.5（`unsquashfs` 只为读那个 AppImage 而装，无其他 formula 依赖）。
+- **文档同轮修订**：AGENTS.md（`scripts/` 清单加 `build-arch-pkg`、完整构建顺序多出 Linux 专属第 7 步、CI 矩阵 Linux 产物加 `.pkg.tar.zst`、最后校对 v2.3.16）；README.md / README_en.md（badge 加 `pkg.tar.zst`，下载段点名 Arch 产物名与 `sudo pacman -U <包文件>` 装法）；docs/构建与发布.md（§4.1「无 Arch 后端」事实 + 镜像选型、§4.2 步骤 19 行、§4.3 产物名与 artifact 表、§6.6 四条判据表 + 本机/CI 两段实测）；docs/README.md（索引行加「含 Arch 后处理」，全表行数按实测重刷）。
+- **没闭合的口子（别当成已验）**：① release job 的 `artifacts/**/*.pkg.tar.zst` glob **没被执行过**——release 是 tag-gated，`workflow_dispatch` 只跑构建；v2.3.16 打 tag 后要核对 draft Release 资产清单里确实躺着这个文件。② `-Qkk` 验的是文件字节与属主，**不含 GUI 真启动**：装完在 Arch 真机上开起来、托盘与 WebKit 渲染是否正常，本轮没有 Arch 实机。③ 捆绑的 `usr/lib/HanCast/mpv/mpv` 是把构建机 apt 那份**二进制单拷**进包的（`build.yml:191-207` 不拷它动态依赖的 `libav*`），soname 不同的发行版上可能起不来——deb/rpm 同病，不是 Arch 引入的回归，§6.6 有横幅。④ 产品二进制本轮未变，`.68` Windows 装机复测按惯例豁免。
 
 ---
 
