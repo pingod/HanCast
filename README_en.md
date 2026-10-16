@@ -20,7 +20,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Windows-10%2F11-blue?logo=windows" alt="Windows">
   <img src="https://img.shields.io/badge/macOS-14%2B-blue?logo=apple" alt="macOS">
-  <img src="https://img.shields.io/badge/Linux-deb%2Frpm%2FAppImage-blue?logo=linux" alt="Linux">
+  <img src="https://img.shields.io/badge/Linux-deb%2Frpm%2FAppImage%2Fpkg.tar.zst-blue?logo=linux" alt="Linux">
   <img src="https://img.shields.io/badge/License-GPL--3.0-green" alt="License">
 </p>
 
@@ -126,7 +126,8 @@ After casting starts, click the device card to open the control panel:
 | Microsoft Store | https://apps.microsoft.com/detail/9nk1xwpg6hd5 |
 
 CI publishes Windows (x64 NSIS installer), macOS (arm64 `.app` / `.dmg`) and Linux
-(deb / rpm / AppImage) artifacts for every tag — see [docs/构建与发布.md](docs/构建与发布.md).
+(deb / rpm / AppImage, plus a pacman-installable `.pkg.tar.zst`) artifacts for every tag —
+see [docs/构建与发布.md](docs/构建与发布.md).
 
 ---
 
@@ -190,7 +191,9 @@ npm run tauri build
 
 Build output is located at `src-tauri/target/release/bundle/`: an NSIS `.exe` on Windows,
 `.app` plus `dmg/HanCast_<version>_aarch64.dmg` on macOS (the dmg is assembled by CI, see
-[docs/构建与发布.md](docs/构建与发布.md) §4), and deb / rpm / AppImage on Linux.
+[docs/构建与发布.md](docs/构建与发布.md) §4), deb / rpm / AppImage on Linux, and
+`hancast-<version>-1-x86_64.pkg.tar.zst` for Arch (Tauri's Linux bundler has no Arch backend,
+so `scripts/build-arch-pkg.cjs` converts the deb right after bundling).
 The Sidecar is built first with `npm run build:sidecar` (Nuitka) and merged into the shell
 resources by `scripts/sync-sidecar.cjs`.
 

@@ -417,6 +417,16 @@ jobs:
           echo "dmg sidecar OK"
 
       # ---------- 收集产物 ----------
+      # Tauri 的 Linux bundler 根本不产 Arch 包：tauri-bundler 的
+      # src/bundle/linux/ 下只有 appimage/、debian.rs、rpm.rs，所以
+      # `--bundles deb,rpm,appimage` 里加不出 pacman 能装的格式。
+      # 这里补一步：以刚构建的 deb 安装树为输入，进 archlinux 容器用 makepkg
+      # 生成 hancast-<ver>-1-x86_64.pkg.tar.zst，并在同一次容器调用里
+      # `pacman -U` 实装 + `pacman -Qkk` 校验（为什么不手写 .PKGINFO 见脚本头注释）。
+      - name: Build Arch package (Linux)
+        if: matrix.runner-os == 'Linux'
+        run: node scripts/build-arch-pkg.cjs
+
       - name: List bundle output
         shell: bash
         run: |
@@ -437,6 +447,7 @@ jobs:
           find "$B" -type f \( \
               -name '*.dmg' -o -name '*.exe' -o -name '*.msi' \
               -o -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \
+              -o -name '*.pkg.tar.zst' \
             \) -exec cp -v {} dist/ \;
           echo "=== staged ==="
           ls -lh dist/
@@ -492,6 +503,15 @@ jobs:
         with:
           name: HanCast-${{ env.VERSION }}-${{ matrix.name }}.AppImage
           path: dist/*.AppImage
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload artifacts (pkg.tar.zst)
+        uses: actions/upload-artifact@v4
+        with:
+          # Arch 包（由 Build Arch package (Linux) 步骤后处理产出）
+          name: HanCast-${{ env.VERSION }}-${{ matrix.name }}.pkg.tar.zst
+          path: dist/*.pkg.tar.zst
           if-no-files-found: ignore
           retention-days: 14
 
@@ -578,4 +598,5 @@ jobs:
             artifacts/**/*.deb
             artifacts/**/*.rpm
             artifacts/**/*.AppImage
+            artifacts/**/*.pkg.tar.zst
             artifacts/rule-packs/*.zip

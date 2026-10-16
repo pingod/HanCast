@@ -3,7 +3,7 @@
 > 旧名 `CLAUDE.md`（Claude Code 私有约定），2026-10-15 改名为跨工具的 `AGENTS.md`；
 > `CLAUDE.md` 现在只留三行指针指向本文件。
 
-> 最后校对：2026-10-16，对应版本 v2.3.15（`package.json:4`）。
+> 最后校对：2026-10-16，对应版本 v2.3.16（`package.json:4`）。
 > 本文件是速览与硬约束；逐模块的深度内容在 **docs/README.md** 的索引里，别在这里找细节。
 
 ## 项目概述
@@ -150,7 +150,7 @@ HanCast/
 │   ├── hancast-bilibili / hancast-douyin / hancast-template
 │   ├── index.json               # 官方索引；线上地址是 main 分支 raw 路径 `https://raw.githubusercontent.com/pingod/HanCast/main/rule-packs/index.json`（`params.py:21`）
 │   └── dist/                    # 打包 zip（CI 随 draft Release 发布）
-├── scripts/                     # 壳层脚本：sync-version / check-version / sync-sidecar / check-resources（均为 .cjs）
+├── scripts/                     # 壳层脚本：sync-version / check-version / sync-sidecar / check-resources / build-arch-pkg（均为 .cjs）
 ├── tools/                       # 49 个顶层脚本 + 1 个目录型验收包（browser-channel-livecheck/），索引与计数口径见 tools/README.md
 ├── mpv/                         # 本地放置的 MPV（`.gitignore:86-87` 只留 portable_config/）
 │   └── portable_config/mpv.conf # 入库：弹幕/OSD 脚本、着色器、字体
@@ -377,6 +377,9 @@ npm run tauri build            # 或 npx tauri build --bundles <targets>
 #                                       再由 flatten_dependencies() 把 *.dll/*.pyd/*.so 提升到 src-tauri/ 根）
 #   5. node scripts/check-resources.cjs（Preflight：逐个 glob 验命中）
 #   6. tauri bundle
+#   7. node scripts/build-arch-pkg.cjs（仅 Linux：把刚产出的 .deb 转成 Arch 的
+#      .pkg.tar.zst，进 archlinux 容器用 makepkg 打包并同一次调用里 pacman 实装验收；
+#      Tauri 的 Linux bundler 没有 Arch 后端，所以这一步只能在 bundle 之后补）
 ```
 
 步骤 3/4 的产物就是 `bundle.resources` 的 glob 目标，所以 Preflight 必须排在它们之后、
@@ -402,7 +405,7 @@ npm run tauri build            # 或 npx tauri build --bundles <targets>
 |--------|--------|------|----------|
 | `macos-arm64` | `macos-14` | `app`, `dmg` | 官方 release `macos-15-arm` zip |
 | `windows-x64` | `windows-latest` | `nsis` | 官方 release `x86_64-pc-windows-msvc` zip |
-| `linux-x64` | `ubuntu-latest` | `deb`, `rpm`, `appimage` | `apt-get install mpv`（官方 release 无 Linux 产物）|
+| `linux-x64` | `ubuntu-latest` | `deb`, `rpm`, `appimage` + `.pkg.tar.zst`（#19 后处理，非 tauri 产出） | `apt-get install mpv`（官方 release 无 Linux 产物）|
 
 - **触发**：推送 `v*` tag，或手动 `workflow_dispatch`
 - **mpv 版本**：`env.MPV_TAG` 固定为 `v0.41.0`（不用 GitHub API 查 tag，

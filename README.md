@@ -20,7 +20,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Windows-10%2F11-blue?logo=windows" alt="Windows">
   <img src="https://img.shields.io/badge/macOS-14%2B-blue?logo=apple" alt="macOS">
-  <img src="https://img.shields.io/badge/Linux-deb%2Frpm%2FAppImage-blue?logo=linux" alt="Linux">
+  <img src="https://img.shields.io/badge/Linux-deb%2Frpm%2FAppImage%2Fpkg.tar.zst-blue?logo=linux" alt="Linux">
   <img src="https://img.shields.io/badge/License-GPL--3.0-green" alt="License">
 </p>
 
@@ -120,7 +120,8 @@ B 站投屏还能在播放中**切换画质**，切完自动续上进度。
 | Gitee Releases（国内加速） | https://gitee.com/buxiangqumingzi/han-cast/releases/latest |
 | Microsoft Store | https://apps.microsoft.com/detail/9nk1xwpg6hd5 |
 
-Windows（x64 NSIS 安装包）、macOS（arm64 `.app` / `.dmg`）、Linux（deb / rpm / AppImage）三平台产物
+Windows（x64 NSIS 安装包）、macOS（arm64 `.app` / `.dmg`）、Linux（deb / rpm / AppImage /
+pacman 用的 `.pkg.tar.zst`）产物
 均由 CI 随每个 tag 发布，详见 [docs/构建与发布.md](docs/构建与发布.md)。
 ---
 
@@ -182,7 +183,9 @@ npm run tauri build
 
 构建产物位于 `src-tauri/target/release/bundle/`：Windows 为 NSIS 安装包（`.exe`），
 macOS 为 `.app` 与 `dmg/HanCast_<版本>_aarch64.dmg`（dmg 由 CI 单独打包，见
-[docs/构建与发布.md](docs/构建与发布.md) §4），Linux 为 deb / rpm / AppImage。
+[docs/构建与发布.md](docs/构建与发布.md) §4），Linux 为 deb / rpm / AppImage，外加 Arch 的
+`hancast-<版本>-1-x86_64.pkg.tar.zst`（Tauri 的 Linux bundler 没有 Arch 后端，由
+`scripts/build-arch-pkg.cjs` 在 bundle 之后把 deb 转出来）。
 Sidecar 由 `npm run build:sidecar`（Nuitka）先行产出，再由 `scripts/sync-sidecar.cjs` 并入壳层资源。
 
 > ⚠️ 直接运行打包出来的 `HanCast` 主程序若缺少 Sidecar 会闪退——它依赖随包的 Python Sidecar。
