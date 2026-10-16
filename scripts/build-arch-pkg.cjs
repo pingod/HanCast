@@ -284,7 +284,12 @@ function main() {
   const licenseSrc = path.join(REPO, 'LICENSE');
   if (!fs.existsSync(licenseSrc)) fail(`LICENSE not found at ${licenseSrc}`);
 
-  const stage = fs.mkdtempSync(path.join(os.tmpdir(), `hancast-arch-${version}-`));
+  // 落点政策（AGENTS.md「临时落点二选一」）：即抛件走 /tmp 显式路径，由本脚本自己清。
+  // 裸 os.tmpdir() 在 macOS 是 $TMPDIR 的 /var/folders/… 随机路径——用户找不到、
+  // 系统清扫又不认，v2.3.15 刚把这类落点全仓清零，这里不能重新长出来一个。
+  const stage = fs.mkdtempSync(
+    path.join(process.platform === 'win32' ? os.tmpdir() : '/tmp', `hancast-arch-${version}-`)
+  );
   const outDir = path.resolve(
     process.cwd(),
     arg('--out', path.join(REPO, 'src-tauri', 'target', 'release', 'bundle', 'arch'))

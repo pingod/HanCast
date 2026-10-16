@@ -120,8 +120,8 @@ B 站投屏还能在播放中**切换画质**，切完自动续上进度。
 | Gitee Releases（国内加速） | https://gitee.com/buxiangqumingzi/han-cast/releases/latest |
 | Microsoft Store | https://apps.microsoft.com/detail/9nk1xwpg6hd5 |
 
-Windows（x64 NSIS 安装包）、macOS（arm64 `.app` / `.dmg`）、Linux（deb / rpm / AppImage /
-pacman 用的 `.pkg.tar.zst`）产物
+Windows（x64 NSIS 安装包）、macOS（arm64 `.app` / `.dmg`）、Linux（deb / rpm / AppImage）
+与 Arch（`hancast-<版本>-1-x86_64.pkg.tar.zst`，装法 `sudo pacman -U <包文件>`）产物
 均由 CI 随每个 tag 发布，详见 [docs/构建与发布.md](docs/构建与发布.md)。
 ---
 
