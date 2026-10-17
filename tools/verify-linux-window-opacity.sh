@@ -156,6 +156,12 @@ if [ "$TARGET_WS" = auto ]; then
 ids=[w["id"] for w in json.load(sys.stdin) if isinstance(w.get("id"), int)]
 print((max(ids) if ids else 1) + 1)')"
 fi
+# 先把**已在跑**的实例关掉：Tauri 带 single-instance 插件，第二个进程只会去聚焦旧窗口
+# 然后自己退出——旧窗口在别的工作区，几何就会读到那儿，判据量的是别人的桌面。
+if pgrep -f "^$HC_BIN\$" >/dev/null 2>&1; then
+  echo "先关掉已在跑的 $HC_BIN（single-instance 会让新进程只聚焦旧窗口）"
+  stop_app
+fi
 if [ -n "$TARGET_WS" ]; then
   hyprctl dispatch "hl.dsp.focus({ workspace = $TARGET_WS })" >/dev/null 2>&1
   sleep 1.5
@@ -191,11 +197,13 @@ for run in $(seq 1 "$SWEEPS"); do
     fail_env "第 $run 轮后窗口落在 workspace $WS 而不是 $TARGET_WS"
 done
 
-[ "$RELAUNCH" = 1 ] && launch last
-# 用过空 workspace 就把他的视图还回原工作区（只切视图，不挪任何人的窗口）
+# 用过空 workspace 就把他的视图还回原工作区（只切视图，不挪任何人的窗口），
+# **再**重启应用——这样窗口落回他原来的工作区，而不是留在探针自建的那个空工作区上
 if [ -n "$TARGET_WS" ] && [ -n "$ORIG_WS" ] && [ "$ORIG_WS" != "$TARGET_WS" ]; then
   hyprctl dispatch "hl.dsp.focus({ workspace = $ORIG_WS })" >/dev/null 2>&1
+  sleep 1
 fi
+[ "$RELAUNCH" = 1 ] && launch last
 
 if [ "$worst" -le "$MAX_PCT" ]; then
   echo "PASS：光标扫过之后没有一行露出身后桌面（最差 ${worst}% ≤ ${MAX_PCT}%）"
