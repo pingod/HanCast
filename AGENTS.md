@@ -3,7 +3,7 @@
 > 旧名 `CLAUDE.md`（Claude Code 私有约定），2026-10-15 改名为跨工具的 `AGENTS.md`；
 > `CLAUDE.md` 现在只留三行指针指向本文件。
 
-> 最后校对：2026-10-17，对应版本 v2.3.17（`package.json:4`）。
+> 最后校对：2026-10-17，对应版本 v2.3.18（`package.json:4`）。
 > 本文件是速览与硬约束；逐模块的深度内容在 **docs/README.md** 的索引里，别在这里找细节。
 
 ## 项目概述
@@ -151,7 +151,7 @@ HanCast/
 │   ├── index.json               # 官方索引；线上地址是 main 分支 raw 路径 `https://raw.githubusercontent.com/pingod/HanCast/main/rule-packs/index.json`（`params.py:21`）
 │   └── dist/                    # 打包 zip（CI 随 draft Release 发布）
 ├── scripts/                     # 壳层脚本：sync-version / check-version / sync-sidecar / check-resources / build-arch-pkg（均为 .cjs）
-├── tools/                       # 49 个顶层脚本 + 1 个目录型验收包（browser-channel-livecheck/），索引与计数口径见 tools/README.md
+├── tools/                       # 50 个顶层脚本 + 1 个目录型验收包（browser-channel-livecheck/），索引与计数口径见 tools/README.md
 ├── mpv/                         # 本地放置的 MPV（`.gitignore:86-87` 只留 portable_config/）
 │   └── portable_config/mpv.conf # 入库：弹幕/OSD 脚本、着色器、字体
 ├── docs/                        # 设计文档，**入口是 docs/README.md**
@@ -636,7 +636,7 @@ node tools/verify-params-ui.mjs        # 参数表与 tag 源码逐键比对（U
 python3 tools/audit-doc-refs.py        # 文档引用的 文件:行号 是否还成立
 ```
 
-`tools/` 下 49 个顶层脚本（+ `browser-channel-livecheck/` 目录型验收包）按用途分类见 tools/README.md（计数口径同那里）；端到端验收脚本的判据写在
+`tools/` 下 50 个顶层脚本（+ `browser-channel-livecheck/` 目录型验收包）按用途分类见 tools/README.md（计数口径同那里）；端到端验收脚本的判据写在
 docs/构建与发布.md §6 与各专题文档，不要凭脚本退出码 0 就当作功能可用。
 
 ## 窗口配置
@@ -647,12 +647,16 @@ docs/构建与发布.md §6 与各专题文档，不要凭脚本退出码 0 就�
 |------|----|------|
 | `src-tauri/tauri.conf.json` `app.windows[0]` | 434×634，min 346×472，max 800×900，`decorations:false`、`transparent:true`、`visible:false`、`dragDropEnabled:true` | 首启的声明尺寸 |
 | `src-tauri/src/lib.rs:32-36` `WindowConfig::default()` | 434×634；最小尺寸在 Rust 侧硬编码 `MIN_WIDTH=346 / MIN_HEIGHT=472`（`lib.rs:1092-1093`，恢复与记录时各 clamp 一次，`lib.rs:1098,1118-1119`） | Rust 恢复/写入 `window_config.json` 时的默认值与下限 |
+| `src-tauri/tauri.linux.conf.json` `app.windows[0]` | **整份重写** base 那一条，只把 `transparent` 改成 `false` 并补不透明 `backgroundColor` `{22,20,50,255}` | Linux 必须用不透明窗口，原因见「跨平台 WebView 兼容性」 |
+
+⚠️ 平台配置合并是 RFC 7386，**数组整体替换**——所以 Linux 那份不能只写 `{transparent:false}`，
+必须把 base 的窗口对象整份抄过去再改，否则 `minWidth` / `dragDropEnabled` 之类会静默消失。
 
 用户拖过窗口后，真实尺寸记在 AppData 的 `window_config.json`（`lib.rs:1068`），启动时优先读它，
 写入带 **500ms 防抖**（`lib.rs:84,90`）。所以「改了 tauri.conf.json 但界面尺寸没变」通常是本机
 `window_config.json` 在覆盖，删掉该文件再看。
 
-**注意**：窗口特效（vibrancy/blur）尚未实现，当前仅使用透明窗口。
+**注意**：窗口特效（vibrancy/blur）尚未实现，Windows/macOS 仅使用透明窗口；**Linux 自 v2.3.18 起不透明**。
 
 ## 跨平台 WebView 兼容性
 
@@ -667,9 +671,19 @@ docs/构建与发布.md §6 与各专题文档，不要凭脚本退出码 0 就�
 表现为 `wl_display.error(..., 4, "Missing acquire timeline")` → `Gdk-Message: Error 71 (协议错误)` →
 进程被杀，用户只看到「点图标闪都没闪」。2026-10-17 在 CachyOS（webkit2gtk-4.1 2.54.1 / hyprland 0.56.2）
 实测 `GSK_RENDERER=cairo`、`GSK_RENDERER=gl`、`LIBGL_ALWAYS_SOFTWARE=1` 全部照崩，
-只有关掉 dmabuf 渲染器能稳。因此 `src-tauri/src/main.rs:21-28` 在 `main()` 最前面补
+只有关掉 dmabuf 渲染器能稳。因此 `src-tauri/src/main.rs:29-36` 在 `main()` 最前面补
 `WEBKIT_DISABLE_DMABUF_RENDERER=1`：仅在存在 `WAYLAND_DISPLAY` 且用户自己没设该变量时才设，
 X11 会话不动。**这类环境兜底必须放在 GTK/WebKit 初始化之前**，放 `lib.rs` 的 `run()` 里就晚了。
+
+⚠️ **上面那条兜底的连带后果：Linux 窗口必须不透明。** 关掉 dmabuf 后 WebKitGTK 改走共享图像（SHM）路径，
+透明（ARGB）窗口在这条路径上会**漏提交 damage 矩形**——光标划过哪一条，那一条的 surface 就没画过、
+alpha 保持 0，Hyprland 直接把后面的桌面（还带模糊）透出来，用户看到的是「界面显示不全 / 晃一晃就出洞」。
+2026-10-17 真机量化：800×694 窗口扫一遍光标后 **353/694 行与裸桌面一致**，四次复跑 25%–51%。
+上游 tauri#14924（记录时仍 OPEN）同一现象并写明「不透明窗口没问题」，`WEBKIT_DISABLE_COMPOSITING_MODE=1`
+实测无效。所以 Linux 侧走 `tauri.linux.conf.json` 的 `transparent:false` + 不透明 `backgroundColor`，
+毛玻璃观感只在 Windows/macOS 保留。取证与判据见 docs/故障排查.md §8.4，判据脚本已入库：
+**`tools/verify-linux-window-opacity.sh`**（Hyprland 真机上现读几何 → Lua 扫光标 → grim 成对截图 → 逐行差分，
+`--workspace auto` 切空工作区保证背景是裸桌面；⚠️ 会真的启停 GUI）。
 
 **CSS 兼容规则**:
 - 使用标准 Flexbox/Grid 布局

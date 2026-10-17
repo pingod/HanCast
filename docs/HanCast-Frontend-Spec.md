@@ -74,7 +74,7 @@ npm scripts：`dev` = `vite`、`build` = `vue-tsc && vite build`、`build:sideca
 | `minWidth` × `minHeight` | 346 × 472 | — | Rust 侧恢复窗口尺寸时也做同样下限保护（`src-tauri/src/lib.rs:1091-1095`） |
 | `maxWidth` × `maxHeight` | 800 × 900 | — | 另在 setup 里 `set_maximizable(false)`（`lib.rs:1108`） |
 | `decorations` | `false` | :25 | 无边框 → 必须自绘 TitleBar |
-| `transparent` | `true` | :26 | 背景透明，配合 CSS 半透明背景色 |
+| `transparent` | `true` | :26 | 背景透明，配合 CSS 半透明背景色。**Linux 例外**：`tauri.linux.conf.json` 整份重写该窗口对象为 `transparent:false` + 不透明 `backgroundColor`（关 dmabuf 后透明窗口会漏提交 damage 露出桌面，v2.3.18，机制见 [故障排查.md](故障排查.md) §8.4） |
 | `visible` | `false` | :28 | 启动隐藏，由 Rust setup 决定何时显示（`--minimized`/`--autostart` 启动时保持最小化，`lib.rs:1081-1085`） |
 | `dragDropEnabled` | `true` | :29 | Tauri 原生文件拖拽开启（代价见 §10.2） |
 | `withGlobalTauri` | `true` | :13 | 全局 `window.__TAURI__` |

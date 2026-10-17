@@ -4,7 +4,7 @@
 
 `tools/` 里放的是**可重复运行的验收 / 探针脚本**，不是一次性的 `/tmp` 手搓脚本。它们必须自适应当前机器——设备名、网卡、产物路径、参数条数都从现场现读，不写死。用法上的两条铁律：**修 bug 之前先跑它复现，修完之后再用它证明**。「证明」的对象是判据（退出码 / PASS-FAIL 行），不是截图，也不是「我点了一下看起来对」。
 
-当前分类表收录 **48 个顶层脚本 + 1 个目录型验收包**（`browser-channel-livecheck/`，4 个文件合写成 §1.7 的一行）。核对计数用 `git ls-files tools/`：现在是 54 项 = 49 个顶层脚本文件 + 验收包 4 个 + 本 README；49 与 48 的差是那一个 `audit-doc-refs.py`——它是全仓文档体检工具，用法记在 `AGENTS.md:605` 与 [docs/README.md](../docs/README.md) §4，不进本索引的分类表。`ls tools/` 还多一个不入库的 `__pycache__/`。
+当前分类表收录 **49 个顶层脚本 + 1 个目录型验收包**（`browser-channel-livecheck/`，4 个文件合写成 §1.7 的一行）。核对计数用 `git ls-files tools/`：现在是 55 项 = 50 个顶层脚本文件 + 验收包 4 个 + 本 README；50 与 49 的差是那一个 `audit-doc-refs.py`——它是全仓文档体检工具，用法记在 `AGENTS.md:605` 与 [docs/README.md](../docs/README.md) §4，不进本索引的分类表。`ls tools/` 还多一个不入库的 `__pycache__/`。
 
 ---
 
@@ -19,6 +19,7 @@
 | `accept-macos-artifact.sh` | macOS 产物验收总入口：版本、Info.plist 三条声明、签名身份、产物内文件 sha256 对齐 tag、参数表逐键比对、SSDP 心跳通道、跨机入站、JS 插件宿主、窗口/音频契约、**FFmpeg 去捆绑与检测链**（`.app` 内 `ffmpeg`/`ffprobe` 零命中；一次性 `HOME` + 干净 PATH 起打包 sidecar 跑完「检出系统那份 → 真下载 → 复检归位 → 手填优先」四步），逐项打 PASS/FAIL | `tools/accept-macos-artifact.sh <version>`（例 `tools/accept-macos-artifact.sh 2.3.5`）<br>下载那一步要线路配合：`HC_FFMPEG_PROXY=http://127.0.0.1:9565 tools/accept-macos-artifact.sh <version>` | 仅 macOS；`/Applications/HanCast.app` 已装 CI 产物；仓库里能 `git show v<version>`（tag 已 fetch）；局域网可达；连不上下载源判 **SKIP**（环境限制）而不是 FAIL，但失败原文照进载荷那条仍算 PASS |
 | `install-macos-artifact.sh` | 把 CI 的 dmg 原样装进 `/Applications`，不做任何补丁；装完直接接 `accept-macos-artifact.sh` | `tools/install-macos-artifact.sh <version> <dmg 路径>` | 仅 macOS；dmg 产物；当前用户在 `admin` 组（全程不提权，`:8-11`）；旧 sidecar 必须已自行退出（脚本只等不 `pkill`，`:31-34`） |
 | `verify-windows-artifact.sh` | 验收装在 .68 上的 CI 产物**本身**：注册表 `DisplayVersion` == 要求版本；安装目录里那份源码级 `.py` 逐个与 `git show v<tag>` 比对（两边都 `tr -d '\r'`，Windows 包全是 CRLF，直接 certutil 比 tag 哈希会把装对的版本判成装错）；curl_cffi 三件套与主程序里的离屏窗口标签单独扫一遍，tag 里没这项就 SKIP 而不是假 FAIL | `tools/verify-windows-artifact.sh <version>`<br>`… <version> params.py utils/httpclient.py`（只比对指定文件） | 仅 macOS 侧发起；能 `ssh administrator@192.168.1.68`；本地有 `v<version>` tag；不碰 UI、不打补丁。任一项 FAIL = 这版产物在他手上不可信，别继续让他测 |
+| `verify-linux-window-opacity.sh` | Linux(Wayland + Hyprland) 窗口不透明判据：光标蛇形扫过整个客户区后，抓一张窗口图、杀掉 GUI 再抓同一矩形当裸桌面，逐行比 RGB 平均绝对差，**与桌面一致的行 = 那块 surface 从没提交过（透明洞）**。v2.3.18 的「鼠标晃一晃出现透明洞」就是它复现/证明的（机制见 [docs/故障排查.md](../docs/故障排查.md) §8.4） | `tools/verify-linux-window-opacity.sh`（默认 3 轮、上限 0%）<br>`… --sweeps 5`<br>`… --max-pct 2`<br>`… --workspace auto`（切到一个空 workspace 再量）<br>`… --no-relaunch`<br>`HC_BIN=/usr/bin/HanCast HC_CLASS=HanCast THRESHOLD=6.0 …` | **只能在装了 Hyprland 的 Linux 真机上跑**（CachyOS .68:10086）；`hyprctl`/`grim`/`ffmpeg`/`python3`；要**真的启动并杀掉 GUI**、并切换工作区（结束还回原工作区），跑前先确认这台机器空闲、没有投屏在跑；背景必须是裸桌面——同一 workspace 上有别的窗口压住矩形时脚本 exit 2，而不是拿它当背景量出假 PASS；退出码 0=PASS / 1=有洞 / 2=环境不满足 |
 | `pull-rule-packs-installed.py` | 驱动**打包版** sidecar 走 `plugin_check_updates` → `plugin_pull`，证明已装的规则包真能升到官方索引版本 | `python3 tools/pull-rule-packs-installed.py`<br>`… --only hancast-douyin`<br>`… --no-relaunch`<br>`… --app /Applications/HanCast.app` | 仅 macOS（默认 `APP = /Applications/HanCast.app`，`:38`）；打包产物；能访问 `raw.githubusercontent.com`，走系统代理时带 `HTTPS_PROXY`；脚本会**整体退出并重启 GUI** |
 | `cleanup-macos-aggregates.py` | 清掉探针残留在系统里的 HanCast CoreAudio 聚合设备（默认只打印计划） | `hancast-backend/.venv/bin/python tools/cleanup-macos-aggregates.py`<br>`… --apply`<br>`… --apply --product` | 仅 macOS；后端 venv（import `hancast_sidecar.screencast.macos_tap`） |
 | `rust-check.sh` | 本地 `cargo check` 的前置：按 Tauri 配置建一次性空桩，让资源 glob 不落空；check 完只删自己建的文件 | `tools/rust-check.sh`<br>`tools/rust-check.sh --release`（参数透传给 `cargo check`） | 本地开发机；`rustc`/`cargo`；会**在 `src-tauri/` 下临时写文件**（`trap cleanup EXIT` 回收，已存在的路径绝不动） |
@@ -139,6 +140,7 @@ ssh administrator@192.168.1.68 "schtasks /delete /tn <TASK> /f"      # 收尾
 | `verify-proxy-segment-decodable.py` | 在 `127.0.0.1` 起一个临时端口 | 明确声明「只读上游、不碰任何产品配置」 |
 | `probe-installed-ja3.py` | 起**打包版 sidecar** 进程并向用户的配置目录**写一条解析失败台账** | 只在 `127.0.0.1` 起取证端口；地址带一次性标记 `hancast-ja3-probe`，收尾用 `failure_delete{url}` 精确删自己那一条（绝不调 `failure_clear`，那是用户的数据）；`close()` 只收尾自己 spawn 的那个 pid——**绝不 `pkill` sidecar**，那会杀掉正在投屏的实例 |
 | `browser-channel-livecheck/run.sh` | 往应用的**用户规则目录**装一个测试包，并起 HTTP 服务 | `trap cleanup EXIT` 只删本次自己建的那一个目录（`--keep` 才留）；服务是脚本自己起的子进程，退出即 `kill` |
+| `verify-linux-window-opacity.sh` | **真的启动/杀掉 GUI**，并切换 Hyprland 工作区（背景需要裸桌面） | 结束把视图还回原 workspace（`--no-relaunch` 则不重开）；量之前先确认没有投屏在跑。**绝不用 `hl.dsp.window.move`**：它作用于「当前焦点窗口」，实测会把用户正在用的终端/编辑器整窗口挪到别的工作区，正确做法是先 `hl.dsp.focus({ workspace = N })` 切到空工作区、再启动应用让它落在那儿 |
 | `rust-check.sh` | 在 `src-tauri/` 下**创建桩文件与目录** | `stub()` 遇已存在的路径直接跳过（打印「已存在，跳过」）；`trap cleanup EXIT` 逆序回收，先删文件再 `rmdir -p` 空目录，绝不动仓库里原有的东西 |
 | `build-rule-packs.py`（无 `--check`） | **写 `rule-packs/dist/*.zip` 与 `rule-packs/index.json`** | `--check` 是只读模式；`--clean` 才删文件，且只删「源目录已不存在」的孤儿 zip |
 | Windows `.cmd` 全家 | 在 .68 上**创建计划任务**、写 `D:\Temp\*`、起真实屏幕捕获 | 每个脚本头部都写了收尾命令（`schtasks /delete /tn <TASK> /f` + `rmdir /s /q <dir>`）；`gen-win-screencast-live-req.py` 里的 ffmpeg 路径与输出目录都是 .68 专属硬编码 |
@@ -156,6 +158,7 @@ ssh administrator@192.168.1.68 "schtasks /delete /tn <TASK> /f"      # 收尾
 - `verify-ssdp-offline-eviction.py` — 默认读打包版日志。
 - `probe-installed-ja3.py` — 跑的是 `.app` 里的冻结 sidecar（`DEFAULT_BIN`，`:47`）。它存在的理由就是源码级探针测不到这一层：`probe-tls-ja3.py --client hancast` 走 `sys.path` 里的源码，只能证明接线对，v2.3.7 恰恰是接线对、白名单漏包。
 - `verify-windows-artifact.sh` — 读的是 .68 安装目录里那份 `.py` 与二进制，与 `git show v<tag>` 逐文件比哈希；本地工作树跟它无关。
+- `verify-linux-window-opacity.sh` — 默认打的是**装好的** `/usr/bin/HanCast`（`HC_BIN` 可指向解包产物），判据是合成器屏幕上的像素，跑 `npm run tauri dev` 等于没跑——透明窗口那套只在 bundle 里才成立。
 - `verify-ffmpeg-detect.ps1` — 打的是 `%LOCALAPPDATA%\HanCast\hancast-sidecar.exe`（Nuitka 冻结产物）。源码级那三层判定由 `tests/test_ffmpeg_deps.py` / `test_ffmpeg_download_e2e.py` 管，这个脚本存在的理由正是「产物里 `bundle.resources` 到底有没有把 ffmpeg 带进去、装好的 sidecar 在真机上认不认得到系统那份」——跑源码等于没跑。
 
 反过来，这些是**源码级**的，不需要产物：`verify-dlna-volume-chain.py`、`verify-dshow-parse-offline.py`、`verify-sidecar-utf8-protocol.py`、`verify-params-ui.mjs`、`verify-error-wrap-ui.mjs`、`verify-watch-page-sound.mjs`（真实 Chromium 但页面是源码 `www/index.html`——产物层由 `accept-macos-artifact.sh` 的逐文件 sha256 兜）、`ssdp_probe.py`、`dump-cgwindowlist.py`、`rust-check.sh`、`build-rule-packs.py`。另有一类**联网但仍跑工作树代码**的：`share_resolve_probe.py`、`probe-hls-antileech.py`、`probe-ts-skin-offset.py`、`probe-dyrs-*.sh`、`verify-proxy-live.py`、`verify-rule-pack-live.py`、`verify-github-mirror-live.py`——后两个读的是 `rule-packs/dist/` 那份 zip 与真实解析管线，但都不碰 `/Applications/HanCast.app`，所以不能当产物验收用。

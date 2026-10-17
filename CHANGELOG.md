@@ -1,6 +1,6 @@
 # Changelog
 
-> 最后校对：2026-10-17，对应版本 v2.3.17（`package.json:4`）
+> 最后校对：2026-10-17，对应版本 v2.3.18（`package.json:4`）
 
 本文件记录 HanCast 的版本历史。口径说明：
 
@@ -8,6 +8,22 @@
 - 版本号唯一来源是 **`package.json` 的 `version`**（`scripts/sync-version.cjs:4,17`），`npm run version:set <x.y.z>` 把它刷进 7 处契约点：`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`（本地包那条，v2.3.8 起收进来——此前每版都靠人肉补）、`hancast-backend/pyproject.toml`、`hancast_sidecar/utils/config.py:39`、`src/api/commands.ts`（mock）、`src/stores/settings.ts`。`scripts/check-version.cjs` 自称以 `tauri.conf.json` 为源（口径相反），但全仓无人调用，是未接线的孤儿脚本——判定以 `sync-version.cjs` 为准。详见 [docs/构建与发布.md](docs/构建与发布.md) §1。
 - 下表「提交」列即 `git tag <版本>` 指向的提交；细节以 `git show <提交>` 为准，本文只留用户可感知的变化。
 - 新加版本时**同一次提交**里补这里，并按 [docs/README.md](docs/README.md) §4 的约定同步对应文档。
+
+---
+
+## v2.3.18 — 2026-10-17（本轮发布提交）
+
+Linux 装端第二轮，只治一件事：**v2.3.17 让窗口活下来了，但界面会「漏桌面」**。用户可感知面：Wayland（Hyprland）下鼠标在界面上划过之后不再出现透明洞，整窗内容始终不透明；Windows / macOS 的毛玻璃观感与行为不变。
+
+- **症状与量化判据**：窗口正常映射、能点能拖，但光标经过的条带变成透明，露出后面的桌面（Hyprland 还带模糊）。判据不靠眼睛——`grim` 抓窗口矩形 → 杀进程 → 同矩形再抓一张裸桌面 → `ffmpeg -pix_fmt rgba` 转 raw → 逐行求平均绝对差。v2.3.17 装机版实测 800×694 的窗口扫一遍光标后 **353/694 行与裸桌面一致**（含 198–287、615–680 两条整带），四次复跑落在 **25%–51%**。
+- **根因是 v2.3.17 那条兜底的连带后果**：`WEBKIT_DISABLE_DMABUF_RENDERER=1` 让 WebKitGTK 从 dmabuf 退回**共享图像（SHM）路径**，透明（ARGB）窗口在这条路径上会漏提交 damage 矩形——没提交的那块 surface 保持 alpha=0，合成器直接把桌面透出来。上游 [tauri#14924](https://github.com/tauri-apps/tauri/issues/14924)（记录时仍 OPEN）是同一现象（"persistent ghost pixels from stale SHM buffer regions"）并写明「**The opaque settings window has no issues**」；同一台真机叠加 `WEBKIT_DISABLE_COMPOSITING_MODE=1` 无效，`GSK_RENDERER=cairo`/`gl`、`LIBGL_ALWAYS_SOFTWARE=1` 只治「启动即没」、不治漏提交。**结论：这条环境变量不能撤（撤了窗口起不来），那就只能让窗口不透明。**
+- **修法只动窗口属性**：`src-tauri/tauri.linux.conf.json` 补一份**完整**的 `app.windows[0]`（Tauri 平台合并是 RFC 7386，数组整体替换，只写 `{transparent:false}` 等于把 `minWidth`、`dragDropEnabled` 全丢掉），`transparent:false` + 不透明 `backgroundColor` `{22,20,50,255}`。取色理由：暗色主题 `--bg-primary` 是 `rgba(22,20,50,.95)`，取它的等色，所以暗色主题像素级不变；亮色主题下 95% 白叠它是 `(243,242,247)`，与纯白差 12/13/8 个 RGB 单位。`wry` 侧走 `webkitgtk/mod.rs` 的非透明分支 `webview.set_background_color(...)`，`tauri-runtime-wry` 把 config 的 `background_color` 透下去。**Rust、Vue、Sidecar 一行没改。**
+- **判据脚本入库**：这轮的一次性手搓探针封成 **`tools/verify-linux-window-opacity.sh`**（自动现读 `XDG_RUNTIME_DIR`/`WAYLAND_DISPLAY`/`HYPRLAND_INSTANCE_SIGNATURE`，按 `class` 从 `hyprctl clients -j` 取矩形，Lua 蛇形扫光标，grim 成对截图，逐行差分，最差一轮占比超 `--max-pct` 即 FAIL）。真机自跑 `--sweeps 2 --workspace auto` → 切到空 workspace 17、窗口 800×900、**两轮各 0/900 = 0%**、`PASS` 退出 0，结束把视图还回原工作区。两条现场纪律写进脚本与文档：**背景必须裸桌面**（同一 workspace 上有别的窗口压住矩形就 `exit 2`，不拿它当背景量出假 PASS）；**绝不用 `hl.dsp.window.move`**——它作用于「当前焦点窗口」，本轮取证时误把他正在用的 DSH 窗口挪到别的工作区，已切回原工作区把它搬回（平铺布局随窗口增删自行重排，无数据损失），正确做法是先 `hl.dsp.focus({workspace=N})` 切视图再启动。索引见 tools/README.md §1.1/§2.1/§2.2。
+- **顺带排除两个假因**（都留了证据，别照着改）：① 「界面完全显示不全」不是布局裁切——346×472 与 716×472 两种尺寸截图核对过首页，`.device-list__items` 自带 `overflow-y:auto`，设备列表可滚、`解析 / 准备` 可达；② 那条「毛玻璃」不是 CSS 的 `backdrop-filter`——`.media-input__overlay` 只在真拖拽时 `v-if` 存在，`:hover` 没有任何规则把卡片调透。
+- **真机装机验收（同一台 CachyOS + Hyprland 0.56.2 / webkit2gtk-4.1 2.54.1）**：`pacman -U` 从 `2.3.17-1` 升到 `2.3.18-1`，`-Qkk` → **115 全部文件 / 0 变化的文件**；同一条光标扫描探针**三次复跑都是 0/694 = 0%**（基线 353/694）；`hyprctl clients` → `class HanCast`、`mapped: 1`；日志里 `Error 71` / `断开的管道` / `Some(127)` 各 **0**，`Found sidecar: "/usr/lib/HanCast/hancast-sidecar"`、`SSDP sock_list count: 1`、抓到 `TCL 85T8G Max-21C9(192.168.1.13)` 与本机 Mac 实例、`Found system MPV: /usr/bin/mpv` → `MPV IPC connected OK`。截图核对整窗无一处露桌面。完整数字与取证方法见 [docs/构建与发布.md](docs/构建与发布.md) §6.7 的「v2.3.18 透明洞复测」。
+- **CI（run `39030775070`，push 分支 `feat/js-rule-plugins` 手动 dispatch）**：`Resolve version` / `windows-x64` / `macos-arm64` / `linux-x64` 四条全 `success`，`Upload to draft Release` 按设计 `skipped`（`make_release` 默认 false）。Arch 产物 `hancast-2.3.18-1-x86_64.pkg.tar.zst` **51,427,440 字节**（md5 `f012ac031f88bfcba9f9070dd3c5ddc3`），scp 到真机后 md5 一致。`Tauri bundle` 步骤能过本身就是证据——`build.rs` 会解析并合并 `tauri.linux.conf.json`，字段名写错这份配置就白改。
+- **文档同轮修订**：AGENTS.md（「窗口配置」表加 Linux 覆盖行 + RFC 7386 数组整体替换警告、Wayland 段加透明洞连带后果、最后校对 v2.3.18）；docs/故障排查.md（症状索引加一行 + 新增 **§8.4** + §10.6 加指向 §8.4 的警告 + `main.rs:21-28`→`main.rs:29-36` 重锚）；docs/构建与发布.md（§6.7 加 v2.3.18 复测表、`main.rs` 行号重锚）；docs/HanCast-Frontend-Spec.md（`transparent` 行标注 Linux 例外）；tools/README.md（新脚本登记进 §1.1 分类表 + §2.1 破坏性清单 + §2.2 产物层清单，计数 48→49 条目、`git ls-files tools/` 54→55、顶层脚本 49→50）；AGENTS.md（`tools/` 两处计数 49→50）。全仓 `python3 tools/audit-doc-refs.py`：引用写入后 **3173 处，可疑 0**（本轮落账前 3147）。
+- **本轮没做**：① 亮色主题只在真机做了**合成计算**，没做点击核对——`wtype` 这个版本没有鼠标能力（`-m` 是 modifier），`ydotool` 未装，不为一次配色去装输入注入工具；② 随包 mpv 的打包策略（Linux 去随包 / 换静态构建）仍等决策，v2.3.17 的运行时让位照旧生效；③ 往客厅电视真推一路流属打扰面，仍未做。
 
 ---
 
