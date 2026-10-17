@@ -2,7 +2,7 @@
 
 > 这个目录回答一个问题：**官方解析规则包的「源 / 产物 / 索引」三件套是怎么组织的、怎么打包发布、用户机器上怎么装到**。写规则包的 API 细节不在这里。
 >
-> 最后校对：2026-10-15，对应版本 v2.3.12（`package.json:4`）
+> 最后校对：2026-10-17，对应版本 v2.3.17（`package.json:4`）
 
 ---
 
@@ -256,7 +256,7 @@ python3 tools/build-rule-packs.py --clean    # 删掉 dist 里源目录已不存
 
 ### 4.3 zip 怎么随 draft Release 发布
 
-CI 的 `release` job（`.github/workflows/build.yml:553-609`）：
+CI 的 `release` job（`.github/workflows/build.yml:588-646`）：
 
 | 步骤 | 行号 | 做什么 |
 | --- | --- | --- |
@@ -267,7 +267,7 @@ CI 的 `release` job（`.github/workflows/build.yml:553-609`）：
 | `Download all build artifacts` | `:580-588` | `pattern: bundle-*` + `merge-multiple: true`，只取每平台「全格式合一」的那份，避免同一安装包被上传两次 |
 | `Publish draft release` | `:595-609` | `softprops/action-gh-release@v2`，`draft: true`，`files:` 九个 glob，最后一个是 **`artifacts/rule-packs/*.zip`**（`:609`） |
 
-**为什么值得为 zip 单独加这两步**（`build.yml:562-565` 注释原文大意 + 提交 `356f6eb`「ci(release): 官方规则包 zip 随 draft Release 发布」）：规则包 zip 是被「设置页 → 检查规则包更新 → 安装」下载的，索引里的 sha256 必须和实际下载到的字节逐位一致；而 zip 是固定时间戳/固定顺序生成的，所以从 tag 工作区直接上传的字节和重跑 `build-rule-packs.py` 的字节相同——**不需要另建一条产线**。
+**为什么值得为 zip 单独加这两步**（`build.yml:604-607` 注释原文大意 + 提交 `356f6eb`「ci(release): 官方规则包 zip 随 draft Release 发布」）：规则包 zip 是被「设置页 → 检查规则包更新 → 安装」下载的，索引里的 sha256 必须和实际下载到的字节逐位一致；而 zip 是固定时间戳/固定顺序生成的，所以从 tag 工作区直接上传的字节和重跑 `build-rule-packs.py` 的字节相同——**不需要另建一条产线**。
 
 ### 4.4 索引 URL 为什么指向 `main` 分支的 raw 路径
 

@@ -54,12 +54,21 @@ dist/
 *.spec
 src-tauri/*.dll
 src-tauri/*.pyd
+# flatten_dependencies() 提升出来的动态库（macOS 是 .dylib/.so，Linux 是 .so 与
+# libpython3.12.so.1.0 这种带版本后缀的 .so.*）——v2.3.17 起 Linux 连 sidecar exe 一起
+# 提升到这一层，根目录产物比原来多，不忽略的话 `git status` 会被构建产物淹没
+src-tauri/*.so
+src-tauri/*.so.*
+src-tauri/*.dylib
 src-tauri/hancast_sidecar/
 src-tauri/certifi/
 src-tauri/lxml/
 src-tauri/charset_normalizer/
+src-tauri/curl_cffi/
 src-tauri/dist-portable/
-src-tauri/hancast-sidecar/
+# 不带尾斜杠：Windows/macOS 上它是 Nuitka dist 目录，Linux 上是提升出来的 sidecar 可执行文件
+# （Linux 的 dist 挪到 src-tauri/target/sidecar-dist/，已被上面的 src-tauri/target/ 覆盖）
+src-tauri/hancast-sidecar
 
 # ── 日志 ──
 *.log

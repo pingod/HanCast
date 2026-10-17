@@ -46,12 +46,21 @@ class MpvManager:
             logger.warning(f"Configured MPV path no longer valid: {mpv_cfg['path']}")
 
         # 2. 程序目录 mpv/
+        # 随包 mpv 是 CI 的 Ubuntu runner 上那份构建，Arch/CachyOS 这类滚动发行版的
+        # ffmpeg soname 对不上（实测 /usr/lib/HanCast/mpv/mpv 的 ldd 报
+        # libavcodec.so.60 => not found 等 10 条），文件在但跑不起来。
+        # 以前这一层不验就直接 READY 并写进配置，于是系统里装了能用的 mpv
+        # 也永远走不到第 3 步——接收端播放全废，而且日志只说 MPV status 是就绪的。
         local = self._find_in_program_dir()
         if local:
-            logger.info(f"[MPV Manager] Found bundled MPV: {local}")
-            info = MpvInfo(status=MpvStatus.READY, path=local, source="bundled")
-            self._save_to_config(info)
-            return info
+            if self._validate_mpv(local):
+                logger.info(f"[MPV Manager] Found bundled MPV: {local}")
+                info = MpvInfo(status=MpvStatus.READY, path=local, source="bundled")
+                self._save_to_config(info)
+                return info
+            logger.warning(
+                f"[MPV Manager] Bundled MPV exists but cannot run, fall back to system: {local}"
+            )
 
         # 3. 系统 PATH
         system = self._find_in_path()

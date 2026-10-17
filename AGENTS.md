@@ -3,7 +3,7 @@
 > 旧名 `CLAUDE.md`（Claude Code 私有约定），2026-10-15 改名为跨工具的 `AGENTS.md`；
 > `CLAUDE.md` 现在只留三行指针指向本文件。
 
-> 最后校对：2026-10-16，对应版本 v2.3.16（`package.json:4`）。
+> 最后校对：2026-10-17，对应版本 v2.3.17（`package.json:4`）。
 > 本文件是速览与硬约束；逐模块的深度内容在 **docs/README.md** 的索引里，别在这里找细节。
 
 ## 项目概述
@@ -12,7 +12,7 @@
 
 - **项目名**: HanCast
 - **作者**: lanzeweie@foxmail.com
-- **版本**: 2.3.15（版本 SSOT 是 `package.json` 的 `version`，`scripts/sync-version.cjs:4`；改版本只走 `npm run version:set`，见「版本管理」）
+- **版本**: 2.3.17（版本 SSOT 是 `package.json` 的 `version`，`scripts/sync-version.cjs:4`；改版本只走 `npm run version:set`，见「版本管理」）
 - **性质**: 二次开发（非原项目官方更新）
 - **原始代码**: [xfangfang/Macast](https://github.com/xfangfang/Macast)（原作者 xfangfang，最后更新 2022-01）。仓库里**不含** `Macast-main/`、`Macast-plugins-main/` 这些本地目录，1.x 源码只作为移植参考，见「原始代码复用情况」
 - **目标架构**: Tauri 2.0 前端 + Rust 桥接 + Python Sidecar（+ MPV 接收端播放、FFmpeg 屏幕抓取）
@@ -30,7 +30,7 @@
 | 桥接层 | Rust (Tauri Core) | — |
 | 后端服务 | Python Sidecar（Nuitka standalone 编译） | >= 3.11 |
 | 协议支持 | DLNA/UPnP/SSDP | — |
-| 媒体播放 | MPV（捆绑外部依赖，接收端播放） | CI 固定 v0.41.0 |
+| 媒体播放 | MPV（捆绑外部依赖，接收端播放；随包那份跑不起来时自动让位系统 mpv，v2.3.17） | CI 固定 v0.41.0 |
 | 屏幕抓取 | FFmpeg（HLS 切片）+ 原生 helper | **不随包**；运行时检测本机已装，缺失按需下载（`ffmpeg_deps.py`） |
 | 解析沙箱 | QuickJS（`quickjs` python 包，规则包 JS 执行） | >= 1.19.4 |
 | HTTP 指纹 | curl_cffi（JA3 伪装）+ aiohttp（HLS 供流） | — |
@@ -272,7 +272,7 @@ Rust 命令名与 Sidecar `cmd` 名不一定同名（例如 Rust 的 `plugin_lis
 | SSDP Service | 1900 | UDP 多播，设备发现（NOTIFY + M-SEARCH）；组播被系统阻断时回退子网广播（`ssdp.py:32,416,556-557`），NOTIFY 周期 30s 对齐 `CACHE-CONTROL: max-age=66`（`ssdp.py:6`）。**发现不扫描端口**，且描述必须声明 `AVTransport` 服务才登记（`ssdp.py:1074`、`ssdp.py:1169-1175`，v2.3.13），路由器/NAS 不进列表，判据 `tools/verify-ssdp-cast-gate.py` |
 | Media Server | 0 = 自动选择 | 本地文件 HTTP 服务（Range + 边下边播代理），`config.media_port` 默认 0（`utils/config.py:112-114`、`commands.py:221`） |
 | Screencast HTTP | 默认 8765 | 观看页 + HLS 供流（`screencast/httpd.py:32,84`），观看链接带每会话新生成的短随机段 `/r/<session_id>` |
-| MPV Renderer | IPC | 通过 named pipe (Windows) / unix socket (Linux/macOS) 控制 MPV |
+| MPV Renderer | IPC | 通过 named pipe (Windows) / unix socket (Linux/macOS) 控制 MPV。定位顺序：手动指定 → 随包 → 系统 PATH（`utils/mpv_manager.py:31-67`）；**随包候选必须先真跑一次 `--version`**，跑不起来就让位系统 mpv——随包那份是 Ubuntu runner 的构建，Arch/CachyOS 上 `libavcodec.so.60` 等 10 条 soname 缺失（v2.3.17，判据见 docs/故障排查.md §10.7） |
 | FFmpeg | 子进程 | 屏幕抓取切片成 HLS，由 `screencast/ffmpeg_manager.py` 拼装命令；**不随包**，可执行文件由 `utils/ffmpeg_deps.py` 在运行时定位（手动路径 → 本机 PATH/常见安装目录 → 本程序下载的 `<配置目录>/bin/`） |
 
 **这些 HTTP 服务一律绑 `0.0.0.0`，不是回环**——电视要取描述文件与媒体流、浏览器观看页要拉 HLS，
@@ -373,9 +373,11 @@ npm run tauri build            # 或 npx tauri build --bundles <targets>
 #   1. node scripts/sync-version.cjs   （beforeBuildCommand，版本 SSOT 刷进各清单）
 #   2. npm run build                   （vue-tsc 类型检查 + vite build → dist/）
 #   3. node scripts/sync-sidecar.cjs   （把 hancast_sidecar/ 源码同步进 src-tauri/）
-#   4. npm run build:sidecar           （Nuitka standalone → src-tauri/hancast-sidecar/，
-#                                       再由 flatten_dependencies() 把 *.dll/*.pyd/*.so 提升到 src-tauri/ 根）
-#   5. node scripts/check-resources.cjs（Preflight：逐个 glob 验命中）
+#   4. npm run build:sidecar           （Nuitka standalone → 依赖由 flatten_dependencies()
+#                                       提升到 src-tauri/ 根；Linux 连 sidecar exe 一起提升）
+#   5. node scripts/check-resources.cjs（Preflight：逐个 glob 验命中；
+#      Linux 还额外验 sidecar 的装端布局——exe 是文件、带执行位、由 resources 承载且
+#      externalBin 为空，见 check-resources.cjs:179）
 #   6. tauri bundle
 #   7. node scripts/build-arch-pkg.cjs（仅 Linux：把刚产出的 .deb 转成 Arch 的
 #      .pkg.tar.zst，进 archlinux 容器用 makepkg 打包并同一次调用里 pacman 实装验收；
@@ -390,7 +392,7 @@ npm run tauri build            # 或 npx tauri build --bundles <targets>
 1. `src-tauri/mpv/` 里要有 mpv 可执行文件；仓库根 `mpv/` 被 gitignore，只有 `portable_config/` 入库，
    CI 会先把已提交的 `mpv/portable_config/` 补进 `src-tauri/mpv/portable_config/`（`build.yml:156-160`）。
 2. macOS 只有 `mpv.app/` 是有效载荷：`mpv/*` 这种非递归 glob 能看见目录却不会递归，
-   历史上因此打出过不含 mpv 的 app，`scripts/check-resources.cjs:12-21` 专门记录了这一坑。
+   历史上因此打出过不含 mpv 的 app，`scripts/check-resources.cjs:11-23` 专门记录了这一坑。
 
 > **FFmpeg 不在准备清单里**：v2.3.11 起不再捆绑，`bundle.resources` 的 `ffmpeg/*` 与 CI 的
 > 「Download & unpack FFmpeg」步骤（曾从 `eugeneware/ffmpeg-static` 的 `b6.1.1` 取静态单文件）
@@ -416,6 +418,13 @@ npm run tauri build            # 或 npx tauri build --bundles <targets>
   为此 CI 把 `beforeBuildCommand` 拆成了独立步骤（frontend → sync-sidecar →
   Nuitka sidecar → Preflight → tauri bundle），所以 base 配置的
   `beforeBuildCommand` 已简化为只做版本同步。
+- **Linux 装端冒烟**（v2.3.17 补，`build.yml:255-296`）：`tauri build` 之后把 deb `dpkg-deb -x`
+  解出来，断言 `/usr/bin/hancast-sidecar` **不存在**、`/usr/lib/HanCast/hancast-sidecar` 可执行、
+  `libpython3.12.so.1.0` 同级，然后**真喂一条 `get_settings` 给解包出来的 sidecar**，
+  要求回 `"success": true` 且 stderr 没有 `error while loading shared libraries` / `ImportError`。
+  这条存在的理由是 v2.3.16 的教训：CI 只验「文件在不在」，四条检查全绿，装到 CachyOS 上却是
+  `exit 127` 的秒崩——存在性证明不了运行时依赖解析。Arch 侧同一套断言在
+  `scripts/build-arch-pkg.cjs` 的容器里用 `pacman -U` 真装完再跑一遍。
 - **Release**：仅在 `build` 成功、**ref 是 tag**、且（tag 推送 或 `make_release=true`）
   时创建 draft release。`make_release` 输入默认 **false**——在 `main` 上手动
   dispatch 只构建、不发布（曾用 `refs/heads/main` 当 tag 发 release，被 API 400 拒掉）。
@@ -437,7 +446,8 @@ npm run tauri build            # 或 npx tauri build --bundles <targets>
 运行目录/
 ├── HanCast.exe                         # 主程序（Tauri + Rust）
 ├── hancast-sidecar.exe                 # Python 后端（DLNA/SSDP/媒体解析）
-│                                        # Nuitka standalone 单体二进制，依赖已并入
+│                                        # Nuitka standalone：纯 Python 依赖已并入二进制，
+│                                        # 但扩展模块/数据文件仍是同级（*.pyd / *.so / certifi/ …）
 ├── *.dll / *.pyd / *.so                # Python 扩展模块（平台相关，见平台配置）
 │
 ├── hancast_sidecar/xml/                # UPnP 描述文件（DLNA 必需）
@@ -458,9 +468,15 @@ npm run tauri build            # 或 npx tauri build --bundles <targets>
         └── watch_later/                 # 播放进度记忆
 ```
 
-> ⚠️ `certifi/`、`lxml/`、`charset_normalizer/` 这三个独立目录已**不在**运行目录中——
-> 那是早期 PyInstaller onedir 的遗留布局，本项目改用 Nuitka 后依赖已静态并入 sidecar 可执行文件。
-> 详见下一节。
+> ⚠️ 上面这份树描述的是 Windows/macOS 的运行目录。Linux 没有「绿色版」，deb/rpm/AppImage 把同一份
+> 内容按 FHS 摊开：可执行文件在 `/usr/bin/HanCast`，上面树里其余部分整体落在 `/usr/lib/HanCast/`
+> （`/usr/lib/HanCast/hancast-sidecar`、`/usr/lib/HanCast/mpv/mpv`、`/usr/lib/HanCast/hancast_sidecar/xml/`…）。
+> **sidecar 可执行文件必须和它的依赖在同一层**（`build_sidecar.py:53-136`），Nuitka 的运行时查找路径
+> 是 exe 自身目录派生的，拆层等于 `exit 127`——v2.3.16 的 Linux 崩溃就是这么来的。
+
+> `certifi/`、`lxml/`、`charset_normalizer/`、`curl_cffi/` 这几个顶层目录**确实在运行目录里**：
+> Nuitka standalone 会把含数据文件或扩展模块的包保留成顶层目录，早期文档写成「已静态并入、目录不存在」
+> 是错的，代价见下文「历史遗留 → 已被 v2.3.7 产物证伪」。
 
 **核心组件**：
 - `HanCast.exe`：Tauri 前端 + Rust 桥接层
@@ -483,19 +499,20 @@ glob pattern <pattern> path not found or didn't match any files.
 
 而且它在第一个失败的 glob 处就中断，后续 glob 根本不会被校验，排查成本很高。
 
-**平台相关清单放不进 base 文件**，因此拆成：
+**平台相关清单放不进 base 文件**，因此拆成（`externalBin` 只在 base 里写
+`["hancast-sidecar/hancast-sidecar"]`，Windows/macOS 继承它，Linux 用 `[]` 覆盖掉——见下文「依赖提升流程」）：
 
-| 文件 | 内容 |
+| 文件 | `bundle.resources`（完整数组） |
 |------|------|
-| `src-tauri/tauri.conf.json` | 仅平台无关子集：`mpv/*`、`mpv/portable_config/**/*`、`hancast_sidecar/**/*` |
-| `src-tauri/tauri.windows.conf.json` | `mpv/*`、`mpv/portable_config/**/*`、`*.dll`、`*.pyd`、`hancast_sidecar/**/*` |
-| `src-tauri/tauri.macos.conf.json` | `mpv/mpv.app/**/*`、`mpv/portable_config/**/*`、`*.so`、`hancast_sidecar/**/*` |
-| `src-tauri/tauri.linux.conf.json` | `mpv/*`、`mpv/portable_config/**/*`、`*.so`、`hancast_sidecar/**/*` |
+| `src-tauri/tauri.conf.json` | `mpv/*`、`mpv/portable_config/**/*`、`hancast_sidecar/**/*` |
+| `src-tauri/tauri.windows.conf.json` | `mpv/*`、`mpv/portable_config/**/*`、`*.dll`、`*.pyd`、`hancast_sidecar/**/*`、`certifi/**/*`、`lxml/**/*`、`charset_normalizer/**/*`、`curl_cffi/**/*` |
+| `src-tauri/tauri.macos.conf.json` | `mpv/mpv.app/**/*`、`mpv/portable_config/**/*`、`*.so`、`*.dylib`、`hancast_sidecar/**/*`、`certifi/**/*`、`lxml/**/*`、`charset_normalizer/**/*`、`curl_cffi/**/*` |
+| `src-tauri/tauri.linux.conf.json` | `hancast-sidecar`、`mpv/*`、`mpv/portable_config/**/*`、`*.so`、`*.so.*`、`hancast_sidecar/**/*`、`certifi/**/*`、`lxml/**/*`、`charset_normalizer/**/*`、`curl_cffi/**/*` |
 
 ⚠️ **Tauri 的平台配置合并用 `json_patch::merge`（RFC 7386 JSON Merge Patch），数组是整体替换而非逐元素合并。**
 所以每个平台文件必须写出**完整**的 `bundle.resources` 数组，不能只写增量。
 
-**glob 不递归，且命中的目录会被静默丢弃**（上游 crate tauri-utils 里的 resources.rs，不在本仓；行为已在 `scripts/check-resources.cjs:12-21` 的注释里复现说明）：
+**glob 不递归，且命中的目录会被静默丢弃**（上游 crate tauri-utils 里的 resources.rs，不在本仓；行为已在 `scripts/check-resources.cjs:11-23` 的注释里复现说明）：
 
 - `glob::glob("mpv/*")` 只列 `mpv/` 的**直接子项**，即使 `require_literal_separator=false`，
   `*` 也不跨目录层级；要递归必须显式写 `**`。
@@ -511,10 +528,21 @@ app 打出来没有 mpv，反倒把 44 MB 的 `mpv.tar.gz` 打进 bundle。
 **动态库 glob 必须是顶层**（`*.so` 而非 `**/*.so`）：
 `**/*.so` 会把 `src-tauri/target/` 下的整个 Rust 构建产物打进安装包。
 
-**依赖提升流程**：`build_sidecar.py` 的 `flatten_dependencies()` 把 Nuitka dist
-（`src-tauri/hancast-sidecar/`）里除可执行文件外的依赖，合并复制到 `src-tauri/` 根部，
-这样它们才能被上面的 `*.dll` / `*.pyd` / `*.so` glob 捕获。
-可执行文件本身留在 `hancast-sidecar/` 里供 `externalBin` 使用，不做重复。
+**依赖提升流程**：`build_sidecar.py` 的 `flatten_dependencies()`（`build_sidecar.py:53`）把 Nuitka dist
+里除可执行文件外的依赖，合并复制到 `src-tauri/` 根部，这样它们才能被上面的 `*.dll` / `*.pyd` / `*.so` glob 捕获。
+Windows/macOS 上可执行文件留在 `hancast-sidecar/` 目录里供 `externalBin` 使用，不做重复。
+
+⚠️ **Linux 是三平台里唯一连可执行文件一起提升的**（`copy_executable=True`，`build_sidecar.py:122`、判定在 `:296`）：
+Nuitka standalone 的运行时依赖是**相对可执行文件自身目录**解析的——`libpython3.12.so.1.0` 走 `DT_NEEDED` + `$ORIGIN`，
+`lxml/etree.so` 这类扩展模块走 exe 同级派生的绝对路径（不是 soname 查表，所以 `LD_LIBRARY_PATH`／RPATH 都救不回来）。
+而 Tauri 的 Linux 打包会把 `externalBin` 放 `/usr/bin`、`bundle.resources` 放 `/usr/lib/HanCast`，两者被拆开，
+装完就是 `exit 127`——v2.3.16 在 CachyOS/Hyprland 上「一启动就崩」的第一条真因。
+所以 Linux 侧 dist 落在 `src-tauri/target/sidecar-dist/`（`:298`，本就是 gitignore 的暂存位置，
+腾出根目录名给 exe——同名文件与目录不能共存），exe 平铺成 `src-tauri/hancast-sidecar`，
+由 `tauri.linux.conf.json` 的 `resources: ["hancast-sidecar", ...]` 带进 `/usr/lib/HanCast/`，
+`externalBin` 因此置空（留一条就会把缺依赖的半份产物重新装回 `/usr/bin`）。
+Rust 侧无需改动：`sidecar.rs` 的 `find_sidecar_binary` 按前缀匹配 + 执行位校验 + resource_dir 优先，
+本来就吃得下这个布局。
 
 **历史遗留 → 已被 v2.3.7 产物证伪**：`certifi/**/*`、`lxml/**/*`、`charset_normalizer/**/*`
 曾被认为是 **PyInstaller onedir** 的残留、「Nuitka 产出目录里没有这些独立目录」，
@@ -632,7 +660,16 @@ docs/构建与发布.md §6 与各专题文档，不要凭脚本退出码 0 就�
 |------|------|----------|
 | Windows 10/11 | WebView2 (Chromium) | 支持大部分现代 CSS/JS |
 | macOS | WebKit (Safari) | 限制较多，避免最新特性 |
-| Linux | WebKitGTK | 功能最少，需严格测试 |
+| Linux | WebKitGTK | 功能最少，需严格测试；**Wayland 下需要 dmabuf 兜底**（见下） |
+
+⚠️ **Linux + Wayland**：WebKitGTK 2.4x 起用 `wp_linux_drm_syncobj_*` 给 webview 表面做显式同步，
+而 Hyprland 要求 commit 前必须绑定 acquire timeline，没绑就判客户端违约并踢掉连接，
+表现为 `wl_display.error(..., 4, "Missing acquire timeline")` → `Gdk-Message: Error 71 (协议错误)` →
+进程被杀，用户只看到「点图标闪都没闪」。2026-10-17 在 CachyOS（webkit2gtk-4.1 2.54.1 / hyprland 0.56.2）
+实测 `GSK_RENDERER=cairo`、`GSK_RENDERER=gl`、`LIBGL_ALWAYS_SOFTWARE=1` 全部照崩，
+只有关掉 dmabuf 渲染器能稳。因此 `src-tauri/src/main.rs:21-28` 在 `main()` 最前面补
+`WEBKIT_DISABLE_DMABUF_RENDERER=1`：仅在存在 `WAYLAND_DISPLAY` 且用户自己没设该变量时才设，
+X11 会话不动。**这类环境兜底必须放在 GTK/WebKit 初始化之前**，放 `lib.rs` 的 `run()` 里就晚了。
 
 **CSS 兼容规则**:
 - 使用标准 Flexbox/Grid 布局

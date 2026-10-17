@@ -252,6 +252,49 @@ jobs:
       - name: Tauri bundle
         run: npx tauri build --bundles ${{ matrix.bundles }}
 
+      # Linux 的布局判据 + 真跑一次 sidecar（v2.3.17 补）。
+      # 为什么必须解包验而不是看 src-tauri/：Nuitka standalone 只从【可执行文件所在目录】
+      # 解析依赖（libpython3.12.so.1.0 是 DT_NEEDED + RPATH `$ORIGIN/...`，lxml/etree.so
+      # 是 Python 层按 exe 同级拼出来的绝对路径），而 tauri 的 Linux bundler 把 externalBin
+      # 装到 /usr/bin、resources 装到 /usr/lib/HanCast —— v2.3.16 就是因此打出了一个
+      # 「装得上、双击即崩」的包（sidecar 退出码 127），当时 CI 四条装端检查全绿。
+      # 现在 exe 随 resources 一起进 /usr/lib/HanCast，tauri.linux.conf.json 的
+      # externalBin 置空；rpm / AppImage 用同一份 resources，布局相同，解 deb 验一次即可。
+      - name: "Smoke test: sidecar inside deb (Linux)"
+        if: matrix.runner-os == 'Linux'
+        shell: bash
+        run: |
+          set -e
+          DEB="$(find src-tauri/target/release/bundle/deb -maxdepth 2 -name '*.deb' | head -1)"
+          [ -n "$DEB" ] || { echo "::error::no .deb found under bundle/deb"; exit 1; }
+          X="$(mktemp -d)"
+          dpkg-deb -x "$DEB" "$X"
+
+          if [ -e "$X/usr/bin/hancast-sidecar" ]; then
+            echo "::error::/usr/bin/hancast-sidecar 又出现了 —— 与依赖拆开的 sidecar 启动即 127"
+            exit 1
+          fi
+          test -x "$X/usr/lib/HanCast/hancast-sidecar" \
+            || { echo "::error::资源目录里没有可执行的 hancast-sidecar"; exit 1; }
+          test -f "$X/usr/lib/HanCast/libpython3.12.so.1.0" \
+            || { echo "::error::libpython3.12.so.1.0 没进包"; exit 1; }
+          echo "=== /usr/lib/HanCast ==="
+          ls "$X/usr/lib/HanCast" | head -12
+
+          echo "=== 喂一条真命令，断言拿到应答 ==="
+          printf '{"id":1,"cmd":"get_settings","params":{}}\n' \
+            | (cd "$X/usr/lib/HanCast" && timeout 90 ./hancast-sidecar) > /tmp/sc-out.json 2>/tmp/sc-err.log || true
+          tail -2 /tmp/sc-out.json
+          grep -q '"success": true' /tmp/sc-out.json \
+            || { echo "::error::sidecar 没有正常应答"; tail -20 /tmp/sc-err.log; exit 1; }
+          if grep -qE 'error while loading shared libraries|ImportError|ModuleNotFoundError' /tmp/sc-err.log; then
+            echo "::error::sidecar 依赖解析失败"
+            grep -E 'error while loading|ImportError|ModuleNotFoundError' /tmp/sc-err.log | head -5
+            exit 1
+          fi
+          rm -rf "$X"
+          echo "deb sidecar OK"
+
       # macOS 的 .app 里，Tauri 把两类东西放进了不同目录：
       #   externalBin → Contents/MacOS/hancast-sidecar
       #   resources   → Contents/Resources/{lxml,certifi,charset_normalizer,

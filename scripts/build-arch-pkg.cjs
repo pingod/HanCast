@@ -24,6 +24,11 @@
  *      是 Arch 包最常见的翻车方式，deb 的 `libwebkit2gtk-4.1-0` 直接抄过来在 Arch 不存在）。
  *   2. `pacman -U` 真装进容器，再 `pacman -Qkk` 校验 .MTREE 与实际文件一致、
  *      `pacman -Qo` 证明 /usr/bin/HanCast 归属本包。
+ *   3. 真的跑一遍 sidecar：stdin 喂 `get_settings`，断言拿到 `"success": true`。
+ *      这条是 v2.3.17 补的——v2.3.16 的装端验收只看「文件在不在」，全绿发布，
+ *      结果 CachyOS 用户双击即崩（exe 在 /usr/bin、依赖在 /usr/lib/HanCast，
+ *      Nuitka 按 exe 同级找 libpython3.12.so.1.0 落空，退出码 127）。
+ *      布局对不对只有「跑一次」才说得清，所以判据从存在性改成协议应答。
  *   这里会把依赖真装上：原打算加 --nodeps 跳过，实测 pacman 7.1 的 -U 不吃这一套
  *   （照样 resolve 并安装——CI run 38923996592 一次装进 124 个包，下载 164.36 MiB、
  *    装完 861.84 MiB，事务约 11 秒），既然跳不过就顺势当成证据——
@@ -247,15 +252,37 @@ if ! pacman -Qkk hancast; then
   echo "FATAL: pacman -Qkk reported problems"; exit 1
 fi
 pacman -Qo /usr/bin/HanCast
-test -x /usr/bin/hancast-sidecar && echo "  ok  /usr/bin/hancast-sidecar executable"
+test -x /usr/lib/HanCast/hancast-sidecar && echo "  ok  sidecar 与依赖同级（/usr/lib/HanCast）"
+test -f /usr/lib/HanCast/libpython3.12.so.1.0 && echo "  ok  libpython 在资源目录"
+# v2.3.16 的崩溃布局：exe 被 externalBin 放到 /usr/bin，依赖留在 /usr/lib/HanCast，
+# Nuitka 按「exe 同级」找 libpython3.12.so.1.0 与 lxml/etree.so 全部落空 → 启动即 127。
+# 这条布局一旦回来必须在这里失败，而不是等用户双击图标。
+if [ -e /usr/bin/hancast-sidecar ]; then
+  echo "FATAL: /usr/bin/hancast-sidecar 又出现了 —— 与依赖拆开的 sidecar 必崩，见 check-resources.cjs"; exit 1
+fi
 test -f /usr/lib/HanCast/mpv/mpv && echo "  ok  bundled mpv present"
 test -f /usr/share/applications/HanCast.desktop && echo "  ok  desktop entry present"
 test -f /usr/share/licenses/hancast/COPYING && echo "  ok  license file present"
 
+# 光「文件在」是不够的——v2.3.16 装端四条全绿，实机仍然双击即崩。
+# 这里真的走一遍协议：喂一条命令，必须拿到 success 应答。
+# 判据选 get_settings 是因为它排在 ssdp→lxml 的 import 链之后，
+# 依赖解析（libpython / lxml/etree.so / _quickjs.so / curl_cffi）任何一环没落地都拿不到应答。
+echo "== sidecar 实跑：stdin 喂一条命令，断言拿到应答 =="
+if ! printf '{"id":1,"cmd":"get_settings","params":{}}\n' | (cd /usr/lib/HanCast && timeout 90 /usr/lib/HanCast/hancast-sidecar) > /tmp/sidecar-out.json 2>/tmp/sidecar-err.log; then
+  echo "FATAL: sidecar 退出异常（见下方 stderr）"
+fi
+grep -q '"success": true' /tmp/sidecar-out.json || { echo "FATAL: sidecar 没有正常应答"; head -25 /tmp/sidecar-err.log; exit 1; }
+if grep -qE 'error while loading shared libraries|ImportError|ModuleNotFoundError' /tmp/sidecar-err.log; then
+  echo "FATAL: sidecar 依赖解析失败"; grep -E 'error while loading|ImportError|ModuleNotFoundError' /tmp/sidecar-err.log | head -5; exit 1
+fi
+if grep -q '"event": "ready"' /tmp/sidecar-out.json; then echo "  ok  ready 事件已推送"; fi
+echo "  ok  sidecar 应答成功（依赖同级布局成立）"
+
 # makepkg 以非 root 运行，归档里的 uid/gid 是否被重映射成 0 必须实测：
 # 若写成 build(1000)，真装到用户机器上 /usr/bin/HanCast 就成了普通用户所有。
 echo "== recorded owners after install =="
-for f in /usr/bin/HanCast /usr/bin/hancast-sidecar /usr/lib/HanCast/mpv/mpv; do
+for f in /usr/bin/HanCast /usr/lib/HanCast/hancast-sidecar /usr/lib/HanCast/mpv/mpv; do
   owner="$(stat -c '%U:%G' "$f")"
   echo "  $f -> $owner"
   [ "$owner" = "root:root" ] || { echo "FATAL: $f owned by $owner, package must record uid/gid 0"; exit 1; }

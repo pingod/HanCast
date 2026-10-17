@@ -165,6 +165,55 @@ function checkBinaryPackages(resources) {
   return failed;
 }
 
+/**
+ * Linux 专属结构判据。为什么要有这一条：v2.3.16 的 Linux 构建在 CI 上是【全绿】的
+ * （所有 glob 都命中、pacman 也装上了），但装到 CachyOS 上双击就崩——
+ * 因为 tauri 的 Linux bundler 把 externalBin 装进 /usr/bin、resources 装进
+ * /usr/lib/HanCast，而 Nuitka standalone 只从「可执行文件所在目录」解析依赖：
+ *   error while loading shared libraries: libpython3.12.so.1.0
+ *   ImportError: /usr/bin/lxml/etree.so: cannot open shared object file
+ * sidecar 退出码 127。glob 命中数量看不出这种错，只能直接验布局。
+ * 修法见 build_sidecar.py 的 flatten_dependencies(copy_executable=True)
+ * 与 tauri.linux.conf.json（externalBin 置空 + resources 列出 hancast-sidecar）。
+ */
+function checkLinuxSidecarLayout(resources) {
+  if (PLATFORM !== 'linux') return 0;
+  let failed = 0;
+
+  const exe = path.join(TAURI_DIR, 'hancast-sidecar');
+  const st = statOf(exe);
+  if (!st) {
+    failed += 1;
+    console.error('  MISSING  hancast-sidecar  -> src-tauri/ 根没有 sidecar 可执行文件');
+    console.error('           先跑 npm run build:sidecar；Linux 上它会连 exe 一起提升');
+  } else if (!st.isFile()) {
+    failed += 1;
+    console.error('  MISSING  hancast-sidecar  -> 那是目录不是文件，bundle.resources 会丢掉它');
+    console.error('           Linux 的 Nuitka dist 应该落在 src-tauri/target/sidecar-dist/');
+  } else if (!(st.mode & 0o111)) {
+    failed += 1;
+    console.error(`  MISSING  hancast-sidecar  -> mode ${(st.mode & 0o777).toString(8)} 没有可执行位`);
+    console.error('           Rust 的 find_sidecar_binary 会跳过无 x 位的候选');
+  } else {
+    console.log(`  ok       hancast-sidecar  -> exe (${(st.size / 1048576).toFixed(1)} MiB, mode ${(st.mode & 0o777).toString(8)})`);
+  }
+
+  if (!resources.includes('hancast-sidecar')) {
+    failed += 1;
+    console.error('  MISSING  resources 没列出 hancast-sidecar  -> sidecar 进不了包');
+  }
+
+  const overlay = readJson(PLATFORM_FILE.linux);
+  const externalBin = overlay?.bundle?.externalBin;
+  if (!Array.isArray(externalBin) || externalBin.length !== 0) {
+    failed += 1;
+    console.error('  MISSING  tauri.linux.conf.json 的 bundle.externalBin 必须是空数组');
+    console.error('           非空就会在 /usr/bin 再放一份与依赖拆开的 sidecar（启动即 127）');
+  }
+
+  return failed;
+}
+
 function main() {
   const { resources, source } = resolveResources();
   console.log(`platform        : ${PLATFORM}`);
@@ -216,13 +265,17 @@ function main() {
 
   // 白名单之外还要管「二进制包目录有没有被列进白名单」——见 checkBinaryPackages 的注释
   const pkgFailed = checkBinaryPackages(resources);
+  // Linux 还要管「sidecar 与依赖是不是同级」——见 checkLinuxSidecarLayout 的注释
+  const layoutFailed = checkLinuxSidecarLayout(resources);
 
-  if (failed > 0 || pkgFailed > 0) {
+  if (failed > 0 || pkgFailed > 0 || layoutFailed > 0) {
+    const distDir =
+      PLATFORM === 'linux' ? path.join(TAURI_DIR, 'target', 'sidecar-dist') : path.join(TAURI_DIR, 'hancast-sidecar');
     console.error(
-      `\n${failed + pkgFailed} resource check(s) failed. tauri build WILL fail (or silently drop a dependency).`
+      `\n${failed + pkgFailed + layoutFailed} resource check(s) failed. tauri build WILL fail (or silently drop a dependency).`
     );
     dump('src-tauri/ top level:', fs.readdirSync(TAURI_DIR).sort());
-    dump('Nuitka dist (src-tauri/hancast-sidecar/):', isDir(path.join(TAURI_DIR, 'hancast-sidecar')) ? fs.readdirSync(path.join(TAURI_DIR, 'hancast-sidecar')).sort() : []);
+    dump(`Nuitka dist (${path.relative(path.resolve(__dirname, '..'), distDir)}/):`, isDir(distDir) ? fs.readdirSync(distDir).sort() : []);
     process.exit(1);
   }
 

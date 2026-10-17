@@ -50,7 +50,7 @@ def copy_icon(src_tauri_dir):
 
 
 
-def flatten_dependencies(src_tauri_dir, output_name):
+def flatten_dependencies(src_tauri_dir, output_name, dist_dir=None, copy_executable=False):
     """把 Nuitka 产出的运行时依赖从 hancast-sidecar/ 提升到 src-tauri/ 根目录。
 
     Tauri 的 externalBin 只把 sidecar 可执行文件搬到安装目录根部，而
@@ -65,15 +65,30 @@ def flatten_dependencies(src_tauri_dir, output_name):
     hancast_sidecar/utils/mpv_manager.py 中描述的安装目录结构一致：
 
         {install_dir}/
-        ├── hancast-sidecar(.exe)     ← 由 externalBin 提供
+        ├── hancast-sidecar(.exe)     ← Windows/macOS 由 externalBin 提供
         ├── HanCast(.exe)
         ├── mpv/
         ├── hancast_sidecar/         ← Python 数据文件 (xml/ 等)
         └── *.dll / *.pyd / *.so / *.dylib, certifi/, lxml/ ...
 
-    注意：sidecar 可执行文件本身不在此复制，避免与 externalBin 的产物重复。
+    Windows/macOS：sidecar 可执行文件不在此复制，避免与 externalBin 的产物重复
+    （macOS 那一侧的目录错位由 CI 的符号链接修补解决，见 build.yml）。
+
+    **Linux 必须连可执行文件一起复制（copy_executable=True）**，这是 v2.3.17 修的崩溃：
+    tauri 的 deb/rpm/AppImage 把 externalBin 放 `/usr/bin/hancast-sidecar`、resources 放
+    `/usr/lib/HanCast/`，而 Nuitka standalone 只从**可执行文件所在目录**解析运行期依赖——
+    `libpython3.12.so.1.0` 是 DT_NEEDED（RPATH 写的是 `$ORIGIN/...`），`lxml/etree.so` 这类
+    扩展模块是 Python 层按 exe 同级路径 dlopen 的。于是打包版在启动瞬间就死：
+        error while loading shared libraries: libpython3.12.so.1.0
+        ImportError: /usr/bin/lxml/etree.so: cannot open shared object file
+    sidecar 退出码 127，主程序随后退出（CachyOS + Hyprland 实测）。
+    LD_LIBRARY_PATH 救不了第二行——它不是 soname 查找，是拼出来的绝对路径。
+    所以 Linux 让 exe 落在资源目录根，与依赖、mpv/、hancast_sidecar/ 同级，
+    `/usr/bin/hancast-sidecar` 这一份【不再存在】（Linux 的 bundle.externalBin 置空）；
+    Rust 侧无需改动——find_sidecar_binary 先扫 resource_dir，且按 `hancast-sidecar`
+    前缀 + 可执行位命中。命令行要直接用绝对路径 /usr/lib/HanCast/hancast-sidecar。
     """
-    dist_dir = os.path.join(src_tauri_dir, "hancast-sidecar")
+    dist_dir = dist_dir or os.path.join(src_tauri_dir, "hancast-sidecar")
     if not os.path.isdir(dist_dir):
         print(f"Warning: {dist_dir} not found, skip flattening dependencies")
         return
@@ -103,6 +118,18 @@ def flatten_dependencies(src_tauri_dir, output_name):
             print(f"  flatten {kind}  {name}")
         except (shutil.Error, OSError) as exc:
             print(f"Warning: failed to flatten {name}: {exc}")
+
+    if copy_executable:
+        # Linux：exe 也要进 src-tauri/ 根（见函数文档）。落地名去掉 triple，
+        # 与 Windows/macOS 上 externalBin 在安装目录里的名字一致。
+        exe_src = os.path.join(dist_dir, f"{output_name}{ext}")
+        exe_dst = os.path.join(src_tauri_dir, "hancast-sidecar")
+        if not os.path.isfile(exe_src):
+            print(f"Warning: copy_executable requested but {exe_src} missing")
+        else:
+            shutil.copy2(exe_src, exe_dst)
+            os.chmod(exe_dst, 0o755)  # bundle.resources 要的是可执行位，显式补
+            print("  flatten exe   hancast-sidecar  (Linux: 与依赖同级，见函数文档)")
 
     if copied:
         print(f"Flattened {copied} dependency entries: {dist_dir} -> {src_tauri_dir}")
@@ -234,29 +261,47 @@ def fix_macos_dylib_paths(src_tauri_dir):
 
 def build(force=False):
     """
-    构建 Sidecar 到 src-tauri/hancast-sidecar/ 子目录
+    构建 Sidecar 到 src-tauri/ 下（Windows/macOS 是 hancast-sidecar/ 子目录，
+    Linux 见下方说明）
 
     Tauri 打包时会把 exe 和依赖分别复制到资源根目录。
 
-    输出结构:
+    输出结构（Windows / macOS）:
         src-tauri/hancast-sidecar/
         ├── hancast-sidecar-{triple}.exe   ← 入口（externalBin）
         ├── *.dll / *.pyd / *.so           ← Python 扩展模块等依赖
         └── hancast_sidecar/
             └── xml/                        ← 运行时数据（UPnP 描述文件）
 
+    Linux 不同：dist 落在 src-tauri/target/sidecar-dist/，且 exe 会被一并提升到
+    src-tauri/ 根（名字 `hancast-sidecar`，无 triple），由 bundle.resources 装进
+    /usr/lib/HanCast/ 与依赖同级；externalBin 在 tauri.linux.conf.json 里置空。
+    原因见 flatten_dependencies() 的文档。
+
     产物里没有任何解析规则：站点规则全部由用户在设置页安装规则包
     （repo 根 ``rule-packs/`` 是官方包的源码与索引来源）。
 
-    注意：Nuitka standalone 会把几乎所有依赖静态并入可执行文件，
-    产出目录里通常【没有】certifi/ lxml/ charset_normalizer/ 这类独立目录。
+    注意：Nuitka standalone 只把**纯 Python** 依赖静态并入可执行文件；含数据文件或
+    扩展模块的包会以**顶层目录**形态留在产出里（v2.3.7 的 macOS bundle 实测到
+    certifi/、lxml/、charset_normalizer/、curl_cffi/ 四个都在）。所以每加一个
+    --include-package，就要确认该包在产出里是不是目录形态，是的话三个平台 conf
+    各补一条 <pkg>/**/*，否则整目录被丢弃（curl_cffi 当年就是这么静默退回 requests 的）。
     具体产物以构建时 flatten_dependencies() 打印的清单为准。
     """
     current_dir = os.path.dirname(os.path.abspath(__file__))
     project_dir = os.path.dirname(current_dir)
     src_tauri_dir = os.path.join(os.path.dirname(project_dir), "src-tauri")
 
-    output_dir = os.path.join(src_tauri_dir, "hancast-sidecar")
+    # Linux 的产出目录挪到 src-tauri/target/sidecar-dist/：那里已经被 .gitignore 的
+    # src-tauri/target/ 覆盖，且腾出的 `src-tauri/hancast-sidecar` 这个名字要给
+    # **可执行文件本身**（文件系统里同名文件和目录不能共存），让 exe 与依赖同级。
+    # 详见 flatten_dependencies() 的文档——v2.3.16 的 Linux 包就是被这个布局拆散打崩的。
+    # Windows/macOS 维持原样（exe 由 externalBin 提供）。
+    on_linux = sys.platform.startswith("linux")
+    if on_linux:
+        output_dir = os.path.join(src_tauri_dir, "target", "sidecar-dist")
+    else:
+        output_dir = os.path.join(src_tauri_dir, "hancast-sidecar")
     target_triple = get_target_triple()
 
     output_name = f"hancast-sidecar-{target_triple}"
@@ -276,7 +321,8 @@ def build(force=False):
         print(f"Sidecar already exists: {output_dir} ({size_mb:.1f} MB)")
         print("Use --force to rebuild")
         # 依赖仍需提升到 src-tauri/ 根目录（可能被手工清理过）
-        flatten_dependencies(src_tauri_dir, output_name)
+        flatten_dependencies(src_tauri_dir, output_name, dist_dir=output_dir,
+                             copy_executable=on_linux)
         return
 
     # 清理旧的构建产物
@@ -385,7 +431,8 @@ def build(force=False):
     copy_icon(src_tauri_dir)
 
     # 将运行时依赖提升到 src-tauri/ 根目录，供 bundle.resources 打包
-    flatten_dependencies(src_tauri_dir, output_name)
+    flatten_dependencies(src_tauri_dir, output_name, dist_dir=output_dir,
+                         copy_executable=on_linux)
 
 if __name__ == "__main__":
     force = "--force" in sys.argv

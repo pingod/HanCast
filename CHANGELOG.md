@@ -1,6 +1,6 @@
 # Changelog
 
-> 最后校对：2026-10-16，对应版本 v2.3.16（`package.json:4`）
+> 最后校对：2026-10-17，对应版本 v2.3.17（`package.json:4`）
 
 本文件记录 HanCast 的版本历史。口径说明：
 
@@ -8,6 +8,22 @@
 - 版本号唯一来源是 **`package.json` 的 `version`**（`scripts/sync-version.cjs:4,17`），`npm run version:set <x.y.z>` 把它刷进 7 处契约点：`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`（本地包那条，v2.3.8 起收进来——此前每版都靠人肉补）、`hancast-backend/pyproject.toml`、`hancast_sidecar/utils/config.py:39`、`src/api/commands.ts`（mock）、`src/stores/settings.ts`。`scripts/check-version.cjs` 自称以 `tauri.conf.json` 为源（口径相反），但全仓无人调用，是未接线的孤儿脚本——判定以 `sync-version.cjs` 为准。详见 [docs/构建与发布.md](docs/构建与发布.md) §1。
 - 下表「提交」列即 `git tag <版本>` 指向的提交；细节以 `git show <提交>` 为准，本文只留用户可感知的变化。
 - 新加版本时**同一次提交**里补这里，并按 [docs/README.md](docs/README.md) §4 的约定同步对应文档。
+
+---
+
+## v2.3.17 — 2026-10-17（本轮发布提交）
+
+Linux 真机（CachyOS + Hyprland）三连崩的修复轮：**装完点图标就没了**这件事从三个独立成因上各修一处，并把「CI 全绿但真机崩」这个盲区补死。用户可感知面：Linux/deb/rpm/AppImage/Arch 五种装端从「双击即没」变成能开窗口，且接收端播放不再对着一个跑不起来的随包 mpv 自报就绪；macOS 与 Windows 行为不变。
+
+- **缺陷一：sidecar 与依赖被装到两个目录 → `exit 127`**。tauri 的 Linux bundler 把 `externalBin` 落 `/usr/bin`、`bundle.resources` 落 `/usr/lib/HanCast`，而 Nuitka standalone 只从**可执行文件所在目录**解析依赖（`libpython3.12.so.1.0` 走 `DT_NEEDED` + RPATH `$ORIGIN`，`lxml/etree.so` 走 Python 层按 exe 同级拼出的绝对路径）。真机取证：`/usr/bin/hancast-sidecar: error while loading shared libraries: libpython3.12.so.1.0`，主程序日志 `[SidecarManager] Process terminated with code Some(127)`。修法只动打包层：`src-tauri/tauri.linux.conf.json` 把 `externalBin` 置空、`hancast-sidecar` 作为 `resources` 首项，`flatten_dependencies(..., copy_executable=True)`（`build_sidecar.py:53,122`）在 Linux 上连 exe 一起提升到 `src-tauri/` 根，安装后 exe 与依赖同在 `/usr/lib/HanCast/`。**Rust 一行没改**：`sidecar.rs:186` 的 `search_dirs` 首选 `resource_dir`，命中即与 `$ORIGIN` 同目录；`current_dir` 那层（`:205,210`）本来就对，只是 `cwd` 救不了 `$ORIGIN`。同机复刻该布局后喂 `{"id":1,"cmd":"get_settings","params":{}}` 拿到 `{"id": 1, "success": true, ...}`。
+- **缺陷二：Wayland 下窗口起不来 → 协议错误秒杀客户端**。WebKitGTK 2.4x 用 `wp_linux_drm_syncobj_*` 做显式同步，Hyprland 要求 commit 前绑定 acquire timeline，没绑就判违约断连；用户侧表现为「图标点一下，闪都没闪就没」，stderr 只留 `Gdk-Message: Error 71 (协议错误) dispatching to Wayland display.`。2026-10-17 在 gtk4 4.24.1 / webkit2gtk-4.1 2.54.1 / hyprland 0.56.2 上实测 `GSK_RENDERER=cairo`、`GSK_RENDERER=gl`、`LIBGL_ALWAYS_SOFTWARE=1` **全都照崩**，只有 `WEBKIT_DISABLE_DMABUF_RENDERER=1` 稳定存活且仍是原生 Wayland 表面（不必把用户推去 XWayland）。修法：`src-tauri/src/main.rs:21-28` 在 GTK/WebKit 初始化前补该变量，仅当 `WAYLAND_DISPLAY` 存在**且用户自己没设过**时生效（保留手动调试的口子）。判据同机实测：`timeout 20 /usr/bin/HanCast` 修复前 exit **1**、带变量 exit **124**（活到超时）。
+- **缺陷三：随包 mpv 在 Arch 上根本跑不起来，却被当成就绪**。`ldd /usr/lib/HanCast/mpv/mpv` 报 **10 条 not found**（`libavcodec.so.60`、`libavfilter.so.9`、`libavformat.so.60`、`libavutil.so.58`、`libswresample.so.4`、`libswscale.so.7`、`libavdevice.so.60`、`libplacebo.so.338`、`libcdio.so.19`、`libmujs.so.3`）——那是 CI 的 **Ubuntu runner** 构建，滚动发行版早已是 ffmpeg 7.x/8.x 的 soname。而 `utils/mpv_manager.py` 第 2 层（随包）**从不验能跑**，直接把路径写成 `READY` 并 `_save_to_config`，于是第 3 层「系统 PATH」永远走不到，装了可用 mpv 的机器反而没播放器。修法取运行时兜底（与 v2.3.11 的 FFmpeg 同一思路）：`:56-63` 对随包候选先真跑一次 `--version`，失败就带 warning 让位系统 mpv。测试 `tests/test_mpv_bundled_path.py` 加三条（能跑时 bundled 仍优先 / 跑不起来落 system / 两者皆无才 NOT_FOUND），`20 passed`（含 `test_params.py`）。打包侧**没动**：既不随包静态 mpv，也不在 Linux 去掉 mpv——同一台机器 `which mpv` 是 **v0.41.0**，与 `env.MPV_TAG` 同版本，说明「让位」这条路是真能落地的。
+- **CI 从此查运行时，而不查「文件在不在包里」**：v2.3.16 的四条装端判据全绿却漏掉 127，根因是它们全是存在性断言，而缺陷是**位置关系**。本轮三层补齐——① `scripts/check-resources.cjs:179` `checkLinuxSidecarLayout()`：Linux 上 sidecar exe 必须在 `resources` 里、且不允许留在 `externalBin`；② `build.yml:255-296` 新步骤「Smoke test: sidecar inside deb (Linux)」：`dpkg-deb -x` 解包 → 硬失败若 `/usr/bin/hancast-sidecar` 复现 → `test -x /usr/lib/HanCast/hancast-sidecar` + `libpython3.12.so.1.0` 在场 → **cd 进去真跑一条 `get_settings`**，要求 stdout 含 `"success": true`、stderr 不含 `error while loading shared libraries` / `ImportError` / `ModuleNotFoundError`；③ `scripts/build-arch-pkg.cjs` 的容器验收在 `pacman -U` 实装之后追加同一条协议断言。rpm/AppImage 与 deb 共用同一份 `resources`，布局相同，故解 deb 验一次。
+- **`.gitignore` 补齐提升产物**（`git check-ignore` 实测证明此前**没被忽略**）：`src-tauri/*.so`、`*.so.*`、`*.dylib`、`src-tauri/curl_cffi/`（`:57-61, 66`）。`src-tauri/hancast-sidecar` 那行**去掉尾斜杠**（`:70`）——Windows/macOS 上它是 Nuitka dist 目录，Linux 上是提升出来的单体可执行文件，带斜杠只匹配目录，Linux 根产物会露在 `git status` 里。
+- **上一轮的两个口子本轮闭合**：v2.3.16 的「① `-Qkk` 不含 GUI 真启动，本轮没有 Arch 实机」现在有实机了；「② 随包 mpv 的 soname 遗留」降级为「不再谎报就绪」（横幅同步改进 docs/构建与发布.md §6.6）。
+- **文档同轮修订**：AGENTS.md（技术栈 MPV 行、MPV Renderer 行加定位顺序与验跑、`bundle.resources` 逐平台清单更正、依赖提升流程改写、运行目录树与「certifi/lxml/charset_normalizer 不在运行目录」那条**已证伪**的旧结论更正为目录形态、Wayland 兼容行与专门段落、构建顺序第 5/7 步、CI 加「Linux 装端冒烟」、最后校对 v2.3.17）；docs/构建与发布.md（§2.2 构建顺序按平台分叉、§2.3 Nuitka 参数与产物表 + 「Linux 为什么改产出目录」、§4.2 步骤表新增 15b 并重锚后续行号、§6.6 加协议判据行、新增 **§6.7 Linux 装端真机取证**七行实测、§7 遗留横幅更新、`.gitignore` 表行号）；docs/故障排查.md（症状索引三行 + 新增 **§10.5 / §10.6 / §10.7** + 关键字表三行）；docs/架构总览.md（`mpv_manager.py` 行：205→214、定位顺序与让位）；docs/屏幕投屏.md、rule-packs/README.md（`build.yml` 行号因新步骤整体后移 43 行，逐条重锚）。全仓 `python3 tools/audit-doc-refs.py`：**3100 处引用，可疑 0**。
+- **版本与契约点**：`npm run version:set -- 2.3.17` 刷 7 处（`tauri.conf.json` / `Cargo.toml` / `Cargo.lock` / `pyproject.toml` / `config.py` / `commands.ts` / `settings.ts`），`hancast-backend/uv.lock` 里的 editable 版本随 `uv sync` 跟到 2.3.17（非 SSOT 契约点，如实记录）。闸门 `npm run version:sync` 复跑七处全「已是最新」。
+- **没闭合的口子（别当成已验）**：① **v2.3.17 的包还没在这台 Arch 机器上装过**——`.pkg.tar.zst` 需要 `sudo pacman -U`，本机复刻布局的证据只等价于产物层验证，装机验收排在本轮 CI 出包之后。② `build.yml` 新步骤与 Arch 容器的协议断言**本轮第一次执行**，绿不绿要等 run。③ Rust 侧只改了 `main.rs`，本机无完整 Tauri 工具链未编译，靠 CI 的三平台构建验。④ Arch 用户若系统里也没有 mpv，接收端仍不可用——只是从「谎报就绪」变成如实 `NOT_FOUND`。⑤ 随包 mpv 的打包层未动（静态 mpv / Linux 去捆绑两条更重的路留给决策）。⑥ 产品未变的两台 Windows 测试机按惯例豁免。
 
 ---
 

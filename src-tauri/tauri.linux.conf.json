@@ -1,6 +1,8 @@
 {
   "bundle": {
+    "externalBin": [],
     "resources": [
+      "hancast-sidecar",
       "mpv/*",
       "mpv/portable_config/**/*",
       "*.so",
