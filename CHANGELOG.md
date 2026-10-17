@@ -1,6 +1,6 @@
 # Changelog
 
-> 最后校对：2026-10-17，对应版本 v2.3.18（`package.json:4`）
+> 最后校对：2026-10-18，对应版本 v2.3.19（`package.json:4`）
 
 本文件记录 HanCast 的版本历史。口径说明：
 
@@ -8,6 +8,23 @@
 - 版本号唯一来源是 **`package.json` 的 `version`**（`scripts/sync-version.cjs:4,17`），`npm run version:set <x.y.z>` 把它刷进 7 处契约点：`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`（本地包那条，v2.3.8 起收进来——此前每版都靠人肉补）、`hancast-backend/pyproject.toml`、`hancast_sidecar/utils/config.py:39`、`src/api/commands.ts`（mock）、`src/stores/settings.ts`。`scripts/check-version.cjs` 自称以 `tauri.conf.json` 为源（口径相反），但全仓无人调用，是未接线的孤儿脚本——判定以 `sync-version.cjs` 为准。详见 [docs/构建与发布.md](docs/构建与发布.md) §1。
 - 下表「提交」列即 `git tag <版本>` 指向的提交；细节以 `git show <提交>` 为准，本文只留用户可感知的变化。
 - 新加版本时**同一次提交**里补这里，并按 [docs/README.md](docs/README.md) §4 的约定同步对应文档。
+
+---
+
+## v2.3.19 — 2026-10-18（本轮发布提交）
+
+Linux 装端第三轮，治用户报的两件事：**「linux 上的电脑投屏全部都是黑屏」** 与 **「麦克风、系统声音页都不可用」**（2026-10-17，CachyOS + Hyprland 0.56.2）。用户可感知面：Wayland 会话里屏幕投屏第一次投出**真实画面**、能只投某一块显示器，两个音频下拉里有得选了，选中的设备没声/没权限会**当场说清楚原因**。X11 会话仍走 `x11grab`，Windows / macOS 路径未动。
+
+- **黑屏的根因是采集方式，而且它不报错**：Linux 的视频输入一律 `-f x11grab -i $DISPLAY`，而 Hyprland/sway 的 XWayland 以 `-rootless` 启动——**原生 Wayland 窗口不在 X 的窗口树里**，于是那颗空 root window 被抓得又稳又顺：会话 `ok`、`running` 为真、电视和浏览器都能拉流，日志一个字都不提。量化（同一台机器、同一时刻，`signalstats` 的 YAVG）：`x11grab` **16.03**（纯黑）vs `grim`（wlroots `zwlr_screencopy_manager_v1`）**44.28**（真实桌面）。FFmpeg 侧无解：n9.0.2 的 `-demuxers` 只有 `x11grab` / `kmsgrab` / `fbdev`，没有 wayland，pipewire 抓取要 portal 且官方构建没编；`kmsgrab` 要 DRM master，跟合成器抢独占，桌面会话里起不来。**所以只能自带原生 helper。**
+- **修法一 · 随包 Rust helper**：新增 `linux-capture/`（`hancast-wlgrab`，`src/main.rs` 886 行，依赖只有 `wayland-client` + `wayland-protocols-wlr`，**不碰 GTK**）。screencopy 走 SHM 路径把帧按紧凑 BGRA 写 stdout，FFmpeg 以 `-f rawvideo -pixel_format bgra -video_size WxH -framerate N -i pipe:0` 接进**既有 HLS 管线**（`pixel_format` 而非 `pix_fmt`，rawvideo 只认前者）。两个坑都量过：① 帧尺寸必须取 helper 首行 `HDR`，不能取 `list` 的 mode——缩放屏上两者差 scale 倍，`-video_size` 差一点整条流读歪成斜纹，**而且也不报错**；② Linux 的 screencopy 单位是 **output**，所以给用户的可选项是「哪块屏」（`wl:DP-2` / `wl:DP-3`，`screencast/wlgrab.py:218`）而不是「哪个窗口」。
+- **修法二 · 拿不到 helper 就失败，绝不退回 x11grab**（`screencast/capture.py:81-107`）：退回等于把这条原始故障再发一遍。前端同步把「开始投屏」置灰，并把 `capture.reason` 写在用户正看着的位置（`src/components/ScreenCastPanel.vue`），三种原因（不在 Wayland 会话 / helper 缺失 / `pactl` 缺失）分开说。helper 定位顺序 sidecar 同级 → `resource_dir` → 包上一级，**且必须真 exec 一次 `list`** 才算可用（`wlgrab.py:124` 逐候选聚合死因，不再只回一句「找不到」）——这是 v2.3.17「随包 mpv 谎报就绪」的同一条教训。
+- **修法三 · Linux 音频补齐**：「页面不可用」的真因是 `_list_audio_devices()` 在 Linux **直接返回空表**，界面上两个下拉是空的，不是控件坏了。现在走三层拼装（新增 `screencast/pulse.py`，148 行）：`pactl --format=json list sources` 作权威清单、可读名从 **`pw-dump` 的 `node.description`** 补（PipeWire 在 pactl 的 JSON 里把 `description` 写成字符串 `"(null)"`，只信 pactl 就得到一排 `(null)`）、`pactl info` 的 Default Source/Sink 决定「（当前出声）」标在谁身上。系统声音 = `<sink>.monitor`。
+- **打包接线三层，每一层都真的执行一次**：① CI 新步骤 `Build Wayland capture helper (Linux)`（`build.yml:259-280`）在 `linux` 矩阵里 `cargo build --release --locked` → 拷进 `src-tauri/hancast-wlgrab` → `ldd` → **`env -u WAYLAND_DISPLAY` 真 exec 一次 `list`**，要求退出码 **3** 且输出含「连不上 Wayland」（能干净地拒绝就证明二进制可执行、动态库齐全）；② `scripts/check-resources.cjs:223` 新增 `checkLinuxWlgrab()`：helper 必须是**带执行位的文件**且 `tauri.linux.conf.json` 的 `resources` 列出它（`:31-43`）；③ deb 装端冒烟追加 `test -x /usr/lib/HanCast/hancast-wlgrab`（`build.yml:314-315`）并**第二条协议命令 `list_screen_sources`**，要求返回含 `"capture"`（`build.yml:335-341`）——`wlgrab.py` / `pulse.py` 是函数内延迟 import，Nuitka 漏收时第一条 `get_settings` 照样绿。Arch 容器（`scripts/build-arch-pkg.cjs`）在 `pacman -U` 实装后跑同两条命令。
+- **测试**：新增 `hancast-backend/tests/test_screencast_wayland.py`（507 行，**30 条**）覆盖 Wayland 门（不在会话 / helper 探不到 / 起不来 / 帧尺寸非法四种失败文案各一条）、`HDR` 优先于 mode、rawvideo 命令形状、双路 `pulse` + `amix`、monitor 与麦克风的静音与缺失判定。生产侧 `_spawn(cmd, use_stdin=…, stdin_stream=…)` 比测试桩宽，`tests/test_screencast.py:398,523` 与 `tests/test_params_commands.py:97` 的 `fake_spawn` 签名同步加宽；两处早期新用例先失败，查明是**生产代码把逐候选死因吞了**，改的是 `wlgrab.py` 而不是放松断言。本轮裁剪跑：`uv run python -m pytest tests/test_screencast_wayland.py tests/test_screencast.py tests/test_params_commands.py` → **108 passed**（未跑全量，按既定口径）。
+- **验收判据（真机线，打 tag 之前做完）**：新增仓库脚本 `tools/verify-linux-wayland-cast.py`（368 行），按**产品代码路径** `FfmpegCapture.start_hls` 真起一次会话 → `PASS=14 FAIL=0 SKIP=0`（2026-10-18 00:07，CachyOS 真机）：helper 可用、`wl:DP-2`/`wl:DP-3` 在列、`desktop` 标题如实写主显示器、麦克风 3 条 + 系统声音 3 条 monitor、rawvideo 命令形状、双路 pulse + amix、**分片亮度 95.1 / 105.5（多次落在 59.6–105.5，对照修复前 16.03）**、**10/10 分片带 aac 流**、播测试音时 monitor RMS **−16.3 dB**（空闲 HDMI monitor **−91 dB**）、停止后无残留 `hancast-wlgrab` 进程、`running` 归位。两条判据坑写进脚本与文档：量亮度**不能拿 `seg000.ts`**（`delete_segments` + `hls_list_size=6` 早裁掉了，得在会话存活期间抄当下完整分片）；`astats` 的 `RMS level dB` 行带 `[Parsed_astats_0 @ 0x…] ` 前缀，`startswith` 永远匹配不到。探针 `HOME`/`XDG_*` 全指一次性沙箱，**不写用户真实的 `hancast_setting.json`**、不启停 GUI。
+- **文档同轮修订**：AGENTS.md（技术栈屏幕抓取行、结构树 `linux-capture/` + `wlgrab.py` + `pulse.py`、Python 服务表新增 hancast-wlgrab 行、构建顺序 4b 步与手工准备第 3 条、Linux `bundle.resources` 清单、CI「Linux 装端冒烟」扩写 + 「CI 证明不了画面」警示、最后校对 v2.3.19）；docs/故障排查.md（§2 症状索引两行 + 新增 **§6.7**，含对照表与两条探针坑）；docs/屏幕投屏.md（§3.4 / §4.6 / §7.12–§7.14 机制与失败文案）；docs/构建与发布.md（§2.2 构建顺序加 helper 一步、§3.2 资源表加 helper 行、§3.3 Preflight 加第 7/8 条、§4.2 步骤表加 **13b** 并重锚 14–27、§4.3–§4.5 与 §7.1 逐条重锚、新增 **§6.8**）；tools/README.md（计数 49→50 / 55→56、§1.1 与 §2.1 各一行）。本轮另一件必须记账的事：`.github/workflows/build.yml` 因为插入 helper 步骤整体长了 **47 行**，`tools/audit-doc-refs.py` **只验「文件存在 + 行号在范围内」**，四十来条 `build.yml:NNN` 引用因此「行号还在、指的行已经不是那回事」而静默通过——已用 `difflib` 对 `git show HEAD:` 与工作区做逐块对齐后全部重锚。
+- **版本与契约点**：`npm run version:set -- 2.3.19` 刷 7 处（`tauri.conf.json` / `Cargo.toml` / `Cargo.lock` / `pyproject.toml` / `config.py` / `commands.ts` / `settings.ts`），`hancast-backend/uv.lock` 的 editable 版本随 `uv sync` 跟到 2.3.19（非 SSOT 契约点，如实记录）。
+- **没闭合的口子（别当成已验）**：① **Linux 的窗口级抓取仍未实现**——Wayland 协议不给窗口级 screencopy，screencopy 的单位是 output；X11 会话下的单显示器选择同样未做。② CI 三条新判据（helper 自检退出码 3 / Preflight / 装端 `capture` 字段）在 tag run 之前**只有本机 cargo 那一步真跑过**，构建机没有 Wayland 会话，画面判据只能由真机线提供，两边都要有。③ 往客厅电视推流属打扰面，本轮验到「浏览器观看页与 HLS 有画面有声」为止。④ Rust helper 与 `main.rs` 之外的 Rust 侧改动由 CI 三平台构建代验（本机无完整 Tauri 工具链）。⑤ 纯 ALSA（无 `pactl`）的机器仍拿不到音频设备列表——此时如实报「没有 pactl」而不是给空下拉。
 
 ---
 

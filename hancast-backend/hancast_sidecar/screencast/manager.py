@@ -117,7 +117,8 @@ class ScreenCastManager:
         if audio.get("system") and not audio.get("system_device"):
             return {"ok": False,
                     "error": "未选择系统声音设备（Windows 选带 [Loopback] 的渲染设备；"
-                             "macOS 选「HanCast 系统声音」，14.2 以下需虚拟声卡）"}
+                             "macOS 选「HanCast 系统声音」，14.2 以下需虚拟声卡；"
+                             "Linux 选带「（默认）」的系统声音，即当前输出总线的镜像）"}
         if audio.get("mic") and not audio.get("mic_device"):
             return {"ok": False, "error": "未选择麦克风设备"}
         # 勾了声学设备却拿不到对应的输入，宁可直接说清楚：以前这里静默降级成
@@ -131,10 +132,18 @@ class ScreenCastManager:
             # 没有录音权限时系统不报错、也不弹窗（macOS 尤其如此），设备照样
             # 枚举得到，只是采回来的每个样本都是 0 —— 投出去的每一帧都没有人声，
             # 而且画面流畅、毫无异常。开录前试采一秒，把这件事如实报出来。
+            if sys.platform == "linux":
+                advice = ("Linux 请先在「声音」设置里确认这条输入没有被静音，"
+                          "再检查 PipeWire/PulseAudio 的录音权限（沙箱或 flatpak "
+                          "启动时可能拿不到麦克风）")
+            elif sys.platform == "darwin":
+                advice = ("macOS 请在「系统设置 → 隐私与安全性 → 麦克风」里"
+                          "授予 HanCast 录音权限")
+            else:
+                advice = ("Windows 请在「设置 → 隐私和安全性 → 麦克风」里"
+                          "授予桌面应用录音权限")
             return {"ok": False,
-                    "error": "麦克风采到的全是静音，一个非零样本都没有——多半是没给录音权限："
-                             "macOS 请在「系统设置 → 隐私与安全性 → 麦克风」里允许 HanCast；"
-                             "Windows 请在「设置 → 隐私和安全性 → 麦克风」里允许桌面应用录音。"
+                    "error": f"麦克风采到的全是静音，一个非零样本都没有——{advice}。"
                              "授权后重试，或先取消勾选「麦克风」"}
         if audio.get("system"):
             # 用户选的是 WASAPI 环回（Windows 上系统声音的默认形态）时，
@@ -198,7 +207,9 @@ class ScreenCastManager:
                     n.split(":", 1)[-1] == base for n in names):
                 return (f"选中的{label}设备已不可用：{base}；请重新选择"
                         f"（Windows 系统声音用「[Loopback]」结尾的渲染设备，"
-                        f"macOS 需 CoreAudio 系统音频或虚拟声卡）")
+                        f"macOS 需 CoreAudio 系统音频或虚拟声卡，"
+                        f"Linux 用 PipeWire/PulseAudio 的输入源与输出镜像"
+                        f"「….monitor」）")
         return None
 
     def stop(self) -> Dict:

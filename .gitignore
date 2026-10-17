@@ -69,6 +69,13 @@ src-tauri/dist-portable/
 # 不带尾斜杠：Windows/macOS 上它是 Nuitka dist 目录，Linux 上是提升出来的 sidecar 可执行文件
 # （Linux 的 dist 挪到 src-tauri/target/sidecar-dist/，已被上面的 src-tauri/target/ 覆盖）
 src-tauri/hancast-sidecar
+# Wayland 抓取 helper：CI 在 linux job 里 cargo build 之后拷到这一层给
+# bundle.resources 的 "hancast-wlgrab" glob 用，属构建产物
+src-tauri/hancast-wlgrab
+
+# hancast-wlgrab（Linux/Wayland 屏幕抓取 helper）的本地构建产物；
+# Cargo.lock 要入库——它是二进制依赖的锁定证据，CI 靠 --locked 复现同一份
+linux-capture/target/
 
 # ── 日志 ──
 *.log

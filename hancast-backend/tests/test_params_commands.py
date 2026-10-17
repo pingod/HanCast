@@ -94,7 +94,7 @@ class TestParamsCommands(unittest.TestCase):
         cap = capture_mod.FfmpegCapture("ffmpeg")
         captured = {}
 
-        def fake_spawn(cmd, use_stdin=False):
+        def fake_spawn(cmd, use_stdin=False, stdin_stream=None):
             captured["cmd"] = cmd
             # 播放列表必须落在本次会话目录里，就绪判定才成立
             with open(os.path.join(out_dir, "live.m3u8"), "w", encoding="utf-8") as f:

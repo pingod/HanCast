@@ -584,6 +584,14 @@ class FfmpegManager:
             }
         """
         screens = [{"id": "desktop", "title": "整个屏幕（所有显示器）"}]
+        from . import wlgrab
+        wl = wlgrab.status()
+        if wl["wayland"] and wl["helper"]:
+            # Wayland 下 screencopy 一次只给一块输出，"desktop" 不再等于
+            # 「所有显示器的并集」，标题要如实写成主显示器，别让用户按 Windows
+            # 的经验理解这一项
+            screens = [{"id": "desktop",
+                        "title": wlgrab.desktop_title() or "整个屏幕（主显示器）"}]
         screens += self._list_monitors()
         windows = self._list_windows()
         audio_inputs = self._list_audio_devices()
@@ -594,6 +602,9 @@ class FfmpegManager:
             "ffmpeg": self.check(),
             # 前端要靠它决定「macOS 才需要预热麦克风授权」这类平台差异
             "platform": sys.platform,
+            # Linux 投屏失败时前端要能说出是哪一环：不在 Wayland 会话 /
+            # helper 缺失 / pactl 缺失，三种原因的解法完全不同
+            "capture": wl,
         }
 
     def _list_monitors(self) -> List[Dict]:
@@ -615,12 +626,15 @@ class FfmpegManager:
                             "width": px_w, "height": px_h,
                             "primary": d["main"]})
             return out
+        if sys.platform == "linux":
+            # Wayland 会话且 helper 可用时，逐块 wl_output 列出来；X11 会话
+            # 或 helper 缺失就还是空列表（只有 "desktop" 那一项）
+            from . import wlgrab
+            if wlgrab.wayland_session() and wlgrab.find_helper()[0]:
+                return wlgrab.monitor_entries()
+            return []
         if os.name != "nt":
             return []
-        import ctypes
-        from ctypes import wintypes
-
-        primary_flag = 1
         monitors: List[Dict] = []
 
         class MONITORINFO(ctypes.Structure):
@@ -791,7 +805,13 @@ class FfmpegManager:
         return "选中的窗口已关闭或被最小化，请重新选择"
 
     def _list_audio_devices(self) -> List[Dict]:
-        """枚举音频输入设备（Windows: dshow；macOS: avfoundation）"""
+        """枚举音频输入设备（Windows: dshow；macOS: avfoundation；Linux: pactl）"""
+        if sys.platform == "linux":
+            # 这份清单不依赖 ffmpeg（ffmpeg 缺失时 pulse 的源照样能列出来，
+            # 前端也就还能告诉用户「设备是有的，缺的是 FFmpeg」）
+            from .pulse import list_input_devices
+            return list_input_devices()
+
         ffmpeg = self.get_path()
         if not ffmpeg:
             return []
@@ -908,6 +928,22 @@ class FfmpegManager:
                         devices.append(entry)
             except Exception as e:
                 logger.warning(f"Failed to enumerate avfoundation devices: {e}")
+        elif sys.platform == "linux":
+            # PipeWire / PulseAudio：pactl 列源 + pw-dump 拿可读名字 + pactl info
+            # 认默认那条（见 screencast/pulse.py）。Linux 上「系统声音」从来不是
+            # 一个能枚举到的设备——以前这里直接返回空列表，界面就是一句「没有可选
+            # 设备」，用户只能认为功能是坏的。
+            try:
+                from . import pulse
+                for d in pulse.list_input_devices():
+                    entry = dict(d)
+                    entry["kind"] = (
+                        "system" if str(d["name"]).endswith(".monitor")
+                        else self._classify_audio_device(
+                            f"{d.get('title') or d['name']}"))
+                    devices.append(entry)
+            except Exception as e:  # noqa: BLE001 - 枚举失败不拖垮面板
+                logger.warning(f"Failed to enumerate pulse sources: {e}")
         return devices
 
     def audio_input_silent(self, device: str, seconds: float = 1.0) -> Optional[bool]:
@@ -926,9 +962,18 @@ class FfmpegManager:
         elif sys.platform == "darwin":
             # 设备名是 "索引:名称"，avfoundation 只认索引
             src = ["-f", "avfoundation", "-i", f":{str(device).split(':')[0]}"]
+        elif sys.platform == "linux":
+            # device 就是 pactl 的源名（alsa_input.… / alsa_output….monitor）。
+            # monitor 源「没声音」是常态（此刻没人在出声），所以调用方只拿它
+            # 判麦克风，别拿这个结果去拦「系统声音」。
+            src = ["-f", "pulse", "-i", str(device)]
         else:
             return None
-        cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", *src,
+        # -nostdin：这里 capture_output 没接 stdin，ffmpeg 会继承 sidecar 的
+        # stdin——而那正是与 Tauri 之间的 JSON 行协议管道，ffmpeg 的按键交互
+        # 读线程会把待处理指令吃掉（同 capture._spawn 里那条注释）
+        cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+               *src,
                "-t", f"{seconds}", "-ar", "48000", "-ac", "1",
                "-c:a", "pcm_s16le", "-f", "wav", "-"]
         try:
@@ -987,14 +1032,22 @@ class FfmpegManager:
 
     @staticmethod
     def build_video_input(source: Dict, fps: int, scale_vf: str = "",
-                          ffmpeg_path: str = "") -> Tuple[List[str], str]:
-        """构造视频捕获输入参数（gdigrab / avfoundation / x11grab）
+                          ffmpeg_path: str = "",
+                          wl_size: Optional[Tuple[int, int]] = None
+                          ) -> Tuple[List[str], str]:
+        """构造视频捕获输入参数（gdigrab / avfoundation / rawvideo 管道 / x11grab）
 
         source: {"type": "screen"|"window",
-                 "id": "desktop"|"screen:x,y,w,h"|"window:0x<hwnd>", "title": str}
+                 "id": "desktop"|"screen:x,y,w,h"|"window:0x<hwnd>"|"wl:<输出名>",
+                 "title": str}
         fps: 目标帧率
         scale_vf: 缩放滤镜串（见 build_scale_filter），窗口抓取时 crop 排在它前面
         ffmpeg_path: 用于 macOS 动态枚举屏幕设备索引
+        wl_size: Wayland 路径下 hancast-wlgrab 报出的首帧尺寸 (宽, 高)。给了它就把
+                 helper 的 stdout 当输入 0（rawvideo 管道），没给就不是 Wayland 会话。
+                 **尺寸必须来自 helper**：wl_output 的 mode 给的是逻辑尺寸，缩放屏上
+                 screencopy 的缓冲区是它的 scale 倍，`-video_size` 差一个字节整条流
+                 就读歪（画面变成斜纹雪花）。
 
         返回 (输入参数, 视频滤镜串)。滤镜串**必须由调用方放到所有 -i 之后**
         当输出选项下发：ffmpeg 把 `-i` 之前的选项判给「下一个输入」，夹在中间的
@@ -1057,7 +1110,22 @@ class FfmpegManager:
                 # 窗口抓取 = 抓它所在那块屏再裁出窗口区域（FFmpeg 在 mac 上
                 # 没有窗口输入，见 avfoundation 选项表）
                 vf = build_crop_filter(crop) + (f",{vf}" if vf else "")
+        elif wl_size:
+            # Wayland：帧由 hancast-wlgrab（wlroots screencopy）灌进 stdin。
+            # 注意 rawvideo 的选项名是 -pixel_format，不是 -pix_fmt —— 后者是
+            # 编码器/滤镜的说法，写在这儿 ffmpeg 会当未知选项丢掉，然后按默认
+            # yuv420p 去解释 BGRA 字节，画面变成一片斜纹雪花还不报错。
+            w, h = int(wl_size[0]), int(wl_size[1])
+            args += ["-f", "rawvideo", "-pixel_format", "bgra",
+                     "-video_size", f"{w}x{h}", "-framerate", str(fps),
+                     "-i", "pipe:0"]
         else:
+            # X11 会话（含 XWayland 里的 X 客户端桌面）照旧 x11grab。
+            # ⚠️ 纯 Wayland 桌面走到这里就是黑屏：XWayland 以 -rootless 启动，
+            # 原生 Wayland 窗口不在 X 窗口树里，抓到的 root window 永远是空的
+            # （2026-10-17 CachyOS/Hyprland 实测 YAVG=16.03，同屏 grim=44.28）。
+            # 所以调用方（capture.FfmpegCapture）在 Wayland 会话里必须先把 helper
+            # 拉起来并传 wl_size；拿不到 helper 时直接报错，而不是投一路黑屏。
             args += ["-f", "x11grab", "-framerate", str(fps),
                      "-i", os.environ.get("DISPLAY", ":0")]
 
@@ -1151,6 +1219,25 @@ class FfmpegManager:
             else:
                 logger.warning("[ScreenCast] macOS audio requested but no valid device selected")
         else:
-            if use_mic:
+            # Linux（PipeWire 的 pulse 兼容层，纯 PulseAudio 同样适用）：
+            #   - 麦克风：物理输入源（alsa_input.…）
+            #   - 系统声音：输出总线的镜像源（alsa_output.….monitor），等于
+            #     Windows 的 WASAPI 环回 / macOS 的 Audio Tap，不装虚拟声卡
+            # 两条都要就开两个输入再 amix（pulse 一个输入只认一个源）。
+            # 设备名来自 pulse.list_input_devices()，是 pactl 认的目标串本身。
+            mic_dev = str(audio_cfg.get("mic_device") or "").strip()
+            sys_dev = str(audio_cfg.get("system_device") or "").strip()
+            if use_mic and use_system and mic_dev and sys_dev:
+                take(["-f", "pulse", "-i", mic_dev])
+                take(["-f", "pulse", "-i", sys_dev])
+                args += FfmpegManager._mix_filter(labels)
+            elif use_mic and mic_dev:
+                take(["-f", "pulse", "-i", mic_dev])
+            elif use_system and sys_dev:
+                logger.info(f"[ScreenCast] 捕获系统声音镜像源 {sys_dev}")
+                take(["-f", "pulse", "-i", sys_dev])
+            elif use_mic:
+                # 没落到具体设备（老客户端/列表没刷新）时退回默认录音源，
+                # 至少不改变 v2.3.18 之前「勾麦克风=收 default」的行为
                 take(["-f", "pulse", "-i", "default"])
         return args

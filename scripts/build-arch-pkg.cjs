@@ -261,6 +261,12 @@ if [ -e /usr/bin/hancast-sidecar ]; then
   echo "FATAL: /usr/bin/hancast-sidecar 又出现了 —— 与依赖拆开的 sidecar 必崩，见 check-resources.cjs"; exit 1
 fi
 test -f /usr/lib/HanCast/mpv/mpv && echo "  ok  bundled mpv present"
+# Wayland 抓屏 helper（v2.3.19）：缺它 Wayland 会话投屏直接失败（capture.py 明确
+# 不退回黑屏的 x11grab）。glob 少写一条只让 tauri 打包阶段炸，装端这步是最后一道闸
+if ! test -x /usr/lib/HanCast/hancast-wlgrab; then
+  echo "FATAL: /usr/lib/HanCast/hancast-wlgrab 缺失或没有可执行位 —— Wayland 会话投屏必失败"; exit 1
+fi
+echo "  ok  wayland 抓取 helper 在资源目录且可执行"
 test -f /usr/share/applications/HanCast.desktop && echo "  ok  desktop entry present"
 test -f /usr/share/licenses/hancast/COPYING && echo "  ok  license file present"
 
@@ -278,6 +284,17 @@ if grep -qE 'error while loading shared libraries|ImportError|ModuleNotFoundErro
 fi
 if grep -q '"event": "ready"' /tmp/sidecar-out.json; then echo "  ok  ready 事件已推送"; fi
 echo "  ok  sidecar 应答成功（依赖同级布局成立）"
+
+# 第二条命令专门走屏幕投屏那条 import 链：wlgrab.py / pulse.py 是函数内的延迟
+# import，Nuitka 漏收时 get_settings 照样绿——只有这里会炸（同 v2.3.17 mpv 的
+# 「存在性证明不了运行时」教训）
+echo "== sidecar 实跑 2：list_screen_sources =="
+if ! printf '{"id":2,"cmd":"list_screen_sources","params":{}}\n' | (cd /usr/lib/HanCast && timeout 90 /usr/lib/HanCast/hancast-sidecar) > /tmp/sidecar-src.json 2>/tmp/sidecar-src-err.log; then
+  echo "FATAL: list_screen_sources 退出异常"
+fi
+grep -q '"success": true' /tmp/sidecar-src.json || { echo "FATAL: list_screen_sources 没有正常应答"; head -25 /tmp/sidecar-src-err.log; exit 1; }
+grep -q '"capture"' /tmp/sidecar-src.json || { echo "FATAL: 返回里没有 capture 字段（screencast/wlgrab 没进冻结二进制？）"; head -c 400 /tmp/sidecar-src.json; exit 1; }
+echo "  ok  list_screen_sources 应答含 capture（Wayland 链路模块已进包）"
 
 # makepkg 以非 root 运行，归档里的 uid/gid 是否被重映射成 0 必须实测：
 # 若写成 build(1000)，真装到用户机器上 /usr/bin/HanCast 就成了普通用户所有。

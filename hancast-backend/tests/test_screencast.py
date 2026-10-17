@@ -395,7 +395,7 @@ class TestHlsEncode(unittest.TestCase):
         captured = {}
         m3u8 = os.path.join(out_dir, "live.m3u8")
 
-        def fake_spawn(cmd, use_stdin=False):
+        def fake_spawn(cmd, use_stdin=False, stdin_stream=None):
             captured["cmd"] = cmd
             # 播放列表由"本次进程"新建，就绪判定才算通过
             with open(m3u8, "w", encoding="utf-8") as f:
@@ -520,7 +520,7 @@ class TestHlsEncode(unittest.TestCase):
             f.write(b"\x47" * 188)
         seen = {}
 
-        def fake_spawn(cmd, use_stdin=False):
+        def fake_spawn(cmd, use_stdin=False, stdin_stream=None):
             seen["gone"] = not os.path.exists(stale)
             with open(cmd[-1], "w", encoding="utf-8") as f:
                 f.write("#EXTM3U\n")

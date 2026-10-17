@@ -214,6 +214,42 @@ function checkLinuxSidecarLayout(resources) {
   return failed;
 }
 
+// hancast-wlgrab：Linux/Wayland 屏幕抓取 helper（源码在 linux-capture/，CI 里
+// cargo build 之后拷到 src-tauri/ 根）。它必须和 hancast-sidecar 落在同一层：
+// Python 侧（screencast/wlgrab.py 的 _candidate_paths）只探「sidecar exe 同级 /
+// resource_dir / 包的上一级」这三个位置，装端那一层就是 /usr/lib/HanCast/。
+// 少它 == Wayland 会话里投屏直接失败（capture.py:81-107 明确拒绝退回 x11grab 的
+// 黑屏——v2.3.18 之前正是那表现）。glob 只数文件命中，不带 x 位的文件照样进包，所以三条都断言。
+function checkLinuxWlgrab(resources) {
+  if (PLATFORM !== 'linux') return 0;
+  let failed = 0;
+
+  const exe = path.join(TAURI_DIR, 'hancast-wlgrab');
+  const st = statOf(exe);
+  if (!st) {
+    failed += 1;
+    console.error('  MISSING  hancast-wlgrab  -> src-tauri/ 根没有 Wayland 抓取 helper');
+    console.error('           先构建它：cd linux-capture && cargo build --release --locked');
+    console.error('           然后 cp target/release/hancast-wlgrab ../src-tauri/');
+  } else if (!st.isFile()) {
+    failed += 1;
+    console.error('  MISSING  hancast-wlgrab  -> 那是目录不是文件，bundle.resources 会丢掉它');
+  } else if (!(st.mode & 0o111)) {
+    failed += 1;
+    console.error(`  MISSING  hancast-wlgrab  -> mode ${(st.mode & 0o777).toString(8)} 没有可执行位`);
+    console.error('           sidecar 探它时会真的 exec 一次 `list`，没有 x 位直接判不可用');
+  } else {
+    console.log(`  ok       hancast-wlgrab  -> helper (${(st.size / 1048576).toFixed(2)} MiB, mode ${(st.mode & 0o777).toString(8)})`);
+  }
+
+  if (!resources.includes('hancast-wlgrab')) {
+    failed += 1;
+    console.error('  MISSING  resources 没列出 hancast-wlgrab  -> Wayland 抓屏 helper 进不了包');
+  }
+
+  return failed;
+}
+
 function main() {
   const { resources, source } = resolveResources();
   console.log(`platform        : ${PLATFORM}`);
@@ -267,12 +303,14 @@ function main() {
   const pkgFailed = checkBinaryPackages(resources);
   // Linux 还要管「sidecar 与依赖是不是同级」——见 checkLinuxSidecarLayout 的注释
   const layoutFailed = checkLinuxSidecarLayout(resources);
+  // 以及 Wayland 抓取 helper 在不在同一层——见 checkLinuxWlgrab 的注释
+  const wlgrabFailed = checkLinuxWlgrab(resources);
 
-  if (failed > 0 || pkgFailed > 0 || layoutFailed > 0) {
+  if (failed > 0 || pkgFailed > 0 || layoutFailed > 0 || wlgrabFailed > 0) {
     const distDir =
       PLATFORM === 'linux' ? path.join(TAURI_DIR, 'target', 'sidecar-dist') : path.join(TAURI_DIR, 'hancast-sidecar');
     console.error(
-      `\n${failed + pkgFailed + layoutFailed} resource check(s) failed. tauri build WILL fail (or silently drop a dependency).`
+      `\n${failed + pkgFailed + layoutFailed + wlgrabFailed} resource check(s) failed. tauri build WILL fail (or silently drop a dependency).`
     );
     dump('src-tauri/ top level:', fs.readdirSync(TAURI_DIR).sort());
     dump(`Nuitka dist (${path.relative(path.resolve(__dirname, '..'), distDir)}/):`, isDir(distDir) ? fs.readdirSync(distDir).sort() : []);

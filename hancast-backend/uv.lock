@@ -640,7 +640,7 @@ wheels = [
 
 [[package]]
 name = "hancast-sidecar"
-version = "2.3.17"
+version = "2.3.19"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },

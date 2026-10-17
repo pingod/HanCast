@@ -8,6 +8,7 @@ FFmpeg 屏幕捕获管线
 """
 
 import os
+import sys
 import time
 import shutil
 import logging
@@ -39,6 +40,9 @@ class FfmpegCapture:
         # Windows 系统声音：sidecar 自己采 WASAPI 环回，PCM 写进 ffmpeg 的 stdin
         self._loopback = None
         self._feeder: Optional[threading.Thread] = None
+        # Wayland 屏幕抓取：hancast-wlgrab 把 BGRA 帧写进 stdout，那份读端就是
+        # FFmpeg 的 stdin 输入 0（见 screencast/wlgrab.py）
+        self._wl = None
 
     # ────────────────────────────────────────
     # HLS 输出
@@ -70,13 +74,45 @@ class FfmpegCapture:
         from .ffmpeg_manager import FfmpegManager
         vf = FfmpegManager.build_scale_filter(width, height)
 
+        # Wayland 会话里 x11grab 抓到的是空的 root window（XWayland 以 -rootless
+        # 启动，原生 Wayland 窗口不在 X 窗口树里）——画面流畅、日志干净、每帧纯黑。
+        # 所以视频改由自带 helper 供帧，helper 起不来就直接失败并把原因说清楚，
+        # 绝不悄悄退回 x11grab 再投一路黑屏（v2.3.18 之前正是这个表现）。
+        wl_session = None
+        wl_size = None
+        if sys.platform == "linux" and source.get("type") != "window":
+            from . import wlgrab
+            if wlgrab.wayland_session():
+                helper, reason = wlgrab.find_helper()
+                out_name = wlgrab.resolve_output(source) if helper else None
+                if not helper or not out_name:
+                    return {"ok": False, "error": (
+                        f"Wayland 屏幕抓取不可用：{reason or '合成器没有给出任何输出'}。"
+                        "HanCast 在 Wayland 下用随包的 hancast-wlgrab（wlroots "
+                        "screencopy）抓屏，X11 会话仍走 x11grab 不受影响")}
+                wl_session = wlgrab.WlGrabSession(helper)
+                if not wl_session.start(out_name, fps=fps):
+                    err = wl_session.error or "抓取进程未能就绪"
+                    wl_session.stop()
+                    wl_session = None
+                    return {"ok": False, "error": f"Wayland 屏幕抓取失败：{err}"}
+                hdr = wl_session.hdr or {}
+                wl_size = (int(hdr.get("width") or 0), int(hdr.get("height") or 0))
+                if not all(wl_size):
+                    wl_session.stop()
+                    wl_session = None
+                    return {"ok": False,
+                            "error": f"Wayland 抓取进程给出的帧尺寸非法：{hdr}"}
+                logger.info(f"[ScreenCast] Wayland 抓取 {out_name} "
+                            f"{wl_size[0]}x{wl_size[1]}（helper={helper}）")
+
         if os.path.isdir(out_dir):
             shutil.rmtree(out_dir, ignore_errors=True)
         os.makedirs(out_dir, exist_ok=True)
 
         started_at = time.time()
         cmd = [self.ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin"]
-        video_args, vf = self._video_input_args(source, fps, vf)
+        video_args, vf = self._video_input_args(source, fps, vf, wl_size=wl_size)
         cmd += video_args
         # 视频占输入 0，音频输入从 1 起（amix 标签需此偏移）
         audio_input = self._audio_input_args(audio_cfg, input_offset=1)
@@ -141,15 +177,27 @@ class FfmpegCapture:
             from .loopback import open_stream
             self._loopback = open_stream(lb_cfg.get("name"))
             if self._loopback is None:
+                if wl_session is not None:
+                    wl_session.stop()
                 return {"ok": False,
                         "error": "系统声音采不起来：输出设备可能已被切换或独占，"
                                  "请重新选择系统声音设备"}
 
         try:
-            proc = self._spawn(cmd, use_stdin=self._loopback is not None)
+            proc = self._spawn(cmd, use_stdin=self._loopback is not None,
+                               stdin_stream=wl_session.stdout
+                               if wl_session is not None else None)
         except Exception as e:
             self._close_loopback()
+            if wl_session is not None:
+                wl_session.stop()
             return {"ok": False, "error": f"启动 HLS 编码失败: {e}"}
+
+        # helper 那份读端在 FFmpeg 起来之后就要关掉：父进程再握着它，helper 退出
+        # 时 FFmpeg 收不到 EOF，停止投屏变成等满超时
+        if wl_session is not None:
+            self._wl = wl_session
+            wl_session.close_stdout()
 
         self._proc = proc
         self._running = True
@@ -177,14 +225,19 @@ class FfmpegCapture:
             time.sleep(0.1)
 
         if not ready:
+            wl_hint = ""
+            if self._wl is not None and self._wl.tail:
+                wl_hint = " / ".join(self._wl.tail[-3:])
             if proc.poll() is not None:
                 _err(f"FFmpeg 提前退出（退出码 {proc.returncode}）"
-                     + self._stderr_hint())
+                     + self._stderr_hint()
+                     + (f"；抓取进程：{wl_hint}" if wl_hint else ""))
             else:
                 # ffmpeg 还活着却没落播放列表，几乎都是某一路输入把管线饿住
                 # （amix 要凑齐每路帧），stderr 里那句 buffer/queue 警告就是线索
                 _err("HLS 输出超时未生成（屏幕捕获失败，可能是窗口不存在/"
-                     "权限未授予）" + self._stderr_hint())
+                     "权限未授予）" + self._stderr_hint()
+                     + (f"；抓取进程：{wl_hint}" if wl_hint else ""))
             self.stop()
             return {"ok": False, "error": self._error}
 
@@ -202,7 +255,8 @@ class FfmpegCapture:
     # 内部
     # ────────────────────────────────────────
 
-    def _spawn(self, cmd: List[str], use_stdin: bool = False) -> subprocess.Popen:
+    def _spawn(self, cmd: List[str], use_stdin: bool = False,
+               stdin_stream=None) -> subprocess.Popen:
         creationflags = 0
         if os.name == "nt":
             creationflags = subprocess.CREATE_NO_WINDOW | getattr(
@@ -210,8 +264,17 @@ class FfmpegCapture:
         # stdin 默认给 DEVNULL：不显式指定的话 FFmpeg 继承 sidecar 的 stdin，
         # 而 sidecar 的 stdin 正是与 Tauri 之间的 JSON 行协议管道 —— 一旦被
         # 子进程读走，主命令循环就会凭空丢指令。
+        # use_stdin 是 Windows 环回（sidecar 自己写 PCM）；stdin_stream 是 Wayland
+        # 抓取（直接挂到 hancast-wlgrab 的 stdout 读端上，dup 进子进程即成管道
+        # 的另一端，父进程随后 close 自己的那份，helper 退出时 FFmpeg 立刻拿到 EOF）。
+        if stdin_stream is not None:
+            stdin = stdin_stream
+        elif use_stdin:
+            stdin = subprocess.PIPE
+        else:
+            stdin = subprocess.DEVNULL
         return subprocess.Popen(
-            cmd, stdin=subprocess.PIPE if use_stdin else subprocess.DEVNULL,
+            cmd, stdin=stdin,
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
             creationflags=creationflags, bufsize=0,
         )
@@ -300,6 +363,14 @@ class FfmpegCapture:
             if rc is not None:
                 _err(f"屏幕捕获进程已退出（退出码 {rc}）" + self._stderr_hint())
                 return
+            wl = self._wl
+            if wl is not None and not wl.alive():
+                # Wayland 下 FFmpeg 是被喂的那一方：helper 先死（合成器连接断了、
+                # 显示器被拔、屏幕锁定）FFmpeg 只会安静地拿到 EOF 然后正常退出，
+                # 真正的原因只在 helper 自己的 stderr 里
+                _err("Wayland 抓取进程已退出（合成器连接断开或显示器被拔出）："
+                     + " / ".join(wl.tail[-3:]))
+                return
             try:
                 mtime = os.path.getmtime(m3u8_path)
             except OSError:
@@ -315,10 +386,13 @@ class FfmpegCapture:
                 return
 
     def _video_input_args(self, source: Dict, fps: int,
-                          vf: str) -> Tuple[List[str], str]:
+                          vf: str,
+                          wl_size: Optional[Tuple[int, int]] = None
+                          ) -> Tuple[List[str], str]:
         """返回 (视频输入参数, 视频滤镜串)，滤镜串由调用方放到所有 -i 之后"""
         from .ffmpeg_manager import FfmpegManager
-        return FfmpegManager.build_video_input(source, fps, vf, self.ffmpeg)
+        return FfmpegManager.build_video_input(source, fps, vf, self.ffmpeg,
+                                                wl_size=wl_size)
 
     def _audio_input_args(self, audio_cfg: Dict, input_offset: int = 0) -> List[str]:
         from .ffmpeg_manager import FfmpegManager
@@ -330,6 +404,8 @@ class FfmpegCapture:
             self._stop_requested = True
             feeder = self._feeder
             self._feeder = None
+            wl = self._wl
+            self._wl = None
             proc = self._proc
             self._proc = None
             if proc is not None and proc.poll() is None:
@@ -357,6 +433,11 @@ class FfmpegCapture:
                     self._close_loopback()
             else:
                 self._close_loopback()
+            # FFmpeg 已经收掉，才轮到收抓取进程：反过来先掐 helper 只是让 FFmpeg
+            # 拿到 EOF 早点退出，两种顺序都行，但先等 FFmpeg 退出能避免它把
+            # 「写 stdin 失败」当成异常刷一整屏 stderr
+            if wl is not None:
+                wl.stop()
 
     @property
     def running(self) -> bool:

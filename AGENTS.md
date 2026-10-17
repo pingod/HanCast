@@ -3,7 +3,7 @@
 > 旧名 `CLAUDE.md`（Claude Code 私有约定），2026-10-15 改名为跨工具的 `AGENTS.md`；
 > `CLAUDE.md` 现在只留三行指针指向本文件。
 
-> 最后校对：2026-10-17，对应版本 v2.3.18（`package.json:4`）。
+> 最后校对：2026-10-18，对应版本 v2.3.19（`package.json:4`）。
 > 本文件是速览与硬约束；逐模块的深度内容在 **docs/README.md** 的索引里，别在这里找细节。
 
 ## 项目概述
@@ -12,7 +12,7 @@
 
 - **项目名**: HanCast
 - **作者**: lanzeweie@foxmail.com
-- **版本**: 2.3.17（版本 SSOT 是 `package.json` 的 `version`，`scripts/sync-version.cjs:4`；改版本只走 `npm run version:set`，见「版本管理」）
+- **版本**: 2.3.19（版本 SSOT 是 `package.json` 的 `version`，`scripts/sync-version.cjs:4`；改版本只走 `npm run version:set`，见「版本管理」）
 - **性质**: 二次开发（非原项目官方更新）
 - **原始代码**: [xfangfang/Macast](https://github.com/xfangfang/Macast)（原作者 xfangfang，最后更新 2022-01）。仓库里**不含** `Macast-main/`、`Macast-plugins-main/` 这些本地目录，1.x 源码只作为移植参考，见「原始代码复用情况」
 - **目标架构**: Tauri 2.0 前端 + Rust 桥接 + Python Sidecar（+ MPV 接收端播放、FFmpeg 屏幕抓取）
@@ -31,7 +31,7 @@
 | 后端服务 | Python Sidecar（Nuitka standalone 编译） | >= 3.11 |
 | 协议支持 | DLNA/UPnP/SSDP | — |
 | 媒体播放 | MPV（捆绑外部依赖，接收端播放；随包那份跑不起来时自动让位系统 mpv，v2.3.17） | CI 固定 v0.41.0 |
-| 屏幕抓取 | FFmpeg（HLS 切片）+ 原生 helper | **不随包**；运行时检测本机已装，缺失按需下载（`ffmpeg_deps.py`） |
+| 屏幕抓取 | FFmpeg（HLS 切片）+ 原生 helper | FFmpeg **不随包**：运行时检测本机已装，缺失按需下载（`ffmpeg_deps.py`）。Wayland 侧另需随包原生 helper `hancast-wlgrab`（源码 `linux-capture/`，wlroots screencopy → BGRA rawvideo 灌进 FFmpeg stdin），v2.3.19 起随 Linux 包 |
 | 解析沙箱 | QuickJS（`quickjs` python 包，规则包 JS 执行） | >= 1.19.4 |
 | HTTP 指纹 | curl_cffi（JA3 伪装）+ aiohttp（HLS 供流） | — |
 
@@ -127,6 +127,8 @@ HanCast/
 │   │   │   ├── ffmpeg_manager.py # FFmpeg 命令拼装与 HLS 切片（1156 行；检测委托 utils/ffmpeg_deps.py）
 │   │   │   ├── loopback.py      # Windows 系统声音（WASAPI 环回，pyaudiowpatch）
 │   │   │   ├── macos_tap.py     # macOS 屏幕/音频原生 helper
+│   │   │   ├── wlgrab.py        # Wayland 抓屏：定位/启动随包 hancast-wlgrab（find_helper:124 逐候选报死因）
+│   │   │   ├── pulse.py         # Linux 音频枚举（pactl JSON + pw-dump 可读名 + pactl info 默认项）
 │   │   │   ├── httpd.py         # 观看页 HTTP 服务（默认 8765，绑 0.0.0.0）
 │   │   │   └── www/             # 观看页（index.html + hls.min.js）
 │   │   ├── security/guard.py    # Device Guard：未知设备投屏确认、信任/黑名单
@@ -150,6 +152,9 @@ HanCast/
 │   ├── hancast-bilibili / hancast-douyin / hancast-template
 │   ├── index.json               # 官方索引；线上地址是 main 分支 raw 路径 `https://raw.githubusercontent.com/pingod/HanCast/main/rule-packs/index.json`（`params.py:21`）
 │   └── dist/                    # 打包 zip（CI 随 draft Release 发布）
+├── linux-capture/               # hancast-wlgrab 源码（Rust，仅 wayland-client；Wayland 抓屏 helper）
+│   ├── Cargo.toml / Cargo.lock  # --locked 构建；不依赖 GTK
+│   └── src/main.rs              # 886 行：list / capture --output --fps，帧按紧凑 BGRA 写 stdout
 ├── scripts/                     # 壳层脚本：sync-version / check-version / sync-sidecar / check-resources / build-arch-pkg（均为 .cjs）
 ├── tools/                       # 50 个顶层脚本 + 1 个目录型验收包（browser-channel-livecheck/），索引与计数口径见 tools/README.md
 ├── mpv/                         # 本地放置的 MPV（`.gitignore:86-87` 只留 portable_config/）
@@ -274,6 +279,7 @@ Rust 命令名与 Sidecar `cmd` 名不一定同名（例如 Rust 的 `plugin_lis
 | Screencast HTTP | 默认 8765 | 观看页 + HLS 供流（`screencast/httpd.py:32,84`），观看链接带每会话新生成的短随机段 `/r/<session_id>` |
 | MPV Renderer | IPC | 通过 named pipe (Windows) / unix socket (Linux/macOS) 控制 MPV。定位顺序：手动指定 → 随包 → 系统 PATH（`utils/mpv_manager.py:31-67`）；**随包候选必须先真跑一次 `--version`**，跑不起来就让位系统 mpv——随包那份是 Ubuntu runner 的构建，Arch/CachyOS 上 13 条 soname 缺失（`libavcodec.so.60` 等，全清单见 docs/故障排查.md §10.7）（v2.3.17，判据见 docs/故障排查.md §10.7） |
 | FFmpeg | 子进程 | 屏幕抓取切片成 HLS，由 `screencast/ffmpeg_manager.py` 拼装命令；**不随包**，可执行文件由 `utils/ffmpeg_deps.py` 在运行时定位（手动路径 → 本机 PATH/常见安装目录 → 本程序下载的 `<配置目录>/bin/`） |
+| hancast-wlgrab | stdout 管道 | **仅 Linux**：Wayland 会话里的视频帧来源（`zwlr_screencopy_manager_v1` SHM → BGRA rawvideo）。定位顺序 sidecar 同级 → resource_dir → 包上一级，且**必须真 exec 一次 `list`** 才算可用（`screencast/wlgrab.py:124`）；探不到就**失败并说明原因，绝不退回 x11grab**（`capture.py:81-107`）——x11grab 在 Hyprland 上投得起来、帧率正常、每帧纯黑 |
 
 **这些 HTTP 服务一律绑 `0.0.0.0`，不是回环**——电视要取描述文件与媒体流、浏览器观看页要拉 HLS，
 绑 `127.0.0.1` 等于功能全废。代价与缓解见「安全约束」。
@@ -375,17 +381,20 @@ npm run tauri build            # 或 npx tauri build --bundles <targets>
 #   3. node scripts/sync-sidecar.cjs   （把 hancast_sidecar/ 源码同步进 src-tauri/）
 #   4. npm run build:sidecar           （Nuitka standalone → 依赖由 flatten_dependencies()
 #                                       提升到 src-tauri/ 根；Linux 连 sidecar exe 一起提升）
+#   4b. (仅 Linux) cd linux-capture && cargo build --release --locked
+#       && cp target/release/hancast-wlgrab ../src-tauri/   （CI: build.yml:259-280，
+#       构建后还要在无 Wayland 会话下真 exec 一次 `list`，要求退出码 3 + 「连不上 Wayland」）
 #   5. node scripts/check-resources.cjs（Preflight：逐个 glob 验命中；
 #      Linux 还额外验 sidecar 的装端布局——exe 是文件、带执行位、由 resources 承载且
-#      externalBin 为空，见 check-resources.cjs:179）
+#      externalBin 为空，见 check-resources.cjs:179；以及 helper 同级+可执行，:223）
 #   6. tauri bundle
 #   7. node scripts/build-arch-pkg.cjs（仅 Linux：把刚产出的 .deb 转成 Arch 的
 #      .pkg.tar.zst，进 archlinux 容器用 makepkg 打包并同一次调用里 pacman 实装验收；
 #      Tauri 的 Linux bundler 没有 Arch 后端，所以这一步只能在 bundle 之后补）
 ```
 
-步骤 3/4 的产物就是 `bundle.resources` 的 glob 目标，所以 Preflight 必须排在它们之后、
-`tauri build` 之前——放太晚只能等 `build.rs` 报含糊的 glob 错误（`.github/workflows/build.yml:238-252`）。
+步骤 3/4/4b 的产物就是 `bundle.resources` 的 glob 目标，所以 Preflight 必须排在它们之后、
+`tauri build` 之前——放太晚只能等 `build.rs` 报含糊的 glob 错误（`.github/workflows/build.yml:238-284`）。
 
 **构建前还需要手工准备**（CI 里由 workflow 步骤自动下载）：
 
@@ -393,6 +402,9 @@ npm run tauri build            # 或 npx tauri build --bundles <targets>
    CI 会先把已提交的 `mpv/portable_config/` 补进 `src-tauri/mpv/portable_config/`（`build.yml:156-160`）。
 2. macOS 只有 `mpv.app/` 是有效载荷：`mpv/*` 这种非递归 glob 能看见目录却不会递归，
    历史上因此打出过不含 mpv 的 app，`scripts/check-resources.cjs:11-23` 专门记录了这一坑。
+3. **Linux 还要 `src-tauri/hancast-wlgrab`**：那是构建产物、不入库（`.gitignore:72-78` 同时忽略它和
+   `linux-capture/target/`，`linux-capture/` 的源与 `Cargo.lock` 入库），本地不构建就只是 Preflight 少一条
+   glob 命中——CI 里由 `build.yml:259-280` 现建现验（构建后真 exec 一次 `list`，要求退出码 3）。
 
 > **FFmpeg 不在准备清单里**：v2.3.11 起不再捆绑，`bundle.resources` 的 `ffmpeg/*` 与 CI 的
 > 「Download & unpack FFmpeg」步骤（曾从 `eugeneware/ffmpeg-static` 的 `b6.1.1` 取静态单文件）
@@ -418,13 +430,17 @@ npm run tauri build            # 或 npx tauri build --bundles <targets>
   为此 CI 把 `beforeBuildCommand` 拆成了独立步骤（frontend → sync-sidecar →
   Nuitka sidecar → Preflight → tauri bundle），所以 base 配置的
   `beforeBuildCommand` 已简化为只做版本同步。
-- **Linux 装端冒烟**（v2.3.17 补，`build.yml:263-296`）：`tauri build` 之后把 deb `dpkg-deb -x`
+- **Linux 装端冒烟**（v2.3.17 补、v2.3.19 扩，`build.yml:294-343`）：`tauri build` 之后把 deb `dpkg-deb -x`
   解出来，断言 `/usr/bin/hancast-sidecar` **不存在**、`/usr/lib/HanCast/hancast-sidecar` 可执行、
-  `libpython3.12.so.1.0` 同级，然后**真喂一条 `get_settings` 给解包出来的 sidecar**，
-  要求回 `"success": true` 且 stderr 没有 `error while loading shared libraries` / `ImportError`。
+  `libpython3.12.so.1.0` 同级、**`hancast-wlgrab` 与它同级且带执行位**（`build.yml:314-315`），然后
+  **真喂两条命令给解包出来的 sidecar**：`get_settings` 要求回 `"success": true` 且 stderr 没有
+  `error while loading shared libraries` / `ImportError`；`list_screen_sources`（`build.yml:335-341`）要求返回里
+  有 `"capture"` 字段——`screencast/wlgrab.py` 与 `pulse.py` 是函数内延迟 import，Nuitka 漏收时第一条照样绿。
   这条存在的理由是 v2.3.16 的教训：CI 只验「文件在不在」，四条检查全绿，装到 CachyOS 上却是
   `exit 127` 的秒崩——存在性证明不了运行时依赖解析。Arch 侧同一套断言在
   `scripts/build-arch-pkg.cjs` 的容器里用 `pacman -U` 真装完再跑一遍。
+  ⚠️ CI 这三条（helper 自检退出码 3 / Preflight / 装端 capture 字段）**证明不了画面**：构建机没有 Wayland
+  会话。像素判据只有真机那条线，`tools/verify-linux-wayland-cast.py`（判据表见 docs/构建与发布.md §6.8）。
 - **Release**：仅在 `build` 成功、**ref 是 tag**、且（tag 推送 或 `make_release=true`）
   时创建 draft release。`make_release` 输入默认 **false**——在 `main` 上手动
   dispatch 只构建、不发布（曾用 `refs/heads/main` 当 tag 发 release，被 API 400 拒掉）。
@@ -507,7 +523,7 @@ glob pattern <pattern> path not found or didn't match any files.
 | `src-tauri/tauri.conf.json` | `mpv/*`、`mpv/portable_config/**/*`、`hancast_sidecar/**/*` |
 | `src-tauri/tauri.windows.conf.json` | `mpv/*`、`mpv/portable_config/**/*`、`*.dll`、`*.pyd`、`hancast_sidecar/**/*`、`certifi/**/*`、`lxml/**/*`、`charset_normalizer/**/*`、`curl_cffi/**/*` |
 | `src-tauri/tauri.macos.conf.json` | `mpv/mpv.app/**/*`、`mpv/portable_config/**/*`、`*.so`、`*.dylib`、`hancast_sidecar/**/*`、`certifi/**/*`、`lxml/**/*`、`charset_normalizer/**/*`、`curl_cffi/**/*` |
-| `src-tauri/tauri.linux.conf.json` | `hancast-sidecar`、`mpv/*`、`mpv/portable_config/**/*`、`*.so`、`*.so.*`、`hancast_sidecar/**/*`、`certifi/**/*`、`lxml/**/*`、`charset_normalizer/**/*`、`curl_cffi/**/*` |
+| `src-tauri/tauri.linux.conf.json` | `hancast-sidecar`、`hancast-wlgrab`、`mpv/*`、`mpv/portable_config/**/*`、`*.so`、`*.so.*`、`hancast_sidecar/**/*`、`certifi/**/*`、`lxml/**/*`、`charset_normalizer/**/*`、`curl_cffi/**/*`（`tauri.linux.conf.json:31-43`，v2.3.19 起含 helper） |
 
 ⚠️ **Tauri 的平台配置合并用 `json_patch::merge`（RFC 7386 JSON Merge Patch），数组是整体替换而非逐元素合并。**
 所以每个平台文件必须写出**完整**的 `bundle.resources` 数组，不能只写增量。

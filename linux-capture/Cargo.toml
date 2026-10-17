@@ -1,0 +1,16 @@
+[package]
+name = "hancast-wlgrab"
+version = "0.1.0"
+edition = "2021"
+description = "HanCast Linux(Wayland) 屏幕抓取 helper：用 wlroots screencopy 把帧以 rawvideo 灌进 stdout，交给 ffmpeg 切 HLS"
+
+[dependencies]
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+libc = "0.2"
+
+[profile.release]
+strip = true
+opt-level = 2
+panic = "abort"

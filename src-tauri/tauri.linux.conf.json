@@ -30,6 +30,7 @@
     "externalBin": [],
     "resources": [
       "hancast-sidecar",
+      "hancast-wlgrab",
       "mpv/*",
       "mpv/portable_config/**/*",
       "*.so",

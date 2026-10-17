@@ -14,11 +14,15 @@ export interface ScreenSourceItem {
 export interface AudioDeviceItem {
   name: string
   kind: 'mic' | 'system'
+  /** 给人看的名字（Linux 的 PulseAudio 源名是 alsa_output.pci-…，不能直接摆在界面上） */
+  title?: string
   /** macOS 上由 HanCast 自建的 Audio Tap 环回（索引会变，后端每次按名称重解析） */
   tap?: boolean
   /** Windows WASAPI 环回：ffmpeg 没有这个输入设备，由 sidecar 灌 PCM */
   loopback?: boolean
-  /** 这块环回对应的正是系统当前默认输出（只有它才真的在出声） */
+  /** Linux PipeWire/PulseAudio 上某条输出的镜像（<sink>.monitor），抓它=抓系统声音 */
+  monitor?: boolean
+  /** 这块环回/镜像对应的正是系统当前默认输出（只有它才真的在出声） */
   default?: boolean
 }
 
@@ -71,6 +75,8 @@ export interface ScreenSources {
   audio_inputs: AudioDeviceItem[]
   /** sidecar 的 sys.platform：'darwin' | 'win32' | 'linux' */
   platform?: string
+  /** Linux 抓屏能力快照：Wayland 会话里 helper 是否可用（不可用就会退回黑屏） */
+  capture?: { wayland?: boolean; helper?: string | null; reason?: string }
   ffmpeg: FfmpegStatus
 }
 

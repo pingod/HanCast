@@ -8,6 +8,7 @@ import FfmpegDepsModal from '@/components/FfmpegDepsModal.vue'
 import { useScreenCastStore } from '@/stores/screencast'
 import { useDeviceStore } from '@/stores/device'
 import { writeClipboardText } from '@/api/commands'
+import type { AudioDeviceItem } from '@/types/screencast'
 
 const { t } = useI18n()
 const sc = useScreenCastStore()
@@ -57,12 +58,26 @@ watch(() => sc.sources?.audio_inputs, (devices) => {
   if (!systemDevice.value && sc.systemDevices.length > 0) systemDevice.value = sc.systemDevices[0].name
 })
 
+// Wayland 会话里抓屏只能靠随包的 hancast-wlgrab：缺了它，x11grab 抓的是 XWayland
+// 那面空的 root window（Hyprland 以 -rootless 启动，原生 Wayland 窗口不在 X 树里），
+// 投出去的每一帧都是纯黑的。这种情况下宁可不给按开始，也别安静地黑一路。
+const wlgrabMissing = computed(() => {
+  const c = sc.sources?.capture
+  return !!(c?.wayland && !c.helper)
+})
+
 const canStart = computed(() => {
-  if (!sc.ffmpegOk || sc.isRunning) return false
+  if (!sc.ffmpegOk || sc.isRunning || wlgrabMissing.value) return false
   if (sourceType.value === 'window' && !selectedWindow.value) return false
   if (target.value === 'dlna' && !deviceId.value) return false
   return true
 })
+
+// Wayland + helper 就绪：抓的是 wlroots screencopy，一次只能一块输出，
+// 「整个屏幕」不再是所有显示器的并集，提示语要跟着换（screencast/wlgrab.py）
+const waylandCapture = computed(() =>
+  !!(sc.sources?.capture?.wayland && sc.sources?.capture?.helper)
+)
 
 const deviceOptions = computed(() =>
   deviceStore.devices
@@ -87,15 +102,27 @@ const selectedWindow = computed(() =>
 // Windows 上「系统声音」是一个环回镜像列表：每块喇叭（含虚拟声卡、HDMI、蓝牙耳机）
 // 各有一条，只有对应当前默认输出的那条真能读到声音。列表里不标出来，用户挑中闲置
 // 的那块就只能看到「投屏正常但没声音」。
+// Linux 上是同一件事的另一副面孔：PipeWire 给每条输出自带一个 `<sink>.monitor` 源，
+// 后端用 `default` 标出此刻在出声的那条（screencast/pulse.py）。
 const hasLoopbackMirror = computed(() =>
-  sc.systemDevices.some(d => d.loopback)
+  sc.systemDevices.some(d => d.loopback || d.monitor)
+)
+
+// Linux 侧 name 是 alsa_output.pci-0000_0d_00.6.analog-stereo.monitor 这种机器名，
+// 直接摆上界面等于没给名字；后端同时带了 pw-dump 的 node.description 作 title。
+function deviceLabel(d: AudioDeviceItem): string {
+  const base = d.title && d.title !== d.name ? d.title : d.name
+  return d.default ? `${base}${t('screencast.defaultOutputSuffix')}` : base
+}
+
+const micDeviceOptions = computed(() =>
+  sc.micDevices.map(d => ({ value: d.name, label: deviceLabel(d) }))
 )
 const systemDeviceOptions = computed(() =>
-  sc.systemDevices.map(d => ({
-    value: d.name,
-    label: d.default ? `${d.name}${t('screencast.defaultOutputSuffix')}` : d.name,
-  }))
+  sc.systemDevices.map(d => ({ value: d.name, label: deviceLabel(d) }))
 )
+
+const isLinux = computed(() => sc.sources?.platform === 'linux')
 
 watch(() => sc.sources?.windows, (wins) => {
   if (!wins?.length) return
@@ -242,6 +269,11 @@ async function copyText(text: string) {
 
       <!-- 捕获源 -->
       <div class="sc-label">{{ t('screencast.source') }}</div>
+      <!-- Wayland 会话没有 helper 时投出去必定是黑屏：把原因摆在用户正好在看的位置 -->
+      <div v-if="wlgrabMissing" class="sc-error">
+        <div class="sc-error-title">{{ t('screencast.wlgrabMissing') }}</div>
+        <div class="sc-empty-hint">{{ sc.sources?.capture?.reason || t('screencast.wlgrabHint') }}</div>
+      </div>
       <div class="sc-targets">
         <button
           class="sc-target sc-target--small"
@@ -260,7 +292,9 @@ async function copyText(text: string) {
           :model-value="screenId"
           @update:model-value="screenId = $event as string"
         />
-        <div class="sc-empty-hint">{{ t('screencast.screenTip') }}</div>
+        <div class="sc-empty-hint">
+          {{ waylandCapture ? t('screencast.screenTipWayland') : t('screencast.screenTip') }}
+        </div>
       </div>
       <div v-if="sourceType === 'window'" class="sc-field">
         <CustomSelect
@@ -295,11 +329,13 @@ async function copyText(text: string) {
       <div v-if="micOn" class="sc-field">
         <CustomSelect
           v-if="sc.micDevices.length > 0"
-          :options="sc.micDevices.map(d => ({ value: d.name, label: d.name }))"
+          :options="micDeviceOptions"
           :model-value="micDevice"
           @update:model-value="micDevice = $event as string"
         />
-        <div v-else class="sc-empty">{{ t('screencast.noMic') }}</div>
+        <div v-else class="sc-empty">
+          {{ isLinux ? t('screencast.noMicLinux') : t('screencast.noMic') }}
+        </div>
       </div>
       <!-- macOS 的麦克风权限不给就是恒静音，而且不报错：把状态摆在明面上 -->
       <div v-if="needMicConsent && micAccess !== 'granted'" class="sc-empty">
@@ -315,10 +351,14 @@ async function copyText(text: string) {
           :model-value="systemDevice"
           @update:model-value="systemDevice = $event as string"
         />
-        <div v-else class="sc-empty">{{ t('screencast.noSystemSound') }}</div>
-        <!-- Windows 每个扬声器都有一条环回镜像，选到没在出声的那块就是「投出去没声音」，
-             所以把「当前出声」标出来，让用户知道自己选的是哪一块 -->
-        <div v-if="hasLoopbackMirror" class="sc-empty-hint">{{ t('screencast.loopbackTip') }}</div>
+        <div v-else class="sc-empty">
+          {{ isLinux ? t('screencast.noSystemSoundLinux') : t('screencast.noSystemSound') }}
+        </div>
+        <!-- Windows 每个扬声器都有一条环回镜像，PipeWire 每条输出都有一个 monitor 源，
+             选中没在出声的那一块就是「投出去没声音」，所以把「当前出声」标出来 -->
+        <div v-if="hasLoopbackMirror" class="sc-empty-hint">
+          {{ isLinux ? t('screencast.loopbackTipLinux') : t('screencast.loopbackTip') }}
+        </div>
       </div>
 
       <!-- 视频设置 -->

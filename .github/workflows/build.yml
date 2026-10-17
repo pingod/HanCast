@@ -247,6 +247,37 @@ jobs:
       - name: Build sidecar (Nuitka)
         shell: bash
         run: npm run build:sidecar
+
+      # Wayland 屏幕抓取 helper（hancast-wlgrab，源码在 linux-capture/）。
+      # 它是 Linux 投屏唯一能出画面的路径：x11grab 在 Hyprland/KDE 的 Wayland
+      # 会话里抓的是 XWayland 的空 root window——投屏启动成功、帧率正常、每帧
+      # 纯黑，日志一点异常都没有（2026-10-17 实测 YAVG=16.03，同屏 grim=44.28），
+      # 而官方 ffmpeg 构建里没有任何 Wayland 输入设备，只能自带原生 helper。
+      # 判据不只查存在性：真的 exec 一次 `list`。CI runner 没有 Wayland 会话，
+      # 它应当以退出码 3 干净地报「连不上合成器」——能跑出这个退出码就证明二进制
+      # 可执行、依赖齐全（v2.3.16 的 exit 127 就是只查「文件在不在」漏掉的）。
+      - name: Build Wayland capture helper (Linux)
+        if: matrix.runner-os == 'Linux'
+        shell: bash
+        run: |
+          set -e
+          ( cd linux-capture && cargo build --release --locked )
+          cp linux-capture/target/release/hancast-wlgrab src-tauri/hancast-wlgrab
+          chmod +x src-tauri/hancast-wlgrab
+          ls -l src-tauri/hancast-wlgrab
+          ldd src-tauri/hancast-wlgrab
+          echo "=== 无 Wayland 会话时的自检：要求退出码 3 + ERR 行 ==="
+          set +e
+          out="$(env -u WAYLAND_DISPLAY ./src-tauri/hancast-wlgrab list 2>&1)"
+          rc=$?
+          set -e
+          echo "rc=$rc out=$out"
+          [ "$rc" = "3" ] || { echo "::error::helper 在无 Wayland 会话下退出码 $rc（应为 3）"; exit 1; }
+          case "$out" in
+            *"连不上 Wayland"*) ;;
+            *) echo "::error::helper 自检输出不认识：$out"; exit 1 ;;
+          esac
+
       - name: "Preflight: verify bundle.resources globs"
         run: node scripts/check-resources.cjs
       - name: Tauri bundle
@@ -278,6 +309,10 @@ jobs:
             || { echo "::error::资源目录里没有可执行的 hancast-sidecar"; exit 1; }
           test -f "$X/usr/lib/HanCast/libpython3.12.so.1.0" \
             || { echo "::error::libpython3.12.so.1.0 没进包"; exit 1; }
+          # Wayland 抓屏 helper 必须与 sidecar 同级（Python 侧只探 sidecar 同级 /
+          # resource_dir / 包上一级这三个位置，装端那一层就是 /usr/lib/HanCast）
+          test -x "$X/usr/lib/HanCast/hancast-wlgrab" \
+            || { echo "::error::hancast-wlgrab 没进包或没有可执行位 —— Wayland 抓屏会直接失败（capture.py 不退回黑屏的 x11grab）"; exit 1; }
           echo "=== /usr/lib/HanCast ==="
           ls "$X/usr/lib/HanCast" | head -12
 
@@ -292,6 +327,18 @@ jobs:
             grep -E 'error while loading|ImportError|ModuleNotFoundError' /tmp/sc-err.log | head -5
             exit 1
           fi
+
+          echo "=== 再喂一条 list_screen_sources，断言 Wayland 链路进了冻结二进制 ==="
+          # screencast/wlgrab.py 与 screencast/pulse.py 是函数内延迟 import，
+          # Nuitka 漏收的话这里才会炸——上一轮 mpv 的教训就是「模块能不能被
+          # 加载」不能只看文件在不在包里
+          printf '{"id":2,"cmd":"list_screen_sources","params":{}}\n' \
+            | (cd "$X/usr/lib/HanCast" && timeout 90 ./hancast-sidecar) > /tmp/sc-src.json 2>/tmp/sc-src-err.log || true
+          grep -q '"success": true' /tmp/sc-src.json \
+            || { echo "::error::list_screen_sources 失败"; tail -20 /tmp/sc-src-err.log; exit 1; }
+          grep -q '"capture"' /tmp/sc-src.json \
+            || { echo "::error::list_screen_sources 的返回里没有 capture 字段（wlgrab 模块没进包？）"; head -c 400 /tmp/sc-src.json; exit 1; }
+          echo "list_screen_sources OK"
           rm -rf "$X"
           echo "deb sidecar OK"
 
