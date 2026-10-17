@@ -272,7 +272,7 @@ Rust 命令名与 Sidecar `cmd` 名不一定同名（例如 Rust 的 `plugin_lis
 | SSDP Service | 1900 | UDP 多播，设备发现（NOTIFY + M-SEARCH）；组播被系统阻断时回退子网广播（`ssdp.py:32,416,556-557`），NOTIFY 周期 30s 对齐 `CACHE-CONTROL: max-age=66`（`ssdp.py:6`）。**发现不扫描端口**，且描述必须声明 `AVTransport` 服务才登记（`ssdp.py:1074`、`ssdp.py:1169-1175`，v2.3.13），路由器/NAS 不进列表，判据 `tools/verify-ssdp-cast-gate.py` |
 | Media Server | 0 = 自动选择 | 本地文件 HTTP 服务（Range + 边下边播代理），`config.media_port` 默认 0（`utils/config.py:112-114`、`commands.py:221`） |
 | Screencast HTTP | 默认 8765 | 观看页 + HLS 供流（`screencast/httpd.py:32,84`），观看链接带每会话新生成的短随机段 `/r/<session_id>` |
-| MPV Renderer | IPC | 通过 named pipe (Windows) / unix socket (Linux/macOS) 控制 MPV。定位顺序：手动指定 → 随包 → 系统 PATH（`utils/mpv_manager.py:31-67`）；**随包候选必须先真跑一次 `--version`**，跑不起来就让位系统 mpv——随包那份是 Ubuntu runner 的构建，Arch/CachyOS 上 `libavcodec.so.60` 等 10 条 soname 缺失（v2.3.17，判据见 docs/故障排查.md §10.7） |
+| MPV Renderer | IPC | 通过 named pipe (Windows) / unix socket (Linux/macOS) 控制 MPV。定位顺序：手动指定 → 随包 → 系统 PATH（`utils/mpv_manager.py:31-67`）；**随包候选必须先真跑一次 `--version`**，跑不起来就让位系统 mpv——随包那份是 Ubuntu runner 的构建，Arch/CachyOS 上 13 条 soname 缺失（`libavcodec.so.60` 等，全清单见 docs/故障排查.md §10.7）（v2.3.17，判据见 docs/故障排查.md §10.7） |
 | FFmpeg | 子进程 | 屏幕抓取切片成 HLS，由 `screencast/ffmpeg_manager.py` 拼装命令；**不随包**，可执行文件由 `utils/ffmpeg_deps.py` 在运行时定位（手动路径 → 本机 PATH/常见安装目录 → 本程序下载的 `<配置目录>/bin/`） |
 
 **这些 HTTP 服务一律绑 `0.0.0.0`，不是回环**——电视要取描述文件与媒体流、浏览器观看页要拉 HLS，
@@ -418,7 +418,7 @@ npm run tauri build            # 或 npx tauri build --bundles <targets>
   为此 CI 把 `beforeBuildCommand` 拆成了独立步骤（frontend → sync-sidecar →
   Nuitka sidecar → Preflight → tauri bundle），所以 base 配置的
   `beforeBuildCommand` 已简化为只做版本同步。
-- **Linux 装端冒烟**（v2.3.17 补，`build.yml:255-296`）：`tauri build` 之后把 deb `dpkg-deb -x`
+- **Linux 装端冒烟**（v2.3.17 补，`build.yml:263-296`）：`tauri build` 之后把 deb `dpkg-deb -x`
   解出来，断言 `/usr/bin/hancast-sidecar` **不存在**、`/usr/lib/HanCast/hancast-sidecar` 可执行、
   `libpython3.12.so.1.0` 同级，然后**真喂一条 `get_settings` 给解包出来的 sidecar**，
   要求回 `"success": true` 且 stderr 没有 `error while loading shared libraries` / `ImportError`。
