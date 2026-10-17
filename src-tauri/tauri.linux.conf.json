@@ -1,4 +1,31 @@
 {
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "HanCast",
+        "width": 434,
+        "height": 634,
+        "minWidth": 346,
+        "minHeight": 472,
+        "maxWidth": 800,
+        "maxHeight": 900,
+        "resizable": true,
+        "decorations": false,
+        "transparent": false,
+        "backgroundColor": {
+          "red": 22,
+          "green": 20,
+          "blue": 50,
+          "alpha": 255
+        },
+        "center": true,
+        "visible": false,
+        "dragDropEnabled": true,
+        "devtools": false
+      }
+    ]
+  },
   "bundle": {
     "externalBin": [],
     "resources": [
