@@ -3,7 +3,7 @@
 > 旧名 `CLAUDE.md`（Claude Code 私有约定），2026-10-15 改名为跨工具的 `AGENTS.md`；
 > `CLAUDE.md` 现在只留三行指针指向本文件。
 
-> 最后校对：2026-10-24，对应版本 v2.3.22（`package.json:4`）。
+> 最后校对：2026-10-24，对应版本 v2.3.23（`package.json:4`）。
 > 本文件是速览与硬约束；逐模块的深度内容在 **docs/README.md** 的索引里，别在这里找细节。
 
 ## 项目概述
@@ -12,7 +12,7 @@
 
 - **项目名**: HanCast
 - **作者**: lanzeweie@foxmail.com
-- **版本**: 2.3.22（版本 SSOT 是 `package.json` 的 `version`，`scripts/sync-version.cjs:4`；改版本只走 `npm run version:set`，见「版本管理」）
+- **版本**: 2.3.23（版本 SSOT 是 `package.json` 的 `version`，`scripts/sync-version.cjs:4`；改版本只走 `npm run version:set`，见「版本管理」）
 - **性质**: 二次开发（非原项目官方更新）
 - **原始代码**: [xfangfang/Macast](https://github.com/xfangfang/Macast)（原作者 xfangfang，最后更新 2022-01）。仓库里**不含** `Macast-main/`、`Macast-plugins-main/` 这些本地目录，1.x 源码只作为移植参考，见「原始代码复用情况」
 - **目标架构**: Tauri 2.0 前端 + Rust 桥接 + Python Sidecar（+ MPV 接收端播放、FFmpeg 屏幕抓取）
@@ -98,7 +98,7 @@ HanCast/
 │   ├── icons/                   # 应用图标
 │   └── src/
 │       ├── main.rs              # 入口，调用 hancast_lib::run()
-│       ├── lib.rs               # Tauri 应用设置 + 67 个 #[tauri::command]（清单见 generate_handler!，lib.rs:1451-1519）
+│       ├── lib.rs               # Tauri 应用设置 + 67 个 #[tauri::command]（清单见 generate_handler!，lib.rs:1457-1525）
 │       └── sidecar.rs           # Python Sidecar 管理器（stdin/stdout JSON，COMMAND_TIMEOUT=60s）
 │
 ├── hancast-backend/              # Python Sidecar 后端
@@ -234,7 +234,7 @@ HanCast/
 前端合计监听 8 条。`ready` 两侧都没有订阅者（只作握手痕迹），`cast_error` 是前端遗留的死监听（`src/stores/cast.ts:728`）。
 完整清单与触发时机见 docs/HanCast-Frontend-API.md。
 
-### Tauri 命令列表（节选，完整清单以 `src-tauri/src/lib.rs` 的 `generate_handler!`（lib.rs:1451-1519，**67 条**）为准）
+### Tauri 命令列表（节选，完整清单以 `src-tauri/src/lib.rs` 的 `generate_handler!`（lib.rs:1457-1525，**67 条**）为准）
 
 Sidecar 侧的注册表是 **62 条**（`commands.py:131-222`，v2.3.20 加 3 条规则包任务命令前是 59）——差的那几条由 Rust 自己实现（窗口、剪贴板、开机自启、
 Store 版判定、日志导出等），不下发 Python；`exit` 由 Sidecar 主循环拦下（`main.py:126-128`）。
@@ -736,7 +736,10 @@ alpha 保持 0，Hyprland 直接把后面的桌面（还带模糊）透出来，
 5. **投屏失败必须让用户看见**：窗口收进托盘时界面红条没人看得到，所以媒体投屏的 `start_cast`
    失败、「停止未送达」，以及屏幕投屏的被拒 / 未送达 / 会话中途报错，**五条路径**都发系统通知，
    并把**隐藏的窗口带回前台**（`src/api/commands.ts` 的 `notify()` → `raiseIfHidden()` `:1401` +
-   壳层 `notify_os` `lib.rs:909`；屏幕投屏那侧的去重在 `src/stores/screencast.ts:45`）。
+   壳层 `notify_os` `lib.rs:909`——**UN 的调用必须排到主线程**（`run_on_main_thread`），从命令的工作
+   线程直接调会被系统判成「不允许」；授权状态与投递错误都落进程序日志（`src-tauri/src/macos_notify.rs`
+   的 `log()`，与 Python 侧同一份 `hancast.log`、同一行格式，后台日志面板读得到）。
+   屏幕投屏那侧的去重在 `src/stores/screencast.ts:45`）。
    **macOS 不能用 `tauri-plugin-notification` 发**：它落到 notify-rust → mac-notification-sys 的
    `NSUserNotificationCenter`（已废弃），v2.3.21 真机实测五条失败记录 `presented` 全为 0——只进
    通知中心、不弹横幅。所以 `notify_os` 在 macOS 上自己调 `UNUserNotificationCenter`
@@ -783,7 +786,7 @@ alpha 保持 0，Hyprland 直接把后面的桌面（还带模糊）透出来，
    「文件找不到」要自己分辨是已退役的历史文件名（写成「曾经/已于 vX 删除」即可）还是真写错；
    运行时才生成的落盘文件（`hancast_setting.json`、`window_config.json` 等）脚本已放行。
 3. **每份文档头部留一行「最后校对：YYYY-MM-DD，对应版本 vX.Y.Z」**，改了内容就改这行。
-4. **数字必须写口径**。例：`#[tauri::command]` 67 条（`lib.rs:1451-1519`）/ Sidecar 注册 62 条
+4. **数字必须写口径**。例：`#[tauri::command]` 67 条（`lib.rs:1457-1525`）/ Sidecar 注册 62 条
    （`commands.py:131-222`）/ 前端 `commands.ts` 导出 65 个 / 事件 8 条（Python 6 + Rust 2）。
    不写口径，下次改动看起来就像文档坏了。
 5. **别静默删证据**。被推翻的结论保留「历史一句」（为什么曾经这么做、哪一版改的），

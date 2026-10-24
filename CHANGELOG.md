@@ -1,6 +1,6 @@
 # Changelog
 
-> 最后校对：2026-10-24，对应版本 v2.3.22（`package.json:4`）
+> 最后校对：2026-10-24，对应版本 v2.3.23（`package.json:4`）
 
 本文件记录 HanCast 的版本历史。口径说明：
 
@@ -11,7 +11,23 @@
 
 ---
 
-## v2.3.22 — 2026-10-24（本轮发布提交）
+## v2.3.23 — 2026-10-24（本轮发布提交）
+
+**v2.3.22 的 macOS 通知仍然不弹横幅。** 这版做三件事：把 UN 的调用挪到主线程、把授权状态与投递错误落进日志、让每条通知有唯一 identifier。装完必须复验，判据写在下面。
+
+- **对照实验先做，排掉了整条系统链路的问题**：同一时刻 `osascript -e 'display notification …'` 的横幅**正常弹出**（截图取证），所以不是勿扰、不是通知通道坏了；系统设置里 HanCast 是「允许通知 on + 桌面/通知中心/锁屏全勾 + 提醒样式=临时」；把焦点交给 Finder、让 HanCast 不在前台时再触发，仍然 `presented=0`；Info.plist 里也没有 `LSUIElement`。剩下的嫌疑集中在**调用线程与授权状态**这两处。
+- **改动一 · 排到主线程**：`notify_os` 现在收 `AppHandle` 并 `run_on_main_thread` 之后再调 UN（`src-tauri/src/lib.rs:909`）。UN 的授权弹窗要挂在主的 run loop 上，从 Tauri 命令的工作线程直接调，系统会当成「这个 App 不允许通知」。
+- **改动二 · 让它自己说话**：`src-tauri/src/macos_notify.rs` 新增 `log()`，把 `requestAuthorization` 的 `granted`/错误、`getNotificationSettings` 的 `authorizationStatus`/`alertSetting`/`notificationCenterSetting`、以及 `addNotificationRequest` 的 completion 错误，写成与 Python 侧**同一份 `hancast.log`、同一行格式**（`[时间] hancast.notify INFO: …`），所以后台日志面板直接读得到。上一版把 add 的 handler 传成 `None`，等于把唯一的直接证据丢掉了——这轮不再猜。
+- **改动三 · 唯一 identifier**：`req.iden` 原本固定成 `hancast-cast`，实测**后一条会顶掉前一条**（通知中心里只剩最新一条，取证时也看到记录数不增反减）。改成 `hancast-cast-<毫秒时间戳>`。
+- **判据（真机，别靠眼睛）**：`~/Library/Group Containers/group.com.apple.usernoted/db2/db` 里按 `identifier='com.han.hancast'` 查 `record`，看 `presented` 是否为 1；`delivered_date` 是 Mac 绝对时间，要 `+978307200` 才是 unix 秒；正对照是同机走新 API 的 App（`presented=1` 共 21 条）。触发方式：本机起一个假渲染端（描述文件给最小 UPnP + **AVTransport**，`POST /control` 一律回 500 并 sleep 3s 留时序窗口），手动添加后点投屏。
+- **验证**：`cargo check` 通过（objc2 绑定的真实签名一并确认：`getNotificationSettingsWithCompletionHandler` 收 `NonNull<UNNotificationSettings>`，`UNNotificationSettings` **没有** `allowsNotifications`，要用 `alertSetting()`/`notificationCenterSetting()`）；`vue-tsc` + `vite build` 通过；`tools/verify-cast-ui.cjs` 23 条全绿。**本轮改动全是壳层 macOS 分支，前端与 Sidecar 一行没动**；真机是否弹横幅要等装完复验。
+- **顺带记下的两个真问题**：① **手动添加的设备在界面上没有移除入口**——`removeDevice` 只挂在投屏确认名单（`guard.ts`），「手动添加设备」弹窗只列「已记住的地址」不给删除，设备卡片的「管理」菜单只有 设为默认/重命名/隐藏；② 上一版漏判的原因是 harness 把 `notify()` 整个 stub 掉，它证明得了「五条失败出口都会调用」，**证明不了 OS 呈现**——这条写进 AGENTS.md 的判据口径。
+- **版本**：`npm run version:set -- 2.3.23` 刷 7 处；`generate_handler!` 因命令体变长移到 `lib.rs:1457-1525`，AGENTS.md 三处计数引用同步重锚。
+- **没闭合的口子**：① **本轮仍是「未证明能弹」的一版**——如果装完 `presented` 还是 0，日志会给出授权状态与 add 的错误原文，那时再决定是走签名身份（自签证书）还是把 macOS 侧定为「以窗口前置为准、系统通知只服务 Linux/Windows」；② Linux/Windows 两条路径仍未实测；③ 上面那个「手动设备无法从界面移除」本轮只记录未修。
+
+---
+
+## v2.3.22 — 2026-10-24（其 macOS 通知路径由 v2.3.23 继续修）
 
 **v2.3.21 的 macOS 系统通知在真机上根本不弹。** 这版修它，并加一条不依赖系统通知的兜底。
 

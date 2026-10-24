@@ -906,14 +906,20 @@ async fn open_ffmpeg_dir(
 /// 系统通知。macOS 走 `UNUserNotificationCenter`（理由见 `macos_notify` 里的实测记录），
 /// 其余平台返回错误，让前端退回 `tauri-plugin-notification`——那两条路径是好的。
 #[tauri::command]
-fn notify_os(title: String, body: String) -> Result<(), String> {
+fn notify_os(app: tauri::AppHandle, title: String, body: String) -> Result<(), String> {
+    // UN 的授权弹窗与投递都要在主的 run loop 上走，从命令的工作线程直接调会被系统判成「不允许」。
     #[cfg(target_os = "macos")]
     {
-        macos_notify::send(&title, &body)
+        app.run_on_main_thread(move || {
+            if let Err(e) = macos_notify::send(&title, &body) {
+                macos_notify::log(&format!("通知失败：{e}"));
+            }
+        })
+        .map_err(|e| format!("无法排到主线程：{e}"))
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (title, body);
+        let _ = (app, title, body);
         Err("本平台由前端走通知插件".into())
     }
 }

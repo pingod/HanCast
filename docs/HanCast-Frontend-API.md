@@ -2,7 +2,7 @@
 
 > 回答一个问题：前端 `invoke()` 出去的每一条命令，究竟由壳层（Rust/Tauri）就地执行、还是转发给 Sidecar（Python 后台进程）；它的入参、返回结构、可能错误，以及 Sidecar 主动推给前端的事件分别是什么。
 >
-> 最后校对：2026-10-24，对应版本 v2.3.22（`package.json`）；本轮只补 `notify_os` 与投屏失败通知链路，其余沿用 2.3.13 的取证记录
+> 最后校对：2026-10-24，对应版本 v2.3.23（`package.json`）；本轮只补 `notify_os` 与投屏失败通知链路，其余沿用 2.3.13 的取证记录
 
 ---
 
@@ -224,7 +224,7 @@ Sidecar 侧还有两条**前端调不到**的命令：`unhide_device`（`command
 | `ffmpeg_download_start` | `ffmpegDownloadStart()` `commands.ts:1334` | 无 | `{ok:true, task:{status, stage, ...}}`；已在下 → `already_running` | Sidecar | 起不来后台线程时 `{ok:false,error}`；压缩包 >512MB 直接拒（`ffmpeg_deps.py:448-469`） |
 | `ffmpeg_download_status` | `ffmpegDownloadStatus()` `commands.ts:1339` | 无 | 后台任务快照（`status/stage/received_bytes/total_bytes/speed/path/error`），`Command_TIMEOUT=60s` 所以下载绝不占住命令循环（`ffmpeg_deps.py:470-474`） | Sidecar | 通用 |
 | `open_ffmpeg_dir` | `openFfmpegDir()` `commands.ts:1345` | 无 | `{ok:true, path}`（回显目录，成败由调用方按「有没有窗口」判断） | **壳层就地**（`lib.rs:817-844`） | `Sidecar 未返回 FFmpeg 目录`、`目录创建失败: <e>`、`无法打开目录: <e>`；路径由 Sidecar 的 `managed_dir` 给出，**不接受前端传入**，否则等于开放「用资源管理器打开任意路径」；**只 spawn 不 wait**——`xdg-open` 活到文件管理器关闭为止，等它等于把按钮按死在命令循环里 |
-| `notify_os` | `notify()` `commands.ts:1414`（内部先 `raiseIfHidden()` `:1401`） | `title: string`、`body: string` | `Ok(())` 或 `Err(msg)` | **壳层就地**（`lib.rs:909`；macOS 实现在 `src-tauri/src/macos_notify.rs`） | macOS 用 `UNUserNotificationCenter`——插件那条路走已废弃的 `NSUserNotificationCenter`，实测只入通知中心不弹横幅；**非 macOS 一律回 `Err("本平台由前端走通知插件")`**，前端 catch 后改调 `tauri-plugin-notification`。通知失败从不影响投屏本身 |
+| `notify_os` | `notify()` `commands.ts:1414`（内部先 `raiseIfHidden()` `:1401`） | `title: string`、`body: string` | `Ok(())` 或 `Err(msg)` | **壳层就地**（`lib.rs:909`；macOS 实现在 `src-tauri/src/macos_notify.rs`，命令里 `run_on_main_thread` 排到主线程再调 UN） | macOS 用 `UNUserNotificationCenter`——插件那条路走已废弃的 `NSUserNotificationCenter`，实测只入通知中心不弹横幅；**非 macOS 一律回 `Err("本平台由前端走通知插件")`**，前端 catch 后改调 `tauri-plugin-notification`。通知失败从不影响投屏本身 |
 
 壳层定义：`lib.rs:735-844`。Sidecar 注册 `commands.py:185-192`、处理函数 `commands.py:1041-1078`，投屏实现在 `screencast/manager.py`、依赖检测与下载在 `utils/ffmpeg_deps.py`。
 
