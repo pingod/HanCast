@@ -139,14 +139,16 @@ Linux 走 DBus 桌面通知，Windows 走 Toast；拿不到权限时静默降级
 
 | 渠道 | 链接 |
 |------|------|
-| GitHub Releases | https://github.com/lanzeweie/HanCast/releases/latest |
+| GitHub Releases（**当前版本在这里**） | https://github.com/pingod/HanCast/releases/latest |
 | Gitee Releases（国内加速） | https://gitee.com/buxiangqumingzi/han-cast/releases/latest |
 | Microsoft Store | https://apps.microsoft.com/detail/9nk1xwpg6hd5 |
 
-> CI 每个 tag 产出的是 **draft Release**，人工验收后才 publish——所以 `releases/latest`
-> 只到最近一次 publish 的版本。开发分支的产物在
-> [pingod/HanCast Releases](https://github.com/pingod/HanCast/releases) 里逐个 tag 存放，
-> 想试最新改动就从那里取。
+> 每个 tag 由 CI 先产出 **draft Release**，人工装端验收之后才 publish，所以上面那条链接只到最近一次
+> 验收通过的版本（写这行时是 **v2.3.23**，10 项产物：Windows 安装包 / macOS `.dmg` /
+> Linux deb、rpm、AppImage 与 Arch `.pkg.tar.zst` / 4 个官方规则包 zip）。
+> 代码与产物都在这一条发布线上：[pingod/HanCast](https://github.com/pingod/HanCast)；
+> 上游 [lanzeweie/HanCast](https://github.com/lanzeweie/HanCast) 的 `main` 停在 v2.1.0
+> （v2.1.0 → 现行的合并请求还挂着），要最新代码请克隆 fork。
 
 Windows（x64 NSIS 安装包）、macOS（arm64 `.app` / `.dmg`）、Linux（deb / rpm / AppImage）
 与 Arch（`hancast-<版本>-1-x86_64.pkg.tar.zst`，装法 `sudo pacman -U <包文件>`）产物
@@ -178,7 +180,7 @@ Windows（x64 NSIS 安装包）、macOS（arm64 `.app` / `.dmg`）、Linux（deb
 
 ```bash
 # 克隆仓库
-git clone https://github.com/lanzeweie/HanCast.git
+git clone https://github.com/pingod/HanCast.git
 cd HanCast
 
 # 安装依赖

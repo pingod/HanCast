@@ -147,13 +147,17 @@ After casting starts, click the device card to open the control panel:
 
 | Channel | Link |
 |---------|------|
-| GitHub Releases | https://github.com/lanzeweie/HanCast/releases/latest |
+| GitHub Releases (**current builds**) | https://github.com/pingod/HanCast/releases/latest |
 | Gitee Releases (faster in mainland China) | https://gitee.com/buxiangqumingzi/han-cast/releases/latest |
 | Microsoft Store | https://apps.microsoft.com/detail/9nk1xwpg6hd5 |
 
-> CI creates a **draft** release per tag and a human publishes it after acceptance, so
-> `releases/latest` only ever points at the last published version. Artifacts of the development
-> line live in [pingod/HanCast Releases](https://github.com/pingod/HanCast/releases).
+> CI builds a **draft** release for every tag and a human publishes it after on-device acceptance,
+> so the link above points at the last accepted version (**v2.3.23** when this line was written;
+> 10 assets: Windows installer, macOS `.dmg`, Linux deb / rpm / AppImage and the Arch
+> `.pkg.tar.zst`, plus 4 official rule-pack zips). Code and artifacts live on that release line:
+> [pingod/HanCast](https://github.com/pingod/HanCast). The upstream
+> [lanzeweie/HanCast](https://github.com/lanzeweie/HanCast) `main` branch is still at v2.1.0 (the
+> merge request bringing it up to date is open), so clone the fork for current source.
 
 CI publishes Windows (x64 NSIS installer), macOS (arm64 `.app` / `.dmg`) and Linux
 (deb / rpm / AppImage, plus a pacman-installable `.pkg.tar.zst`) artifacts for every tag —
@@ -188,7 +192,7 @@ See [docs/屏幕投屏.md](docs/屏幕投屏.md).
 
 ```bash
 # Clone the repo
-git clone https://github.com/lanzeweie/HanCast.git
+git clone https://github.com/pingod/HanCast.git
 cd HanCast
 
 # Install dependencies
