@@ -20,7 +20,9 @@ import {
   ffmpegDownloadStart as apiFfmpegDownloadStart,
   ffmpegDownloadStatus as apiFfmpegDownloadStatus,
   openFfmpegDir as apiOpenFfmpegDir,
+  notify,
 } from '@/api/commands'
+import { tt } from '@/i18n'
 
 export const useScreenCastStore = defineStore('screencast', () => {
   // ── State ──
@@ -40,6 +42,7 @@ export const useScreenCastStore = defineStore('screencast', () => {
   const downloading = ref(false)
   const reportLoading = ref(false)
   let downloadTimer: number | null = null
+  let lastAlertedError: string | null = null
 
   // ── Computed ──
   const isRunning = computed(() => state.value.running)
@@ -53,6 +56,15 @@ export const useScreenCastStore = defineStore('screencast', () => {
   const windows = computed(() => sources.value?.windows ?? [])
 
   // ── Actions ──
+
+  /** 屏幕投屏被电视拒绝时，面板里那行红字同样只有开着窗口才看得见 */
+  function alertScreen(reason: string, deviceId?: string | null) {
+    const who = deviceId
+      ? useDeviceStore().devices.find((d) => d.id === deviceId)?.name ?? deviceId
+      : null
+    void notify(tt('notify.castFailed'), who ? `${who}：${reason}` : reason)
+  }
+
   async function fetchSources() {
     sourcesLoading.value = true
     try {
@@ -182,6 +194,7 @@ export const useScreenCastStore = defineStore('screencast', () => {
       const result = await apiStartScreenCast(params)
       if (!result.ok) {
         lastError.value = result.error ?? '启动失败'
+        alertScreen(lastError.value, params.device_id)
         return false
       }
       await fetchStatus()
@@ -189,6 +202,7 @@ export const useScreenCastStore = defineStore('screencast', () => {
     } catch (err) {
       console.error('Failed to start screencast:', err)
       lastError.value = '启动失败'
+      alertScreen(String(err), params.device_id)
       return false
     } finally {
       starting.value = false
@@ -219,12 +233,15 @@ export const useScreenCastStore = defineStore('screencast', () => {
       await fetchStatus()
       if (failed.length) {
         const deviceStore = useDeviceStore()
-        stopWarning.value = {
-          devices: failed.map(
-            (id) => deviceStore.devices.find((d) => d.id === id)?.name ?? id
-          ),
-          reasons: reasons.filter(Boolean),
-        }
+        const names = failed.map(
+          (id) => deviceStore.devices.find((d) => d.id === id)?.name ?? id
+        )
+        stopWarning.value = { devices: names, reasons: reasons.filter(Boolean) }
+        const why = reasons.filter(Boolean).join('；')
+        void notify(
+          tt('notify.stopNotDelivered'),
+          `${names.join('、')}：${why || tt('notify.stopNotDeliveredBody')}`
+        )
       }
       stopping.value = false
     }
@@ -270,6 +287,12 @@ export const useScreenCastStore = defineStore('screencast', () => {
         state.value = event.payload
         if (event.payload.error) {
           lastError.value = event.payload.error
+          // 会话是自己死的（FFmpeg 退出、电视断流），窗口收起来时同样没人看得见；
+          // 终止与停止会各发一次同一句话，只报第一条。
+          if (event.payload.error !== lastAlertedError) {
+            lastAlertedError = event.payload.error
+            alertScreen(event.payload.error, event.payload.device_id)
+          }
         }
       })
       if (disposed) unlisten()

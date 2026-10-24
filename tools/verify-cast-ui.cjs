@@ -14,8 +14,10 @@ const { parse, compileScript, compileTemplate, compileStyle } = require('@vue/co
 
 const root = path.resolve(__dirname, '..')
 const storeFile = path.join(root, 'src/stores/cast.ts')
+const screenStoreFile = path.join(root, 'src/stores/screencast.ts')
 const controllerFile = path.join(root, 'src/components/CastController.vue')
 const storeSource = fs.readFileSync(storeFile, 'utf8')
+const screenStoreSource = fs.readFileSync(screenStoreFile, 'utf8')
 const controllerSource = fs.readFileSync(controllerFile, 'utf8')
 const { descriptor, errors: parseErrors } = parse(controllerSource, { filename: controllerFile })
 assert.deepEqual(parseErrors, [])
@@ -139,6 +141,8 @@ async function fixture(locale = 'en-US') {
   const calls = []
   // 系统通知记录：断言「失败必须落到 OS 通知」，而不是只写进界面红条
   const notified = []
+  // 设备表：投屏失败的通知要带设备名，测试里按需塞进去
+  const deviceList = vue.ref([])
   const handlers = {
     getCastState: async () => ({ sessions: {} }), getCastUrl: async () => info(),
     startCast: async () => {}, stopCast: async () => ({}), pauseCast: async () => {},
@@ -146,6 +150,16 @@ async function fixture(locale = 'en-US') {
     setMute: async () => {}, getAutostart: async () => true,
     notify: async (title, body) => { notified.push({ title, body }) },
     resolveShare: async () => ({ ...media, uri: 'https://invalid.test/high.mp4', quality: 'high' }),
+    // 屏幕投屏 store 的壳层命令：只为让真实 screencast.ts 能装起来，默认全走成功路径
+    listScreenSources: async () => ({ screens: [], windows: [], audio_inputs: [], ffmpeg: { ok: true } }),
+    startScreenCast: async () => ({ ok: true }),
+    stopScreenCast: async () => ({}),
+    getScreenCastStatus: async () => ({ running: false }),
+    setFfmpegPath: async () => ({ ok: true }),
+    ffmpegStatus: async () => ({ ok: true }),
+    ffmpegDownloadStart: async () => ({}),
+    ffmpegDownloadStatus: async () => null,
+    openFfmpegDir: async () => ({ ok: true }),
   }
   const api = Object.fromEntries(Object.keys(handlers).map(name => [name, (...args) => {
     calls.push({ name, args })
@@ -164,9 +178,10 @@ async function fixture(locale = 'en-US') {
   }
   imports['@/types/cast'] = evaluate(fs.readFileSync(path.join(root, 'src/types/cast.ts'), 'utf8'),
     path.join(root, 'src/types/cast.ts'), imports, clock, logs)
-  imports['@/stores/device'] = { useDeviceStore: pinia.defineStore('device', () => ({ devices: vue.ref([]) })) }
+  imports['@/stores/device'] = { useDeviceStore: pinia.defineStore('device', () => ({ devices: deviceList })) }
   const storeModule = evaluate(storeSource, storeFile, imports, clock, logs)
   imports['@/stores/cast'] = storeModule
+  const screenModule = evaluate(screenStoreSource, screenStoreFile, imports, clock, logs)
   const Controller = evaluate(script.content, controllerFile, imports, clock, logs).default
   Controller.render = evaluate(template.code, `${controllerFile}.render.js`, imports, clock, logs).render
   const body = node('body')
@@ -174,11 +189,12 @@ async function fixture(locale = 'en-US') {
   const renderer = makeRenderer(body)
   const storeRoot = pinia.createPinia()
   const showChild = vue.ref(true)
-  let store, instance
+  let store, screen, instance
   const app = renderer.createApp({
     setup() {
       instance = vue.getCurrentInstance()
       store = storeModule.useCastStore()
+      screen = screenModule.useScreenCastStore()
       return () => showChild.value ? vue.h(Controller) : vue.h('empty')
     },
   })
@@ -187,7 +203,7 @@ async function fixture(locale = 'en-US') {
   app.mount(container)
   await flush()
   return {
-    store, handlers, calls, clock, logs, listeners, body, showChild, notified,
+    store, screen, handlers, calls, clock, logs, listeners, body, showChild, notified, deviceList,
     get ui() { return instance.subTree.component.setupState },
     count(name) { return calls.filter(call => call.name === name).length },
     find(className) { return allNodes(body).find(el => el.props.class?.split(' ').includes(className)) },
@@ -615,6 +631,52 @@ test('cast failure and undelivered stop both raise a system notification', async
   await f.start()
   await f.store.stopCast('a')
   assert.deepEqual(f.notified, [], '正常停止不该打扰用户')
+})
+
+test('screen cast refusal, undelivered stop and mid-session error each raise one system notification', async f => {
+  const reason = '电视返回 HTTP 500：请在电视上打开「多屏互动/无线投屏/DLNA」'
+  f.deviceList.value = [{ id: 'tv1', name: '客厅 TCL' }]
+  f.handlers.startScreenCast = async () => ({ ok: false, error: reason })
+  assert.equal(await f.screen.start({ target: 'dlna', device_id: 'tv1', source: { type: 'screen' } }), false)
+  await flush()
+  assert.equal(f.notified.length, 1, '屏幕投屏被电视拒绝也要发系统通知')
+  assert.equal(f.notified[0].title, '«notify.castFailed»')
+  assert.ok(f.notified[0].body.startsWith('客厅 TCL：'), f.notified[0].body)
+  assert.ok(f.notified[0].body.includes(reason), '正文要留 Sidecar 原文')
+
+  // 只投给浏览器时没有设备名可带，正文就是原因本身
+  f.notified.length = 0
+  f.handlers.startScreenCast = async () => { throw new Error('FFmpeg 起不来') }
+  assert.equal(await f.screen.start({ target: 'browser', source: { type: 'screen' } }), false)
+  await flush()
+  assert.equal(f.notified.length, 1)
+  assert.ok(f.notified[0].body.includes('FFmpeg 起不来'), f.notified[0].body)
+  assert.ok(!f.notified[0].body.startsWith('：'), '不该硬凑一个空设备名前缀')
+
+  f.notified.length = 0
+  f.handlers.startScreenCast = async () => ({ ok: true })
+  assert.equal(await f.screen.start({ target: 'dlna', device_id: 'tv1', source: { type: 'screen' } }), true)
+  await flush()
+  assert.deepEqual(f.notified, [], '成功起播不该打扰用户')
+
+  f.handlers.stopScreenCast = async () => ({ control_failed: ['tv1'], reasons: { tv1: '控制接口不可达' } })
+  await f.screen.stop()
+  await flush()
+  assert.equal(f.notified.length, 1, '停止没送达也要通知')
+  assert.equal(f.notified[0].title, '«notify.stopNotDelivered»')
+  assert.match(f.notified[0].body, /客厅 TCL.*控制接口不可达/)
+
+  // 会话中途自己死了（状态事件带 error）：同一句话连递两次也只弹一次
+  f.notified.length = 0
+  f.handlers.stopScreenCast = async () => ({})
+  await f.screen.stop()
+  const dying = { running: true, target: 'dlna', device_id: 'tv1', error: '采集进程退出：wlgrab 连不上合成器' }
+  const emit = e => f.listeners.get('screen_cast_state_changed')({ payload: e })
+  await emit(dying)
+  await emit(dying)
+  assert.equal(f.notified.length, 1, '重复的终止事件不该连弹两条')
+  assert.match(f.notified[0].body, /wlgrab/)
+  assert.equal(f.screen.lastError, '采集进程退出：wlgrab 连不上合成器', '面板里仍要留着这句话')
 })
 
 test('preview never loads a video as an image and recovers after a broken cover', async f => {

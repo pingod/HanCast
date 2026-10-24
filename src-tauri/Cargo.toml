@@ -23,7 +23,7 @@ tokio = { version = "1", features = ["sync", "macros", "rt-multi-thread", "time"
 tauri-plugin-dialog = "2"
 tauri-plugin-autostart = "2"
 tauri-plugin-single-instance = "2"
-tauri-plugin-notification = "2"
+tauri-plugin-notification = "2.4"   # 与 npm @tauri-apps/plugin-notification ~2.4 主次版本必须一致，否则 tauri build 在 bundle 阶段直接拒
 base64 = "0.22"
 mime_guess = "2"
 chrono = "0.4"

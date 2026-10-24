@@ -385,15 +385,15 @@ Device Guard 管的是**接收投屏**方向：外部设备往本机推流时，
 | `ready` | 无（`data` 为 `{}`，`protocol_io.py:58`） | `hancast-backend/hancast_sidecar/main.py:110` | **无前端订阅者**（全仓 `listen(` 检索无命中） | Sidecar 启动完成、进入 `for line in sys.stdin` 主循环之前，握手用。壳层也不监听它 |
 | `device_found` | `id: string`、`name: string`（已被 `display_name` 覆盖）、`device_type: string`、`ip: string`、`port: number`、`status: string`、`is_default: boolean`、`manufacturer: string\|null`、`model_name: string\|null`、`udn: string`、`custom_name: string\|null`、`location: string` | `commands.py:281`（`_on_device_found`，载荷是 `Device.to_dict()`，`models/device.py:26-29`） | `src/stores/device.ts:122` | SSDP 收到 NOTIFY/搜索响应并完成描述抓取时。同一设备重复发现也会发，前端做 upsert（`device.ts:123-134`）。**v2.3.13 起有准入门槛**：描述里必须声明 `AVTransport` 服务（`ssdp.py:1074`、`ssdp.py:1169-1175`），路由器/NAS 这类「有 UPnP 描述但投不了屏」的设备不再发事件、也不进列表 |
 | `device_lost` | `id: string` | `commands.py:289`（`_on_device_lost`） | `src/stores/device.ts:139` | 收到 SSDP byebye（`ssdp.py:725-738`）或探活判定过期（`ssdp.py:722-723`、`discovery.device_stale_s`，`ssdp.py:747`） |
-| `cast_state_changed` | `status: string`、`device_id: string\|null`、`position: string`（`HH:MM:SS`）、`duration: string`（`HH:MM:SS`，见下注）、`volume: number`、`is_muted: boolean`、`media?: MediaInfo`（有媒体时才带） | `commands.py:323`（DLNA `TransportState` 变化回调）、`commands.py:439`（`start_cast` 后立即补发）、`commands.py:469`（`stop_cast` 逐设备发）、`commands.py:517`（`_emit_session_state`，会话轮询回调） | `src/stores/cast.ts:564` | 投屏状态机变化。**注意 `commands.py:311-321` 那条路径不带 `duration`**，前端要容错 |
+| `cast_state_changed` | `status: string`、`device_id: string\|null`、`position: string`（`HH:MM:SS`）、`duration: string`（`HH:MM:SS`，见下注）、`volume: number`、`is_muted: boolean`、`media?: MediaInfo`（有媒体时才带） | `commands.py:323`（DLNA `TransportState` 变化回调）、`commands.py:439`（`start_cast` 后立即补发）、`commands.py:469`（`stop_cast` 逐设备发）、`commands.py:517`（`_emit_session_state`，会话轮询回调） | `src/stores/cast.ts:653-724` | 投屏状态机变化。**注意 `commands.py:311-321` 那条路径不带 `duration`**，前端要容错 |
 | `cast_confirm_request` | `request_id: string`、`device: { ip, udn, friendly_name, model_name }`、`timeout: number`（秒） | `commands.py:950`（`_on_guard_confirm_request`） | `src/stores/guard.ts:126` | 外部设备向本机推流、且该来源不在信任/黑名单里时（`guard.py:188-238` → `240-272`）。前端收到后弹确认框并把窗口拉到前台（`guard.ts:141-148`） |
-| `screen_cast_state_changed` | 与 `screen_cast_status` 返回体**完全相同**：`running`、`target`、`source`、`device_id`、`session_id`、`watch_url`、`url`、`viewers`、`error`、`started_at`，外加 `pull`、`ffmpeg` | `screencast/manager.py:469`（`_emit()`，载荷就是 `self.status()`） | `src/stores/screencast.ts:156` | 屏幕投屏启动成功（`manager.py:167`）、停止（`manager.py:225`）、捕获出错、观众数变化时 |
+| `screen_cast_state_changed` | 与 `screen_cast_status` 返回体**完全相同**：`running`、`target`、`source`、`device_id`、`session_id`、`watch_url`、`url`、`viewers`、`error`、`started_at`，外加 `pull`、`ffmpeg` | `screencast/manager.py:469`（`_emit()`，载荷就是 `self.status()`） | `src/stores/screencast.ts:285-300` | 屏幕投屏启动成功（`manager.py:167`）、停止（`manager.py:225`）、捕获出错、观众数变化时 |
 | `update-available` | `has_update: boolean`、`current: string`、`latest: string`、`url: string`、`body: string`（≤500 字符）、`source: string` | `src-tauri/src/lib.rs:1229`（**壳层发出，不是 Python**） | `src/stores/update.ts:94` | 启动后台检查（`lib.rs:1201-1241`，睡 3s 后查 GitHub）命中新版本时。商店版本不会发 |
 | `autostart-changed` | `boolean`（新的自启状态） | `src-tauri/src/lib.rs:955`（`set_autostart` 命令末尾）、`src-tauri/src/lib.rs:1048`（托盘菜单勾选回调） | `src/stores/settings.ts:32`；**另有壳层自监听** `src-tauri/src/lib.rs:1258`（同步托盘勾选态） | 开机自启状态被任何一侧改动时。前端据此更新设置页开关，避免与托盘状态打架 |
 
 ### 3.2 一个死监听
 
-`src/stores/cast.ts:637` 注册了 `listen<{device_id?, message}>('cast_error', ...)`，但**整个 `hancast-backend/` 里没有任何 `emit_event("cast_error", ...)`**（全仓 `emit_event(` 检索只命中 `device_found` / `device_lost` / `cast_state_changed` / `cast_confirm_request` / `ready` / `screen_cast_state_changed`）。这个监听器永远不会被触发。投屏失败实际是通过 `cast_state_changed` 的 `status: "error"`（或 `start_cast` 的 invoke rejection）传出来的。
+`src/stores/cast.ts:728` 注册了 `listen<{device_id?, message}>('cast_error', ...)`，但**整个 `hancast-backend/` 里没有任何 `emit_event("cast_error", ...)`**（全仓 `emit_event(` 检索只命中 `device_found` / `device_lost` / `cast_state_changed` / `cast_confirm_request` / `ready` / `screen_cast_state_changed`）。这个监听器永远不会被触发。投屏失败实际是通过 `cast_state_changed` 的 `status: "error"`（或 `start_cast` 的 invoke rejection）传出来的。
 
 因为不存在发送方，`cast_error` **不计入 §0 的事件总数 8**。
 
@@ -406,7 +406,7 @@ const { listen } = await import('@tauri-apps/api/event')
 unlistenFns.push(await listen<Device>('device_found', (event) => { /* event.payload */ }))
 ```
 
-外层一律包 `try/catch`，非 Tauri 环境（浏览器 dev）静默跳过（`device.ts:118-146`、`guard.ts:119-152`、`update.ts:88-101`、`settings.ts:28-38`、`screencast.ts:150-160`）。
+外层一律包 `try/catch`，非 Tauri 环境（浏览器 dev）静默跳过（`device.ts:118-146`、`guard.ts:119-152`、`update.ts:88-101`、`settings.ts:28-38`、`screencast.ts:281-303`）。
 
 ---
 
@@ -441,7 +441,7 @@ async function addDevice(address: string): Promise<string | null> {
 
 要点：命令返回与 `device_found` 事件是**两条并行的更新通道**，必须做 upsert 而不是无脑 push。
 
-### 4.2 投屏控制 — `src/stores/cast.ts:386-427`
+### 4.2 投屏控制 — `src/stores/cast.ts:356-484`
 
 ```ts
 async function stopCast(deviceId?: string) {
@@ -543,7 +543,7 @@ async function onStart() {
 }
 ```
 
-store 侧的返回处理在 `src/stores/screencast.ts:66-85`：`result.ok === false` 时把 `result.error` 写进 `lastError` 并返回 `false`，**不抛异常**。
+store 侧的返回处理在 `src/stores/screencast.ts:189-211`：`result.ok === false` 时把 `result.error` 写进 `lastError` 并返回 `false`，**不抛异常**。
 
 ### 4.5 投屏确认（Device Guard）— `src/stores/guard.ts:72-86`
 
@@ -735,7 +735,7 @@ async function toggleAutostart() {
 | `index.ts` | 6 | 桶文件，统一再导出 | 只导出 `device` / `media` / `cast` / `settings` / `guard` / `update` 六个模块的类型。**`logs.ts` 与 `screencast.ts` 没有被它再导出**（`index.ts:1-6`），必须直接从各自路径 import |
 | `device.ts` | 12 | 设备发现结果 | `Device`：`id` / `name` / `type` / `ip` / `port` / `status` / `is_default` / `manufacturer?` / `model_name?` / `udn`。`type` 联合是 `'tv'\|'speaker'\|'box'\|'unknown'`（与后端不一致，见 §6.1）；缺 `custom_name`、`location` 两个后端实际会发的字段 |
 | `media.ts` | 23 | 媒体信息与画质档位 | `MediaQuality {id,label}`；`MediaInfo`：`media_type` / `uri` / `title` / `duration: number\|null` / `mime_type` / `file_size` / `thumbnail` / `qualities?` / `quality?` / `source_url?`；`MediaInputState = 'idle'\|'dragover'\|'input'\|'parsing'\|'ready'`。与后端 `MediaInfo.to_dict()`（`models/media.py:22-39`）字段一一对应，但 TS 侧少了 `via` / `author` / `bvid`（那三个在 `commands.ts:661-667` 的 `ShareResolveResult` 里补） |
-| `cast.ts` | 53 | 投屏状态与会话 | `CastState`（**前端展示态**，`position: number` 秒 + `positionTime`/`durationTime` 字符串）、`CastSession`（绑定设备的会话）、`CastUrlInfo`（`get_cast_url` 返回）、`createSession(deviceId, deviceName)` 工厂函数（`:41-52`，初始 `status: 'connecting'`、`volume: 80`）。注意这里的 `CastState` **不是**后端 `CastState.to_dict()` 的形状（后端 `position`/`duration` 都是 `HH:MM:SS` 字符串，`models/cast.py:16-27`），转换在 `stores/cast.ts:166-183` |
+| `cast.ts` | 53 | 投屏状态与会话 | `CastState`（**前端展示态**，`position: number` 秒 + `positionTime`/`durationTime` 字符串）、`CastSession`（绑定设备的会话）、`CastUrlInfo`（`get_cast_url` 返回）、`createSession(deviceId, deviceName)` 工厂函数（`:41-52`，初始 `status: 'connecting'`、`volume: 80`）。注意这里的 `CastState` **不是**后端 `CastState.to_dict()` 的形状（后端 `position`/`duration` 都是 `HH:MM:SS` 字符串，`models/cast.py:16-27`），转换在 `stores/cast.ts:190-236` |
 | `settings.ts` | 58 | 应用设置、网卡、后台参数 | `AppSettings`（对应 `config.to_dict()`）、`NetworkInterface` / `NetworkInterfacesInfo`、`ParamType = 'number'\|'bool'\|'enum'\|'text'\|'string'`、`ParamSpec`（含 `label_zh`/`label_en`/`help_zh`/`help_en`/`min`/`max`/`unit`/`options`/`value`/`overridden`）、`SaveParamsResult {ok, errors, specs}`、`DeviceLostEvent {id}`、`CastErrorEvent {message}`（**后者对应的事件从未被发出**，§3.2） |
 | `guard.ts` | 34 | 投屏确认 | `GuardDevice`（对应后端 `DeviceGuardEntry.to_dict()`，`guard.py:44-57`）、`GuardDevicesResponse {trusted, blacklisted}`、`GuardSettings {enabled, confirm_timeout}`、`CastConfirmRequest`（`cast_confirm_request` 事件载荷，`device` 只声明了 `ip`/`udn`/`friendly_name`/`model_name` 四个字段） |
 | `logs.ts` | 33 | 日志面板 | `LogLine {ts, module, level, msg, raw}`、`LogModule {id, label}`、`LogPage {lines, total, truncated, path, level, modules}`、`LogQuery {limit?, module?, level?, keyword?, include_older?}`。与 `logger.read_logs()` 返回体（`logger.py:207-215`）逐字段对应 |
@@ -766,7 +766,7 @@ async function toggleAutostart() {
 
 ### 6.4 `get_cast_state()` 不带参数时返回的不是 `CastState`
 
-前端封装签名是 `getCastState(deviceId?): Promise<CastState>`（`commands.ts:997`），但省略 `deviceId` 时后端返回 `{sessions, current}`（`commands.py:548-551`）。`stores/cast.ts:152` 只能 `as any` 绕开类型系统再手工解构。
+前端封装签名是 `getCastState(deviceId?): Promise<CastState>`（`commands.ts:997`），但省略 `deviceId` 时后端返回 `{sessions, current}`（`commands.py:548-551`）。`stores/cast.ts:193` 只能 `as any` 绕开类型系统再手工解构。
 
 同类问题：`get_cast_url` 的 `status` 大小写随分支变化 —— 带 `deviceId` 走 `session.get_cast_info()` 返回小写（`session.py:141`），不带则返回 DLNA 原生大写（`commands.py:568`）。前端用 `info.status.toUpperCase()` + 映射表统一（`cast.ts:196-208`）。
 

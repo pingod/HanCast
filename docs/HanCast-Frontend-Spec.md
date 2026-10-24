@@ -20,9 +20,9 @@
 | 状态 | `pinia` | ^2.1.7 |
 | 路由 | `vue-router` | ^4.2.5 |
 | 国际化 | `vue-i18n` | ^9.9.0 |
-| Tauri 桥 | `@tauri-apps/api` | ^2.0.0 |
+| Tauri 桥 | `@tauri-apps/api` | ~2.11.1（**必须与 Cargo.lock 的 `tauri` 同主次版本**，v2.3.21 起收紧——配对闸门见 [构建与发布.md](构建与发布.md) §3.4） |
 | Tauri 插件 | `@tauri-apps/plugin-dialog` | ^2.7.1 |
-| Tauri 插件 | `@tauri-apps/plugin-notification` | ^2.7.0 |
+| Tauri 插件 | `@tauri-apps/plugin-notification` | ~2.4.0（与 Rust `tauri-plugin-notification = "2.4"` 成对） |
 | Tauri 插件 | `@tauri-apps/plugin-shell` | ^2.0.0 |
 | 构建 | `vite` | ^5.0.0 |
 | 构建 | `@vitejs/plugin-vue` | ^5.0.0 |
@@ -45,7 +45,7 @@ npm scripts：`dev` = `vite`、`build` = `vue-tsc && vite build`、`build:sideca
 |---|---|---|
 | `tauri` | 2（features：`protocol-asset`、`tray-icon`） | 窗口/托盘/asset 协议 |
 | `tauri-plugin-shell` | 2 | 打开外部链接、执行进程 |
-| `tauri-plugin-notification` | 2 | 投屏失败/停止未送达的系统通知（2026-10-24 加） |
+| `tauri-plugin-notification` | 2.4 | 投屏失败/停止未送达的系统通知（2026-10-24 加；与 npm 侧 `~2.4.0` 成对，见 [构建与发布.md](构建与发布.md) §3.4） |
 | `tauri-plugin-clipboard-manager` | 2 | Rust 侧剪贴板（见 §10.1） |
 | `tauri-plugin-dialog` | 2 | 原生文件选择/消息框 |
 | `tauri-plugin-autostart` | 2 | 开机自启（非 MSIX 平台） |
@@ -206,7 +206,7 @@ default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src '
 
 `src/App.vue:43-52` 在 router-view 之外全局挂载 4 个模态：`GuardConfirmModal`(:46)、`UpdateModal`(:48)、`LogsPanel`(:50)、`AddDeviceModal`(:51)——它们需要跨路由可弹。另：非 DEV 构建禁用右键菜单（:26-39）；`onMounted` 拉取 `fetchSettings`（:31-32）。
 
-**App 的 setup 首先调用 `useDeviceStore()`、`useCastStore()`、`useScreenCastStore()`（`App.vue:19-24`）**。Pinia setup store 是单例，但其组件生命周期钩子归首次调用者；因此 device 的 30s 刷新与事件（`src/stores/device.ts:148-158`）、cast 的恢复/轮询/模拟进度与事件（`src/stores/cast.ts:727-741`）、screencast 的状态事件与下载轮询清理（`src/stores/screencast.ts:282-291`）均归 App 生命周期。历史上首次调用落在 HomeView 子树，进入设置会卸载这些订阅，返回又不会重跑单例 setup；本轮上移所有权修复，模态视图本身仍按路由挂载。cast 另用 `disposed` 防止根组件卸载后恢复请求重启轮询，并即时释放迟到的原生注册结果（`cast.ts:168-179`、`:221-225`、`:634-637`、`:736-741`）。
+**App 的 setup 首先调用 `useDeviceStore()`、`useCastStore()`、`useScreenCastStore()`（`App.vue:19-24`）**。Pinia setup store 是单例，但其组件生命周期钩子归首次调用者；因此 device 的 30s 刷新与事件（`src/stores/device.ts:148-158`）、cast 的恢复/轮询/模拟进度与事件（`src/stores/cast.ts:744-758`）、screencast 的状态事件与下载轮询清理（`src/stores/screencast.ts:305-314`）均归 App 生命周期。历史上首次调用落在 HomeView 子树，进入设置会卸载这些订阅，返回又不会重跑单例 setup；本轮上移所有权修复，模态视图本身仍按路由挂载。cast 另用 `disposed` 防止根组件卸载后恢复请求重启轮询，并即时释放迟到的原生注册结果（`cast.ts:168-179`、`:221-225`、`:634-637`、`:736-741`）。
 
 ---
 
@@ -235,7 +235,7 @@ default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src '
 | 17 | `PluginSettings.vue` | 解析插件管理（847 行）：`rule_inventory` 双段列表（脚本规则包 + 声明式规则）；导入 zip（dialog → base64 `<input>` 降级 :51-83）或 URL 导入；单条规则开关；官方索引查更新 / `plugin_pull` 安装（sha256 校验在壳层/Sidecar）；两段式删除确认 4s（:168-178）；`plugin_test` 试跑；解析失败台账（按域名分组，删域名/删单条/清空/复制/timeAgo） | 无 | 无 | 无（组件内直接调 `api/commands.ts`） | `SettingsView.vue:533`（展开区） |
 | 18 | `AutostartPromptModal.vue` | 首次投屏成功后的自启询问弹窗：开启（`toggleAutostart`）/跳过，都会 `markAsked`（localStorage `has_asked_autostart`） | `visible` | `close` | settings | `HomeView.vue:66-69`；内嵌 `Modal`(:34) |
 | 19 | `CastControl.vue` | 旧版内嵌投屏控制条（427 行）：画质选择器（qualities ≥ 2 才显示）+ 进度条 + 播放控制。**死代码**——全仓 grep 无任何 import | — | — | — | 无（未被挂载） |
-| 20 | `FfmpegDepsModal.vue` | 「需要下载运行依赖」弹窗（418 行，v2.3.11 FFmpeg 去捆绑）：逐依赖显示检测状态与真实异常原文（`ffmpeg_status` 的 `items/missing`）；按平台给出包管理器安装命令（`install_commands`）与「打开安装目录」（`open_ffmpeg_dir`）；「重新检测」走 `refresh=true`；「下载并继续」起后台下载（`ffmpeg_download_start`）后按 1s 轮询 `ffmpeg_download_status`（`screencast.ts:122`；后端进度写入节流 0.4s，`ffmpeg_deps.py:373`）渲染进度/速度；`done` 时带 `refresh=true` 重测一次并**自动收起弹窗**（`:24` 的 watcher——「下载并继续」的「继续」是回到投屏面板，由用户再点一次开始投屏，程序不自动重放），安装命令可一键复制（`writeClipboardText`） | 无（visible 由 `screencastStore.showDepsModal` 驱动） | 无 | screencast | `ScreenCastPanel.vue:419`；内嵌 `Modal`(:4) |
+| 20 | `FfmpegDepsModal.vue` | 「需要下载运行依赖」弹窗（418 行，v2.3.11 FFmpeg 去捆绑）：逐依赖显示检测状态与真实异常原文（`ffmpeg_status` 的 `items/missing`）；按平台给出包管理器安装命令（`install_commands`）与「打开安装目录」（`open_ffmpeg_dir`）；「重新检测」走 `refresh=true`；「下载并继续」起后台下载（`ffmpeg_download_start`）后按 1s 轮询 `ffmpeg_download_status`（`screencast.ts:134`；后端进度写入节流 0.4s，`ffmpeg_deps.py:373`）渲染进度/速度；`done` 时带 `refresh=true` 重测一次并**自动收起弹窗**（`:24` 的 watcher——「下载并继续」的「继续」是回到投屏面板，由用户再点一次开始投屏，程序不自动重放），安装命令可一键复制（`writeClipboardText`） | 无（visible 由 `screencastStore.showDepsModal` 驱动） | 无 | screencast | `ScreenCastPanel.vue:419`；内嵌 `Modal`(:4) |
 
 ---
 
@@ -253,7 +253,7 @@ default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src '
 | `theme.ts` | 49 | `mode: 'light'\|'dark'\|'system'`、内部响应式 `systemDark`、computed `applied`（:9-17；不是 `resolved`） | `apply`/`toggle`(:24-32)；`persist`(:19-22)：写 `data-theme` + `localStorage 'hancast-theme'`；非法已存模式回退 system；持续监听 matchMedia change 更新 systemDark，system 模式才更新 DOM，`onScopeDispose` 移除监听（:37-45，见 §7.2） | 无（matchMedia 非 Tauri 事件） | 无 | 无 |
 | `logs.ts` | 124 | `visible`、`page: LogPage\|null`、`query: LogQuery`、`level` | `open`/`close`、`refresh`（`TAIL_INTERVAL = 3000` :7；撞车时排队 `pendingRefresh` :33-36）、`toggleDebug`（setLogLevel DEBUG/INFO） | 无 | `get_logs`、`set_log_level`、`export_logs` | 无 |
 | `update.ts` | 131 | `info: UpdateInfo\|null`、`modalState: UpdateModalState`、`showModal`、`storeVersion` | `checkUpdate`（商店版跳过 :28-31）、`ignoreVersion`、`openDownload`(:71-76，window.open) | `update-available`(:94-97，Rust 启动 3s 后推送) | `check_update`、`ignore_update_version`、`is_store_version` | 无 |
-| `screencast.ts` | 327 | `state: ScreenCastState`、`sources: ScreenSources\|null`、`stopWarning`、`showDepsModal`(:37)、`ffmpegReport: FfmpegStatus\|null`(:38)、`downloadTask: FfmpegDownloadTask\|null`(:39)、`downloading`(:40)、`reportLoading`(:41)；computed `ffmpegOk`(:46) | `fetchSources`(:56-70，顺带把 `sources.ffmpeg` 回填进 `ffmpegReport`)、`refreshFfmpegReport`(:73-88，`refresh=false` 吃后端 30s 缓存，弹窗首开秒出)、`startFfmpegDownload`(:114-127，起任务后 1s `setInterval` 轮询 `pollDownload` :97-111，`done` 自动重测)、`resumeDownloadPolling`(:143-157，打开依赖弹窗时向后端对齐；下载定时器现在由 App 生命周期持有，路由切换不再触发 :287-291 的清理，旧「关面板就断」注释不再代表当前挂载关系)、`openFfmpegDir`(:129-139)、`openDepsModal`/`closeDepsModal`(:159-167)、`start`(:177-196)、`stop`(:198-231，`control_failed` → stopWarning，**借 `useDeviceStore` 把 device_id 翻译成设备名** :221)、`setFfmpegPath`(:233-247)、`dismissStopWarning`(:324) | `screen_cast_state_changed`(:268-274，迟到注册在卸载后立即释放 :275-276) | `list_screen_sources`、`start_screen_cast`、`stop_screen_cast`、`screen_cast_status`、`set_ffmpeg_path`、`ffmpeg_status`、`ffmpeg_download_start`、`ffmpeg_download_status`、`open_ffmpeg_dir` | **→ device**（设备 id 翻译成设备名） |
+| `screencast.ts` | 349 | `state: ScreenCastState`、`sources: ScreenSources\|null`、`stopWarning`、`showDepsModal`(:39)、`ffmpegReport: FfmpegStatus\|null`(:40)、`downloadTask: FfmpegDownloadTask\|null`(:41)、`downloading`(:42)、`reportLoading`(:43)；computed `ffmpegOk`(:49) | `fetchSources`(:68-84，顺带把 `sources.ffmpeg` 回填进 `ffmpegReport`)、`refreshFfmpegReport`(:85-101，`refresh=false` 吃后端 30s 缓存，弹窗首开秒出)、`startFfmpegDownload`(:126-140，起任务后 1s `setInterval` 轮询 `pollDownload` :109-125，`done` 自动重测)、`resumeDownloadPolling`(:155-170，打开依赖弹窗时向后端对齐；下载定时器现在由 App 生命周期持有，路由切换不再触发 :310-314 的清理，旧「关面板就断」注释不再代表当前挂载关系)、`openFfmpegDir`(:141-154)、`openDepsModal`/`closeDepsModal`(:171-179)、`start`(:189-211)、`stop`(:212-249，`control_failed` → stopWarning，**借 `useDeviceStore` 把 device_id 翻译成设备名** :236-237)、`setFfmpegPath`(:250-265)、`dismissStopWarning`(:347) | `screen_cast_state_changed`(:285-300，迟到注册在卸载后立即释放 :298-299) | `list_screen_sources`、`start_screen_cast`、`stop_screen_cast`、`screen_cast_status`、`set_ffmpeg_path`、`ffmpeg_status`、`ffmpeg_download_start`、`ffmpeg_download_status`、`open_ffmpeg_dir` | **→ device**（设备 id 翻译成设备名）；**失败出口**：`start` 被拒/抛错、`stop` 的 `control_failed`、状态事件里的 `error` 三种各经 `alertScreen()`（:61-67）发一条系统通知，同一句 error 去重（`lastAlertedError` :45） |
 **store 间耦合共两处**：`screencast → device` 与 2026-10-24 起的 `cast → device`（`deviceLabel()` 在首次投屏失败时查设备名，那时本地还没有会话）。此前这里写的是「`screencast → device` 是唯一一处」，那句现在不成立了。
 
 ---
@@ -467,14 +467,14 @@ Modal 打开后聚焦 dialog，自带 Escape 关闭、Tab/Shift+Tab 循环与关
 
 ### 10.7 `stop_cast` 的 `control_failed` 不能吞
 
-`lib.rs:455-458` 注释：本地会话已释放、但电视没收到 Stop 时，前端要靠返回体里的 `control_failed` 解释「界面停了、电视还在播」。落点：`cast.ts:422-466`（stopCast 在 finally 释放仍属于本次操作的会话 + 置 `stopWarning`，不会删掉等待 Stop 时新开的同设备会话）→ `StopWarningBanner`（`HomeView.vue:53-57`）；屏幕投屏同款逻辑 `screencast.ts:198-231`。类型定义 `StopCastResult`/`StopWarning` 在 `commands.ts:1103-1117`。
+`lib.rs:455-458` 注释：本地会话已释放、但电视没收到 Stop 时，前端要靠返回体里的 `control_failed` 解释「界面停了、电视还在播」。落点：`cast.ts:438-484`（stopCast 在 finally 释放仍属于本次操作的会话 + 置 `stopWarning`，不会删掉等待 Stop 时新开的同设备会话）→ `StopWarningBanner`（`HomeView.vue:53-57`）；屏幕投屏同款逻辑 `screencast.ts:212-249`。类型定义 `StopCastResult`/`StopWarning` 在 `commands.ts:1103-1117`。
 
 ### 10.8 进度条与轮询的打架：主动解锁 + 单飞 + 操作代次
 
 历史上解锁逻辑放在无人消费的 computed 中，惰性 getter 不执行，seek 显示可能一直锁住；轮询也曾可重叠，并用只向前的位置合并掩盖旧响应。本轮分别处理：
 
 - **组件交互锁**：`CastController.vue:145-149` 用主动 `watch` 观察位置、时长和锁目标，距目标小于 3 秒即解锁；seek 请求完成（失败同样返回）或 5s 兜底也解锁。`seekRequest` 保证旧请求结束不释放新拖动的锁（`:199-220`）。切设备、隐藏控制器、卸载都重置交互并清除定时器（`:151-163`）。音量仍为 50ms 防抖，但回调捕获操作时的设备 id，不向后来聚焦的设备发音量（`:112-121`）。
-- **轮询单飞与生命周期代次**：`src/stores/cast.ts:221-288` 每 1s 触发一次检查；`pollInFlight` 保证整个逐设备扫描只有一轮在途，慢请求期间跳过 tick。`pollEpoch` 隔离 stop/restart，旧轮响应无权写回；停止定时器不会提前释放在途锁，只有 `finally` 释放。因此不是「每秒必有一次新请求」。
+- **轮询单飞与生命周期代次**：`src/stores/cast.ts:237-305` 每 1s 触发一次检查；`pollInFlight` 保证整个逐设备扫描只有一轮在途，慢请求期间跳过 tick。`pollEpoch` 隔离 stop/restart，旧轮响应无权写回；停止定时器不会提前释放在途锁，只有 `finally` 释放。因此不是「每秒必有一次新请求」。
 - **逐设备操作代次**：start/stop/pause/resume/seek/画质切换替换设备 token（`cast.ts:41-50`、`:341-597`）；轮询跳过 pending 操作，返回时检查 epoch、会话仍存在与 token 身份（`:243-250`）。旧 start/stop/seek/画质恢复的会话写回不能覆盖同设备新操作，首次恢复 `fetchState` 也检查 token 快照（`:175-192`）。新鲜轮询位置允许合法回退（向后 seek），仅 playing/paused 时位置与时长全零的样本不采纳（`:261-271`）；这不是后端取消机制，也不代表无 token 的事件流已能辨认旧响应。
 
 播控错误写入 `lastError`，由首页与控制器显示原始原因（`HomeView.vue:49-52`、`CastController.vue:244-248`）。seek/画质失败后如当前会话仍 playing 会恢复模拟进度；画质恢复位置最多试 4 次，最后一次失败不再静默吞掉（`cast.ts:544-596`）。画质 select 在请求后回读当前会话，失败时复位所选档位（`CastController.vue:54-60`）。上述为前端防护，不等于电视已执行命令；本轮验证边界见附录。
@@ -514,6 +514,6 @@ Modal 打开后聚焦 dialog，自带 Escape 关闭、Tab/Shift+Tab 循环与关
 
 2026-10-24 本轮补充：完整阅读本文，以及最新 App、HomeView/SettingsView、DeviceCard/List、MediaInput、Modal/CustomSelect、CastController、media/theme/cast/device/screencast stores、两份 styles 与 main.ts；核对相关工作区 diff。只更新受影响事实，不将旧取证日期/计数整体换成新结果。
 
-**本轮验证结果与边界**：`tools/verify-media-theme.cjs` 的 73 项、`tools/verify-cast-ui.cjs` 22 项（封面 1 项 + 2026-10-24 系统通知 1 项）、`tools/verify-app-lifecycle.cjs` 的 2 项均通过（合计 97 个不同用例，按受影响部分分批运行，未跑全仓测试）。这些测试编译真实源码并使用 Vue/Pinia，但命令/设备/计时器为内存替身，不访问 Sidecar、网络或用户设置。类型检查与最终 Vite 构建通过；中英各 324 个文案键一致。
+**本轮验证结果与边界**：`tools/verify-media-theme.cjs` 的 73 项、`tools/verify-cast-ui.cjs` 23 项（封面 1 项 + 系统通知 2 项：媒体投屏与屏幕投屏各一条）、`tools/verify-app-lifecycle.cjs` 的 2 项均通过（合计 98 个不同用例，按受影响部分分批运行，未跑全仓测试）。这些测试编译真实源码并使用 Vue/Pinia，但命令/设备/计时器为内存替身，不访问 Sidecar、网络或用户设置。类型检查与最终 Vite 构建通过；中英各 324 个文案键一致。
 
 浏览器运行真实前端（内建 mock 设备），已验 346×472 / 434×634 / 800×900 无横向溢出，及英文设置/高级参数、键盘下拉选择、日志弹窗焦点与边界、屏幕面板、解析→投屏控制→暂停/停止/清空。最终 [浅色截图](images/ui-native-light.png) / [深色截图](images/ui-native-dark.png) 已保留。不得据此声称真实电视投屏成功或三平台 WebView/安装包验证通过；后端待修问题见 [架构总览 §11](架构总览.md#11-2026-10-24-架构复查与增强顺序)。

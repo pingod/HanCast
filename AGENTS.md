@@ -231,7 +231,7 @@ HanCast/
 
 事件总账：**Sidecar 主动推送 6 条**（`ready`、`device_found`、`device_lost`、`cast_state_changed`、
 `cast_confirm_request`、`screen_cast_state_changed`），Rust 侧另发 2 条（`update-available`、`autostart-changed`）；
-前端合计监听 8 条。`ready` 两侧都没有订阅者（只作握手痕迹），`cast_error` 是前端遗留的死监听（`src/stores/cast.ts:637`）。
+前端合计监听 8 条。`ready` 两侧都没有订阅者（只作握手痕迹），`cast_error` 是前端遗留的死监听（`src/stores/cast.ts:728`）。
 完整清单与触发时机见 docs/HanCast-Frontend-API.md。
 
 ### Tauri 命令列表（节选，完整清单以 `src-tauri/src/lib.rs` 的 `generate_handler!`（lib.rs:1373-1440，**66 条**）为准）
@@ -303,9 +303,9 @@ Rust 命令名与 Sidecar `cmd` 名不一定同名（例如 Rust 的 `plugin_lis
 ### 前端 (package.json)
 ```json
 {
-  "@tauri-apps/api": "^2.0.0",
+  "@tauri-apps/api": "~2.11.1",
   "@tauri-apps/plugin-dialog": "^2.7.1",
-  "@tauri-apps/plugin-notification": "^2.7.0",
+  "@tauri-apps/plugin-notification": "~2.4.0",
   "@tauri-apps/plugin-shell": "^2.0.0",
   "pinia": "^2.1.7",
   "vue": "^3.4.0",
@@ -324,11 +324,19 @@ tauri-plugin-clipboard-manager = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-autostart = "2"
 tauri-plugin-single-instance = "2"
-tauri-plugin-notification = "2"
+tauri-plugin-notification = "2.4"   # 与 npm 侧必须同主次版本（见下）
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["sync", "macros", "rt-multi-thread", "time"] }
 ```
+
+> **npm 与 Rust 的 Tauri 包必须同主次版本**（v2.3.21 踩实）：`tauri build` 在 bundle 阶段做配对检查，
+> 不一致直接三平台全失败（`Found version mismatched Tauri packages … tauri (v2.11.5) : @tauri-apps/api (v2.12.4)`），
+> 而且 `cargo check` / `vue-tsc` / `vite build` **全都不会**提醒。坑在于 npm 侧 `@tauri-apps/plugin-*` 会拽着
+> `@tauri-apps/api` 往上涨：`plugin-notification@2.7.0` 要求 `api ^2.12.0`，于是 `^2.0.0` 这种宽范围把 api 顶到
+> 2.12.4，而 Cargo.lock 的 `tauri` 还是 2.11.5。所以本仓把 `@tauri-apps/api` 写成 `~2.11.1`、
+> 通知插件写成 `~2.4.0` / `tauri-plugin-notification = "2.4"`，**成对改**才有效；CI 用 `npm ci`，
+> 真正说了算的是 `package-lock.json` + `src-tauri/Cargo.lock` 这两把锁。
 
 ### Python (pyproject.toml)
 ```toml
@@ -551,12 +559,12 @@ app 打出来没有 mpv，反倒把 44 MB 的 `mpv.tar.gz` 打进 bundle。
 里除可执行文件外的依赖，合并复制到 `src-tauri/` 根部，这样它们才能被上面的 `*.dll` / `*.pyd` / `*.so` glob 捕获。
 Windows/macOS 上可执行文件留在 `hancast-sidecar/` 目录里供 `externalBin` 使用，不做重复。
 
-⚠️ **Linux 是三平台里唯一连可执行文件一起提升的**（`copy_executable=True`，`build_sidecar.py:122`、判定在 `:296`）：
+⚠️ **Linux 是三平台里唯一连可执行文件一起提升的**（`copy_executable=True`，`build_sidecar.py:122`、判定在 `:299`）：
 Nuitka standalone 的运行时依赖是**相对可执行文件自身目录**解析的——`libpython3.12.so.1.0` 走 `DT_NEEDED` + `$ORIGIN`，
 `lxml/etree.so` 这类扩展模块走 exe 同级派生的绝对路径（不是 soname 查表，所以 `LD_LIBRARY_PATH`／RPATH 都救不回来）。
 而 Tauri 的 Linux 打包会把 `externalBin` 放 `/usr/bin`、`bundle.resources` 放 `/usr/lib/HanCast`，两者被拆开，
 装完就是 `exit 127`——v2.3.16 在 CachyOS/Hyprland 上「一启动就崩」的第一条真因。
-所以 Linux 侧 dist 落在 `src-tauri/target/sidecar-dist/`（`:298`，本就是 gitignore 的暂存位置，
+所以 Linux 侧 dist 落在 `src-tauri/target/sidecar-dist/`（`:301`，本就是 gitignore 的暂存位置，
 腾出根目录名给 exe——同名文件与目录不能共存），exe 平铺成 `src-tauri/hancast-sidecar`，
 由 `tauri.linux.conf.json` 的 `resources: ["hancast-sidecar", ...]` 带进 `/usr/lib/HanCast/`，
 `externalBin` 因此置空（留一条就会把缺依赖的半份产物重新装回 `/usr/bin`）。
@@ -720,10 +728,11 @@ alpha 保持 0，Hyprland 直接把后面的桌面（还带模糊）透出来，
    投屏请求过 Device Guard 确认（`security/guard.py`），并且**只在本机使用时开启屏幕投屏**。
    > 这条曾被写成「仅监听 127.0.0.1，不暴露到网络」，是与实现相反的历史描述，已按代码更正。
 4. **Sidecar 通信**：stdin/stdout 管道，不暴露网络端口
-5. **投屏失败必须让用户看见**：窗口收进托盘时界面红条没人看得到，所以 `start_cast` 失败与
-   「停止未送达」两条路径都会发**系统通知**（`src/api/commands.ts` 的 `notify()` →
-   `tauri-plugin-notification`，capability `notification:default`）。权限只在真要发时申请，
-   被拒或不在 Tauri 里就静默降级——**不许**为此弹窗阻塞或改投屏流程；正文用的是 Sidecar 原文，
+5. **投屏失败必须让用户看见**：窗口收进托盘时界面红条没人看得到，所以媒体投屏的 `start_cast`
+   失败、「停止未送达」，以及屏幕投屏的被拒 / 未送达 / 会话中途报错，**五条路径**都发系统通知
+   （`src/api/commands.ts` 的 `notify()` → `tauri-plugin-notification`，capability
+   `notification:default`；屏幕投屏那侧的去重在 `src/stores/screencast.ts:45`）。权限只在真要发时
+   申请，被拒或不在 Tauri 里就静默降级——**不许**为此弹窗阻塞或改投屏流程；正文用的是 Sidecar 原文，
    所以 macOS 上每次重新打包（linker-signed 换身份）后系统通知权限都要重新授予。
 6. **规则包沙箱**：站点脚本跑在 QuickJS 里（`media/rules/jsruntime.py`），只有 `host.*` 受限接口，
    拿不到 Python 运行时；导入侧限额见 `media/rules/jsplugins.py:44-47`
