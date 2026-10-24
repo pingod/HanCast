@@ -1,4 +1,6 @@
 mod browser;
+#[cfg(target_os = "macos")]
+mod macos_notify;
 mod sidecar;
 
 use serde::{Deserialize, Serialize};
@@ -901,6 +903,22 @@ async fn open_ffmpeg_dir(
     Ok(serde_json::json!({"ok": true, "path": dir}))
 }
 
+/// 系统通知。macOS 走 `UNUserNotificationCenter`（理由见 `macos_notify` 里的实测记录），
+/// 其余平台返回错误，让前端退回 `tauri-plugin-notification`——那两条路径是好的。
+#[tauri::command]
+fn notify_os(title: String, body: String) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        macos_notify::send(&title, &body)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (title, body);
+        Err("本平台由前端走通知插件".into())
+    }
+}
+
+
 // ── Export Logs ──
 
 /// 应用内查看日志（分模块/级别/关键字过滤），排错时不用再去翻文件
@@ -1491,6 +1509,7 @@ pub fn run() {
             ffmpeg_download_start,
             ffmpeg_download_status,
             open_ffmpeg_dir,
+            notify_os,
             export_logs,
             get_logs,
             set_log_level,

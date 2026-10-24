@@ -2,7 +2,7 @@
 
 > 回答一个问题：前端 `invoke()` 出去的每一条命令，究竟由壳层（Rust/Tauri）就地执行、还是转发给 Sidecar（Python 后台进程）；它的入参、返回结构、可能错误，以及 Sidecar 主动推给前端的事件分别是什么。
 >
-> 最后校对：2026-10-15，对应版本 v2.3.13（`package.json`）
+> 最后校对：2026-10-24，对应版本 v2.3.22（`package.json`）；本轮只补 `notify_os` 与投屏失败通知链路，其余沿用 2.3.13 的取证记录
 
 ---
 
@@ -11,7 +11,7 @@
 | 项 | 数量 | 出处 |
 | --- | --- | --- |
 | **命令总数** | **66** | `src-tauri/src/lib.rs:1373-1440`（`generate_handler!` 注册表，逐条数过） |
-| ├─ 壳层本地执行 | 9 | `minimize_window` / `close_window` / `read_clipboard` / `write_clipboard` / `export_logs` / `is_store_version` / `get_autostart` / `set_autostart` / `open_ffmpeg_dir`（v2.3.11，先下发 `ffmpeg_status` 取目录再调系统文件管理器，`lib.rs:817-844`） |
+| ├─ 壳层本地执行 | 10 | `minimize_window` / `close_window` / `read_clipboard` / `write_clipboard` / `export_logs` / `is_store_version` / `get_autostart` / `set_autostart` / `open_ffmpeg_dir`（v2.3.11，先下发 `ffmpeg_status` 取目录再调系统文件管理器，`lib.rs:817-844`）/ `notify_os`（v2.3.22，macOS 走 `UNUserNotificationCenter`，其余平台回 `Err` 让前端退回通知插件） |
 | └─ 转发 Sidecar | 57 | 其余全部走 `sidecar.send_command(...)` |
 | **事件总数** | **8** | 见 §3.1 表（Python 侧 6 + 壳层侧 2） |
 | 前端封装函数 | 65 | `src/api/commands.ts` 中 `export async function` 计数 |
@@ -224,6 +224,7 @@ Sidecar 侧还有两条**前端调不到**的命令：`unhide_device`（`command
 | `ffmpeg_download_start` | `ffmpegDownloadStart()` `commands.ts:1334` | 无 | `{ok:true, task:{status, stage, ...}}`；已在下 → `already_running` | Sidecar | 起不来后台线程时 `{ok:false,error}`；压缩包 >512MB 直接拒（`ffmpeg_deps.py:448-469`） |
 | `ffmpeg_download_status` | `ffmpegDownloadStatus()` `commands.ts:1339` | 无 | 后台任务快照（`status/stage/received_bytes/total_bytes/speed/path/error`），`Command_TIMEOUT=60s` 所以下载绝不占住命令循环（`ffmpeg_deps.py:470-474`） | Sidecar | 通用 |
 | `open_ffmpeg_dir` | `openFfmpegDir()` `commands.ts:1345` | 无 | `{ok:true, path}`（回显目录，成败由调用方按「有没有窗口」判断） | **壳层就地**（`lib.rs:817-844`） | `Sidecar 未返回 FFmpeg 目录`、`目录创建失败: <e>`、`无法打开目录: <e>`；路径由 Sidecar 的 `managed_dir` 给出，**不接受前端传入**，否则等于开放「用资源管理器打开任意路径」；**只 spawn 不 wait**——`xdg-open` 活到文件管理器关闭为止，等它等于把按钮按死在命令循环里 |
+| `notify_os` | `notify()` `commands.ts:1414`（内部先 `raiseIfHidden()` `:1401`） | `title: string`、`body: string` | `Ok(())` 或 `Err(msg)` | **壳层就地**（`lib.rs:909`；macOS 实现在 `src-tauri/src/macos_notify.rs`） | macOS 用 `UNUserNotificationCenter`——插件那条路走已废弃的 `NSUserNotificationCenter`，实测只入通知中心不弹横幅；**非 macOS 一律回 `Err("本平台由前端走通知插件")`**，前端 catch 后改调 `tauri-plugin-notification`。通知失败从不影响投屏本身 |
 
 壳层定义：`lib.rs:735-844`。Sidecar 注册 `commands.py:185-192`、处理函数 `commands.py:1041-1078`，投屏实现在 `screencast/manager.py`、依赖检测与下载在 `utils/ffmpeg_deps.py`。
 
@@ -810,7 +811,7 @@ Sidecar 实现了（`commands.py:381-389`）并注册在 `_commands` 里（`comm
 
 ---
 
-## 7. 快速参考表（66 条）
+## 7. 快速参考表（67 条）
 
 执行层：**壳** = 壳层本地，**SC** = Sidecar。
 
@@ -882,6 +883,7 @@ Sidecar 实现了（`commands.py:381-389`）并注册在 `_commands` 里（`comm
 | 64 | `is_store_version` | 判定是否微软商店（MSIX）版本 | 壳 |
 | 65 | `get_autostart` | 读开机自启状态（MSIX / 经典两套实现） | 壳 |
 | 66 | `set_autostart` | 写开机自启状态，成功后 emit `autostart-changed` | 壳 |
+| 67 | `notify_os` | 发一条系统通知（macOS 走 `UNUserNotificationCenter`，其余平台回 `Err` 让前端退回插件） | 壳 |
 
 **8 个事件**（详见 §3.1）：`ready`、`device_found`、`device_lost`、`cast_state_changed`、`cast_confirm_request`、`screen_cast_state_changed`、`update-available`、`autostart-changed`。
 

@@ -1,7 +1,7 @@
 [package]
 name = "HanCast"
 # version synced from tauri.conf.json
-version = "2.3.21"
+version = "2.3.22"
 description = "HanCast: A cross-platform media casting application (fork of xfangfang/Macast)"
 authors = ["lanzeweie@foxmail.com"]
 edition = "2021"
@@ -27,6 +27,17 @@ tauri-plugin-notification = "2.4"   # 与 npm @tauri-apps/plugin-notification ~2
 base64 = "0.22"
 mime_guess = "2"
 chrono = "0.4"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# macOS 的系统通知不走 tauri-plugin-notification：它依赖的 NSUserNotificationCenter 在当前 macOS 上
+# 只把消息存进通知中心、不再弹横幅（2026-10-24 实测 presented=0）。这里直接用 UNUserNotificationCenter。
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-user-notifications = { version = "0.3", features = [
+  "UNUserNotificationCenter", "UNNotificationContent", "UNNotificationRequest",
+  "UNNotificationTrigger", "UNNotificationSettings", "NSString_UserNotifications", "block2",
+] }
+block2 = "0.6"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [

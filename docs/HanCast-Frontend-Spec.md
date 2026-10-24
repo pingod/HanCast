@@ -2,7 +2,7 @@
 
 > 本文档回答：HanCast 桌面端（Tauri 2 + Vue 3）的界面层是怎么搭起来的——窗口壳层、路由视图、组件与 Store 全量清单、真实数据流时序、样式与国际化机制、浏览器 mock 模式，以及写代码前必须知道的约束与坑。
 >
-> 最后校对：2026-10-24，对应版本 v2.3.21
+> 最后校对：2026-10-24，对应版本 v2.3.22
 
 术语约定：**Sidecar** = Python 后台进程（`hancast-backend/`，打包为 `hancast-sidecar`）；**壳层** = Rust/Tauri 层（`src-tauri/`）；**规则包** = JS 解析插件 zip；**声明式规则** = JSON 站点规则；**屏幕投屏** = screencast（把电脑屏幕投出去）；**接收投屏** = 本机作为 DLNA 渲染端被别的设备投；**投屏确认** = Device Guard；**后台参数** = `params.py` 可调项。
 
@@ -131,7 +131,7 @@ default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src '
 
 ### 2.7 capabilities（`src-tauri/capabilities/default.json`）
 
-窗口范围 `["main"]`。权限：`core:default`、`core:window:allow-start-dragging`（自定义标题栏拖拽）、`core:window:allow-minimize/hide/show/set-focus`、`core:event:default`、`shell:allow-open/execute/spawn`、`clipboard-manager:allow-write-text/read-text`、`dialog:default`、`autostart:default`、`notification:default`（投屏失败要能落到 OS 通知；权限在真要发通知时才申请，被拒只降级不报错）。
+窗口范围 `["main"]`。权限：`core:default`、`core:window:allow-start-dragging`（自定义标题栏拖拽）、`core:window:allow-minimize/hide/show/set-focus`、`core:event:default`、`shell:allow-open/execute/spawn`、`clipboard-manager:allow-write-text/read-text`、`dialog:default`、`autostart:default`、`notification:default`（投屏失败要能落到 OS 通知；权限在真要发通知时才申请，被拒只降级不报错）、`core:window:allow-is-visible`（v2.3.22：窗口收进托盘时把失败带回前台，只在真不可见时才 `show()+setFocus()`，避免抢焦点）。
 
 ### 2.8 壳层其他与 UI 相关的行为
 
@@ -245,7 +245,7 @@ default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src '
 
 | Store | 行数 | 核心 state（类型） | 主要 actions | 订阅事件 | 调用的壳层命令 | 与其他 store 耦合 |
 |---|---|---|---|---|---|---|
-| `cast.ts` | 811 | `sessions: Record<string, CastSession>`、`focusedDeviceId: string\|null`、`showController`、`stopWarning: StopWarning\|null`、`lastError: string\|null`、`qualitySwitching`、`showAutostartPrompt`、`loading`；兼容用 computed `castState`（:103-127，把多设备折叠成聚焦设备视图） | `fetchState`(:190-236，恢复时也校验操作代次)、`startCast`(:356-417)、`stopCast`(:438-484)、`switchQuality`(:527-572，重解析 + restorePosition 最多 4 次 seek)、pause/resume/seek/setVolume/setMute、`startPolling`（1s tick、单飞与 epoch/逐设备操作 token 过滤旧响应，:237-305，见 §10.8）、`startSim`(:306-329，前端每秒 +1 模拟进度)、`checkAutostartPrompt`(:418-437，localStorage `has_asked_autostart` + 6s 延迟)、`openController`/`dismissStopWarning`/`dismissError` | `cast_state_changed`(:653-724)、`cast_error`(:728-738) | `get_cast_state`、`start_cast`、`stop_cast`、`pause_cast`、`resume_cast`、`seek_cast`、`set_volume`、`set_mute`、`get_cast_url` | **→ device**（`deviceLabel()` :60-66 在首次投屏失败时查设备名，本地那时会话还没建起来）；**失败出口**：`startCast` 失败与 `stopCast` 的 `control_failed` 除写 `lastError`/`stopWarning` 外还经 `alertDevice()`（:67-72）调 `notify()` 发系统通知——标题走 `tt()`、正文是 Sidecar 原文 |
+| `cast.ts` | 811 | `sessions: Record<string, CastSession>`、`focusedDeviceId: string\|null`、`showController`、`stopWarning: StopWarning\|null`、`lastError: string\|null`、`qualitySwitching`、`showAutostartPrompt`、`loading`；兼容用 computed `castState`（:103-127，把多设备折叠成聚焦设备视图） | `fetchState`(:190-236，恢复时也校验操作代次)、`startCast`(:356-417)、`stopCast`(:438-484)、`switchQuality`(:527-572，重解析 + restorePosition 最多 4 次 seek)、pause/resume/seek/setVolume/setMute、`startPolling`（1s tick、单飞与 epoch/逐设备操作 token 过滤旧响应，:237-305，见 §10.8）、`startSim`(:306-329，前端每秒 +1 模拟进度)、`checkAutostartPrompt`(:418-437，localStorage `has_asked_autostart` + 6s 延迟)、`openController`/`dismissStopWarning`/`dismissError` | `cast_state_changed`(:653-724)、`cast_error`(:728-738) | `get_cast_state`、`start_cast`、`stop_cast`、`pause_cast`、`resume_cast`、`seek_cast`、`set_volume`、`set_mute`、`get_cast_url` | **→ device**（`deviceLabel()` :60-66 在首次投屏失败时查设备名，本地那时会话还没建起来）；**失败出口**：`startCast` 失败与 `stopCast` 的 `control_failed` 除写 `lastError`/`stopWarning` 外还经 `alertDevice()`（:67-72）调 `notify()` 发系统通知并把隐藏窗口带回前台——标题走 `tt()`、正文是 Sidecar 原文 |
 | `device.ts` | 179 | `devices: Device[]`、`selectedDevice`、`manualDevices`、`showAddModal` | `fetchDevices`（30s 自动取列表 :148-152）、`refresh`（手动发现 :38-47）、`addDevice`(:94-112，直接并入设备列表)、`openAddModal`、rename/setDefault/hide | `device_found`(:121-135，upsert)、`device_lost`(:138-142) | `get_devices`、`refresh_devices`、`add_device`、`get_manual_devices`、`rename_device`、`remove_device`、`hide_device`、`set_default_device` | 无 |
 | `media.ts` | 230 | `state: 'idle'\|'dragover'\|'input'\|'parsing'\|'ready'`、`mediaInfo: MediaInfo\|null`、`localFile: File\|null`、`urlInput`、`error`、`ledgerHint` | `parseFile`(:83-116，路径字符串→Tauri；File 对象→本地元数据 + localFile，预览 URL 由 MediaInput 生成)、`parseUrl`(:124-203，见 §6 链路 1)、`setInputChange`/`reset` 递增 `parseGeneration` 使旧请求失效（:42-78）；新解析清空旧预览，仅最新代次可写回成功/失败，直链降级容忍畸形百分号（:173-180）；`setThumbnail` | 无 | `parse_media_file`、（经 `resolveShare`）`resolve_share` + `get_resolve_result` | 无 |
 | `guard.ts` | 190 | `pendingRequest: CastConfirmRequest\|null`、`countdown`、`settings: GuardSettings`、`trustedDevices`/`blacklistedDevices: GuardDevice[]`、`loading` | `handleResponse`(:72-86)、`fetchDevices`、`fetchSettings`、`removeDevice`、`setPolicy`、倒计时（到 0 自动拒绝 `handleResponse(false,'once')` :33-39）；`setupListeners` 在 `onMounted` 之外也被立即调用一次（:171，保证 App 级弹窗不依赖组件挂载时机） | `cast_confirm_request`(:126-149：guard 禁用时自动批准 :129-132；已有 pending 时拒绝新请求 :134-137；`win.show()+setFocus()` 把窗口拉到前台 :141-148) | `respond_cast_confirm`、`get_guard_devices`、`remove_guard_device`、`set_guard_policy`、`get_guard_settings`、`save_guard_settings` | 无 |

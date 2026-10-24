@@ -12,7 +12,7 @@
 | --- | --- | --- |
 | 程序整体怎么分层、几个进程、端口、线程、落盘状态，以及架构复查/增强顺序 | [架构总览.md](架构总览.md) | 346 |
 | 我要开始改代码：环境、跑法、测试、调试、提交规矩 | [开发指南.md](开发指南.md) | 330 |
-| 前端能调哪些命令、收到哪些事件、参数与返回长什么样 | [HanCast-Frontend-API.md](HanCast-Frontend-API.md) | 896 |
+| 前端能调哪些命令、收到哪些事件、参数与返回长什么样 | [HanCast-Frontend-API.md](HanCast-Frontend-API.md) | 898 |
 | 前端组件/store/视图的结构、样式与 i18n 约定 | [HanCast-Frontend-Spec.md](HanCast-Frontend-Spec.md) | 519 |
 | 投屏发现不了 / 推上去没画面 / 停不下来 / 声音不对 | [故障排查.md](故障排查.md) | 452 |
 | 粘贴链接怎么变成可播地址（规则管线） | [分享解析规则.md](分享解析规则.md) | 205 |
@@ -23,7 +23,7 @@
 | 版本号从哪来、三平台打包（含 Arch 后处理与 Wayland 抓屏 helper）、产物验收（含 Linux 装端真机取证与装机验收）、发布顺序 | [构建与发布.md](构建与发布.md) | 975 |
 | `tools/` 里那堆脚本各验什么 | [../tools/README.md](../tools/README.md) | 236 |
 | 反爬为什么这么判、浏览器通道怎么取证 | [反爬实现取证与浏览器通道.md](反爬实现取证与浏览器通道.md) | 396 |
-| 每个版本改了什么 | [../CHANGELOG.md](../CHANGELOG.md) | 445 |
+| 每个版本改了什么 | [../CHANGELOG.md](../CHANGELOG.md) | 461 |
 
 ## 2. 推荐阅读路径
 

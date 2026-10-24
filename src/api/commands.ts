@@ -179,7 +179,7 @@ const MOCK_DEVICES: Device[] = [
 const MOCK_SETTINGS: AppSettings = {
   usn: 'hancast-uuid-001',
   friendly_name: 'HanCast',
-  version: '2.3.21',
+  version: '2.3.22',
   media_port: 8080,
   default_device: null,
   network_interface: '',
@@ -615,8 +615,8 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
     case 'check_update':
       return {
         has_update: false,
-        current: '2.3.21',
-        latest: '2.3.21',
+        current: '2.3.22',
+        latest: '2.3.22',
         url: '',
         body: '',
         source: 'github',
@@ -1394,8 +1394,37 @@ async function ensureNotifyPermission(): Promise<boolean> {
   return notifyGranted
 }
 
+/**
+ * 窗口收进托盘时，界面里那条红字同样没人看得见——把窗口带回前台。
+ * 只在真的不可见时做，避免用户正在别的程序里打字时被抢焦点。
+ */
+async function raiseIfHidden(): Promise<void> {
+  try {
+    const { getCurrentWindow } = await import('@tauri-apps/api/window')
+    const win = getCurrentWindow()
+    if (await win.isVisible()) return
+    await win.show()
+    await win.setFocus()
+  } catch {
+    /* 浏览器 dev，或旧壳层没给 is-visible 权限：通知照发，不为此改投屏流程 */
+  }
+}
+
 /** 发一条系统通知。没权限 / 不在 Tauri 里就静默——调用方的界面提示仍然在。 */
 export async function notify(title: string, body: string): Promise<void> {
+  await raiseIfHidden()
+  // macOS 交给壳层：插件那条路走的是已废弃的 NSUserNotificationCenter，在当前 macOS 上
+  // 只把消息存进通知中心、不弹横幅（实测 presented=0），等于用户仍然看不见失败原因。
+  // 其余平台这条命令返回错误，落回下面的插件路径。
+  const invoke = await initInvoke()
+  if (invoke) {
+    try {
+      await invoke('notify_os', { title, body })
+      return
+    } catch {
+      /* 非 macOS，或旧壳层没这条命令 */
+    }
+  }
   if (!(await ensureNotifyPermission())) return
   const n = await notificationModule()
   if (!n) return
