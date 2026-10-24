@@ -2,7 +2,7 @@
 
 > 本文档回答：HanCast 桌面端（Tauri 2 + Vue 3）的界面层是怎么搭起来的——窗口壳层、路由视图、组件与 Store 全量清单、真实数据流时序、样式与国际化机制、浏览器 mock 模式，以及写代码前必须知道的约束与坑。
 >
-> 最后校对：2026-10-24，对应版本 v2.3.23
+> 最后校对：2026-10-24，对应版本 v2.3.23（`package.json:4`。引用行号与硬数字由 `tools/check-doc-freshness.py` 机械核对；本轮：MSIX/FFmpeg 弹窗相关引用重锚）
 
 术语约定：**Sidecar** = Python 后台进程（`hancast-backend/`，打包为 `hancast-sidecar`）；**壳层** = Rust/Tauri 层（`src-tauri/`）；**规则包** = JS 解析插件 zip；**声明式规则** = JSON 站点规则；**屏幕投屏** = screencast（把电脑屏幕投出去）；**接收投屏** = 本机作为 DLNA 渲染端被别的设备投；**投屏确认** = Device Guard；**后台参数** = `params.py` 可调项。
 
@@ -102,7 +102,7 @@ npm scripts：`dev` = `vite`、`build` = `vue-tsc && vite build`、`build:sideca
 
 两条实现路径（`lib.rs:855-957`）：
 
-1. **MSIX（微软商店版）**：走 Windows `StartupTask` API（`windows` crate，仅 `cfg(windows)`）；商店版检测 `is_store_version`（`lib.rs:698-712`）。
+1. **MSIX（微软商店版）**：走 Windows `StartupTask` API（`windows` crate，仅 `cfg(windows)`）；商店版检测 `is_store_version`（`lib.rs:761`）。
 2. **其他平台**：`tauri-plugin-autostart`。
 
 `set_autostart` 成功后 Rust 主动 emit `autostart-changed` 事件（`lib.rs:955`），前端 `settings` store 监听同步（`src/stores/settings.ts:28-38`）——因为托盘菜单里也能切自启，前端不能只信自己的本地状态。
@@ -235,7 +235,7 @@ default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src '
 | 17 | `PluginSettings.vue` | 解析插件管理（847 行）：`rule_inventory` 双段列表（脚本规则包 + 声明式规则）；导入 zip（dialog → base64 `<input>` 降级 :51-83）或 URL 导入；单条规则开关；官方索引查更新 / `plugin_pull` 安装（sha256 校验在壳层/Sidecar）；两段式删除确认 4s（:168-178）；`plugin_test` 试跑；解析失败台账（按域名分组，删域名/删单条/清空/复制/timeAgo） | 无 | 无 | 无（组件内直接调 `api/commands.ts`） | `SettingsView.vue:533`（展开区） |
 | 18 | `AutostartPromptModal.vue` | 首次投屏成功后的自启询问弹窗：开启（`toggleAutostart`）/跳过，都会 `markAsked`（localStorage `has_asked_autostart`） | `visible` | `close` | settings | `HomeView.vue:66-69`；内嵌 `Modal`(:34) |
 | 19 | `CastControl.vue` | 旧版内嵌投屏控制条（427 行）：画质选择器（qualities ≥ 2 才显示）+ 进度条 + 播放控制。**死代码**——全仓 grep 无任何 import | — | — | — | 无（未被挂载） |
-| 20 | `FfmpegDepsModal.vue` | 「需要下载运行依赖」弹窗（418 行，v2.3.11 FFmpeg 去捆绑）：逐依赖显示检测状态与真实异常原文（`ffmpeg_status` 的 `items/missing`）；按平台给出包管理器安装命令（`install_commands`）与「打开安装目录」（`open_ffmpeg_dir`）；「重新检测」走 `refresh=true`；「下载并继续」起后台下载（`ffmpeg_download_start`）后按 1s 轮询 `ffmpeg_download_status`（`screencast.ts:134`；后端进度写入节流 0.4s，`ffmpeg_deps.py:373`）渲染进度/速度；`done` 时带 `refresh=true` 重测一次并**自动收起弹窗**（`:24` 的 watcher——「下载并继续」的「继续」是回到投屏面板，由用户再点一次开始投屏，程序不自动重放），安装命令可一键复制（`writeClipboardText`） | 无（visible 由 `screencastStore.showDepsModal` 驱动） | 无 | screencast | `ScreenCastPanel.vue:419`；内嵌 `Modal`(:4) |
+| 20 | `FfmpegDepsModal.vue` | 「需要下载运行依赖」弹窗（418 行，v2.3.11 FFmpeg 去捆绑）：逐依赖显示检测状态与真实异常原文（`ffmpeg_status` 的 `items/missing`）；按平台给出包管理器安装命令（`install_commands`）与「打开安装目录」（`open_ffmpeg_dir`）；「重新检测」走 `refresh=true`；「下载并继续」起后台下载（`ffmpeg_download_start`）后按 1s 轮询 `ffmpeg_download_status`（轮询本体 `screencast.ts:109-124`、起表 `:134`；后端进度写入节流 0.4s，`ffmpeg_deps.py:390`）渲染进度/速度；`done` 时带 `refresh=true` 重测一次并**自动收起弹窗**（`:25` 的 watcher——「下载并继续」的「继续」是回到投屏面板，由用户再点一次开始投屏，程序不自动重放），安装命令可一键复制（`writeClipboardText`） | 无（visible 由 `screencastStore.showDepsModal` 驱动） | 无 | screencast | `ScreenCastPanel.vue:465`；内嵌 `Modal`(:4) |
 
 ---
 
@@ -418,7 +418,7 @@ default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src '
 ### 9.2 mockInvoke（`commands.ts:264-602`）
 
 - 统一 300ms 模拟延迟；按命令名 switch，覆盖几乎全部命令（设备/解析/投屏/设置/参数/插件/台账/日志/更新/guard/屏幕投屏）。
-- 内存态数据：`MOCK_DEVICES` 4 台设备（:126-175，含 tv/speaker/box 类型与在线/忙碌/离线状态）、`MOCK_SETTINGS`（:177-185）、`mockParamSpecs` 5 项后台参数（:191-231）、`mockPlugins`（:46-66）、`mockIndexPacks`（:69-72）、`mockDeclarative` 声明式规则（:74-83）、`mockFailureHosts` 失败台账（:95-115）。
+- 内存态数据：`MOCK_DEVICES` 4 台设备（:126-175，含 tv/speaker/box 类型与在线/忙碌/离线状态）、`MOCK_SETTINGS`（:177-185）、`mockParamSpecs` 7 项后台参数（**只是 mock 的口径**，真实登记表是 `params.py` 的 32 项）（:191-231）、`mockPlugins`（:46-66）、`mockIndexPacks`（:69-72）、`mockDeclarative` 声明式规则（:74-83）、`mockFailureHosts` 失败台账（:95-115）。
 - `resolve_share` mock：本地正则提取 URL；B 站链接返回多画质假结果（用于调画质切换 UI）。
 - `read_clipboard` mock 返回 `''`（浏览器无权限读剪贴板）。
 - 事件通道：store 里 `listen` 的 import 在浏览器会失败并被 catch，事件驱动的逻辑（`cast_state_changed` 等）在 mock 模式下**不会触发**；进度靠 `startSim` 本地模拟仍然可看。
@@ -467,7 +467,7 @@ Modal 打开后聚焦 dialog，自带 Escape 关闭、Tab/Shift+Tab 循环与关
 
 ### 10.7 `stop_cast` 的 `control_failed` 不能吞
 
-`lib.rs:455-458` 注释：本地会话已释放、但电视没收到 Stop 时，前端要靠返回体里的 `control_failed` 解释「界面停了、电视还在播」。落点：`cast.ts:438-484`（stopCast 在 finally 释放仍属于本次操作的会话 + 置 `stopWarning`，不会删掉等待 Stop 时新开的同设备会话）→ `StopWarningBanner`（`HomeView.vue:53-57`）；屏幕投屏同款逻辑 `screencast.ts:212-249`。类型定义 `StopCastResult`/`StopWarning` 在 `commands.ts:1103-1117`。
+`lib.rs:517-518` 注释：本地会话已释放、但电视没收到 Stop 时，前端要靠返回体里的 `control_failed` 解释「界面停了、电视还在播」。落点：`cast.ts:438-484`（stopCast 在 finally 释放仍属于本次操作的会话 + 置 `stopWarning`，不会删掉等待 Stop 时新开的同设备会话）→ `StopWarningBanner`（`HomeView.vue:53-57`）；屏幕投屏同款逻辑 `screencast.ts:212-249`。类型定义 `StopCastResult`/`StopWarning` 在 `commands.ts:1118-1134`。
 
 ### 10.8 进度条与轮询的打架：主动解锁 + 单飞 + 操作代次
 

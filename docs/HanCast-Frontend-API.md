@@ -2,7 +2,7 @@
 
 > 回答一个问题：前端 `invoke()` 出去的每一条命令，究竟由壳层（Rust/Tauri）就地执行、还是转发给 Sidecar（Python 后台进程）；它的入参、返回结构、可能错误，以及 Sidecar 主动推给前端的事件分别是什么。
 >
-> 最后校对：2026-10-24，对应版本 v2.3.23（`package.json`）；本轮只补 `notify_os` 与投屏失败通知链路，其余沿用 2.3.13 的取证记录
+> 最后校对：2026-10-24，对应版本 v2.3.23（`package.json:4`。引用行号与硬数字由 `tools/check-doc-freshness.py` 机械核对；本轮：§6.7 补 macOS 通知日志落进同一份 hancast.log 的例外）
 
 ---
 
@@ -16,11 +16,11 @@
 | **事件总数** | **8** | 见 §3.1 表（Python 侧 6 + 壳层侧 2） |
 | 前端封装函数 | 65 | `src/api/commands.ts` 中 `export async function` 计数 |
 | ├─ 无独立封装的命令 | 3 | `get_resolve_result`（内联在 `resolveShare` / `pluginTest` 轮询里）、`check_mpv`、`set_mpv_path`（`src/` 下无任何调用点） |
-| └─ 一对多封装 | 1 | `plugin_import` → `pluginImportFile` / `pluginImportData` / `pluginImportUrl`（`commands.ts:797-813`） |
+| └─ 一对多封装 | 1 | `plugin_import` → `pluginImportFile` / `pluginImportData` / `pluginImportUrl`（`commands.ts:964`） |
 | Sidecar 命令注册表条目 | 62 | `hancast-backend/hancast_sidecar/commands.py:131-222` |
 | 后台参数（`params.py`）条目 | 32 | `hancast-backend/hancast_sidecar/params.py:41-265` |
 
-**66 与 59 为什么对不上**：57 条转发里，`parse_media_file` 与 `parse_media_url` 在壳层是两条命令、到 Sidecar 归并成一条 `parse_media`（`lib.rs:229-253`），57 − 1 = 56 个不同的 Sidecar 命令名；Sidecar 另有三条**没有对应壳层命令**——`unhide_device`、`get_hidden_devices`（`commands.py:120-121`，前端调不到）与 `browser_result`（`commands.py:166`，只由壳层的浏览器通道反向 RPC 下发）。56 + 3 = 59。此外 `exit` 不走注册表，是主循环直接拦下的特殊命令（`main.py:126-128`）。
+**66 与 59 为什么对不上**：57 条转发里，`parse_media_file` 与 `parse_media_url` 在壳层是两条命令、到 Sidecar 归并成一条 `parse_media`（`lib.rs:229-253`），57 − 1 = 56 个不同的 Sidecar 命令名；Sidecar 另有三条**没有对应壳层命令**——`unhide_device`、`get_hidden_devices`（`commands.py:142`，前端调不到）与 `browser_result`（`commands.py:191`，只由壳层的浏览器通道反向 RPC 下发）。56 + 3 = 59。此外 `exit` 不走注册表，是主循环直接拦下的特殊命令（`main.py:126-128`）。
 
 ---
 
@@ -157,18 +157,18 @@ Tauri 2 会把 JS 侧的 camelCase 自动映射到 Rust 的 snake_case 形参。
 
 | 命令名 | 前端封装 | 入参 | 返回 | 执行层 | 可能的错误 |
 | --- | --- | --- | --- | --- | --- |
-| `get_devices` | `getDevices()` `commands.ts:607` | 无 | `Device[]`；已剔除隐藏设备（`commands.py:327-331`） | Sidecar | 通用 |
-| `refresh_devices` | `refreshDevices()` `commands.ts:612` | 无 | `Device[]`；先 `ssdp.scan()` 再取（`commands.py:333-335`） | Sidecar | 通用 |
+| `get_devices` | `getDevices()` `commands.ts:762` | 无 | `Device[]`；已剔除隐藏设备（`commands.py:327-331`） | Sidecar | 通用 |
+| `refresh_devices` | `refreshDevices()` `commands.ts:767` | 无 | `Device[]`；先 `ssdp.scan()` 再取（`commands.py:333-335`） | Sidecar | 通用 |
 | `set_default_device` | `setDefaultDevice(id)` `commands.ts:617` | `id: string` | `void`（壳层丢弃 data，`lib.rs:179-180`） | Sidecar | 通用 |
 | `rename_device` | `renameDevice(id, name)` `commands.ts:622` | `id: string`、`name: string` | `void` | Sidecar | 通用 |
 | `remove_device` | `removeDevice(id)` `commands.ts:627` | `id: string` | `void`；同时从持久化的手动设备列表摘掉同 IP 条目（`commands.py:347-357`） | Sidecar | 通用。⚠️ 该封装在 `src/` 下**无调用点** |
 | `hide_device` | `hideDevice(id)` `commands.ts:632` | `id: string` | `void`；SSDP 仍能发现，只是不再推给前端（`commands.py:375-379`） | Sidecar | 通用 |
 | `add_device` | `addDevice(address)` `commands.ts:638` | `address: string`，接受 `192.168.1.68` / `ip:port` / 完整描述 URL | `Device`（`commands.py:370`） | Sidecar | `请输入设备 IP 或描述地址`（`commands.py:366`、`ssdp.py:1225`）；`无法识别的地址：<target>`（`ssdp.py:1268`）；`该地址不能投屏：设备描述里必须声明 AVTransport 服务（电视/盒子/带投屏的音箱才有，路由器与 NAS 没有）`（`ssdp.py:1231-1235`，v2.3.13 起手动添加与自动发现走同一条准入）；`设备 <名称> 已被隐藏，请先取消隐藏`（`ssdp.py:1240`）；描述抓取失败原因（`HTTP <code>` / `响应中没有 UPNP 设备描述` / 异常原文，`ssdp.py:1289-1300`） |
-| `get_manual_devices` | `getManualDevices()` `commands.ts:644` | 无 | `string[]`（`config.manual_devices`，`commands.py:372-373`） | Sidecar | 通用 |
+| `get_manual_devices` | `getManualDevices()` `commands.ts:799` | 无 | `string[]`（`config.manual_devices`，`commands.py:372-373`） | Sidecar | 通用 |
 
 壳层定义：`lib.rs:164-226`。Sidecar 处理函数：`commands.py:327-391`。
 
-Sidecar 侧还有两条**前端调不到**的命令：`unhide_device`（`commands.py:388-392`）、`get_hidden_devices`（`commands.py:394-396`）—— 壳层没有对应的 `#[tauri::command]`。隐藏是单向的，界面上没有「取消隐藏」入口。
+Sidecar 侧还有两条**前端调不到**的命令：`unhide_device`（`commands.py:141`）、`get_hidden_devices`（`commands.py:142`）—— 壳层没有对应的 `#[tauri::command]`。隐藏是单向的，界面上没有「取消隐藏」入口。
 
 `Device` 的键名坑见 §6.1。
 
@@ -176,7 +176,7 @@ Sidecar 侧还有两条**前端调不到**的命令：`unhide_device`（`command
 
 | 命令名 | 前端封装 | 入参 | 返回 | 执行层 | 可能的错误 |
 | --- | --- | --- | --- | --- | --- |
-| `start_cast` | `startCast(deviceId, mediaUri, mimeType?)` `commands.ts:956` | `deviceId: string`、`mediaUri: string`、`mimeType?: string` | `void`；成功后 Sidecar 立即补发一条 `cast_state_changed`（`commands.py:439`） | Sidecar | `Device not found: <device_id>`（`commands.py:406`）；`session.play()` 抛出的控制点异常原文（`ControlUrlUnavailable` / `RendererUnresponsive`，`protocol/dlna.py:77-84`）。本地文件路径会被 Sidecar 换成媒体服务器 HTTP 地址（`commands.py:446-448`） |
+| `start_cast` | `startCast(deviceId, mediaUri, mimeType?)` `commands.ts:956` | `deviceId: string`、`mediaUri: string`、`mimeType?: string` | `void`；成功后 Sidecar 立即补发一条 `cast_state_changed`（`commands.py:500`、`:515`） | Sidecar | `Device not found: <device_id>`（`commands.py:442`）；`session.play()` 抛出的控制点异常原文（`ControlUrlUnavailable` / `RendererUnresponsive`，`protocol/dlna.py:77-84`）。本地文件路径会被 Sidecar 换成媒体服务器 HTTP 地址（`commands.py:446-448`） |
 | `stop_cast` | `stopCast(deviceId?)` `commands.ts:977` | `deviceId?: string`（省略 = 停全部会话） | `{ ok: true, stopped: string[], control_failed: string[], reasons: Record<string,string> }`（`commands.py:503-504`） | Sidecar | 命令本身**不抛错**（幂等，先摘会话再发 SOAP Stop，`commands.py:475-504`）；「电视没收到 Stop」体现在 `control_failed` / `reasons` 里，不是异常 |
 | `pause_cast` | `pauseCast(deviceId?)` `commands.ts:982` | `deviceId?: string` | `void` | Sidecar | 通用；无会话时回落到主渲染器 `self.protocol.pause()`（`commands.py:519-525`） |
 | `resume_cast` | `resumeCast(deviceId?)` `commands.ts:987` | `deviceId?: string` | `void` | Sidecar | 通用；同上回落逻辑（`commands.py:527-533`） |
@@ -188,7 +188,7 @@ Sidecar 侧还有两条**前端调不到**的命令：`unhide_device`（`command
 
 壳层定义：`lib.rs:430-549`。Sidecar 处理函数：`commands.py:441-589`。
 
-多设备语义：每个设备一个 `DeviceCastSession`（`commands.py:393-412`），会话内 1 秒轮询一次进度（`session.py:163-240`）；连续 10 次轮询失败即视为掉线（`session.py:25`，`POLL_FAIL_LIMIT`）。前端 `stores/cast.ts` 另有自己的 1 秒轮询（`cast.ts:193-251`），两条轮询链路并存。
+多设备语义：每个设备一个 `DeviceCastSession`（`models/session.py:14-26`），会话内 1 秒轮询一次进度（`session.py:214-299`）；连续 10 次轮询失败即视为掉线（`session.py:25`，`POLL_FAIL_LIMIT`）。前端 `stores/cast.ts` 另有自己的 1 秒轮询（`cast.ts:193-251`），两条轮询链路并存。
 
 壳层自己也在**每秒调一次 `get_cast_url`**（不带 `deviceId`），只为刷新托盘菜单「复制当前投屏地址」项（`lib.rs:1249-1303`）。这条流量不经过前端封装。
 
@@ -199,7 +199,7 @@ Sidecar 侧还有两条**前端调不到**的命令：`unhide_device`（`command
 | `parse_media_file` | `parseMediaFile(filePath)` `commands.ts:650` | `filePath: string` | `MediaInfo`（`models/media.py:22-39`） | Sidecar | 通用；解析异常原文。壳层把它改写成 Sidecar 的 `parse_media` + `{"type":"file","path":...}`（`lib.rs:229-239`） |
 | `parse_media_url` | `parseMediaUrl(url)` `commands.ts:655` | `url: string` | `MediaInfo` | Sidecar | 同上，改写成 `{"type":"url","url":...}`（`lib.rs:241-252`）。⚠️ 该封装在 `src/` 下**无调用点** |
 | `resolve_share` | `resolveShare(text, quality?)` `commands.ts:684` | `text: string`、`quality?: string` | **异步任务**：`{ task_id: string, status: "pending" }`（`commands.py:647`） | Sidecar | `粘贴内容为空`（`commands.py:615`）；`已有 3 个解析任务进行中，请稍后再试`（`commands.py:629`）；通用 |
-| `get_resolve_result` | 无独立封装，内联在 `resolveShare`（`commands.ts:698`）与 `pluginTest`（`commands.ts:919`） | `taskId: string` | `{ status: "pending" \| "done" \| "error", result?: ShareResolveResult, error?: string, ts: number }`（`commands.py:649-656`） | Sidecar | `解析任务不存在或已过期`（`commands.py:654`）；通用 |
+| `get_resolve_result` | 无独立封装，内联在 `resolveShare`（`commands.ts:839`）与 `pluginTest`（`commands.ts:1061`） | `taskId: string` | `{ status: "pending" \| "done" \| "error", result?: ShareResolveResult, error?: string, ts: number }`（`commands.py:649-656`） | Sidecar | `解析任务不存在或已过期`（`commands.py:654`）；通用 |
 
 壳层定义：`lib.rs:228-281`。Sidecar 处理函数：`commands.py:591-648`。
 
@@ -215,15 +215,15 @@ Sidecar 侧还有两条**前端调不到**的命令：`unhide_device`（`command
 
 | 命令名 | 前端封装 | 入参 | 返回 | 执行层 | 可能的错误 |
 | --- | --- | --- | --- | --- | --- |
-| `list_screen_sources` | `listScreenSources()` `commands.ts:1302` | 无 | `{ screens: ScreenSourceItem[], windows: ScreenSourceItem[], audio_inputs: AudioDeviceItem[], ffmpeg: {...}, platform: "darwin"\|"win32"\|"linux" }`（`ffmpeg_manager.py:486-508`） | Sidecar | 通用 |
+| `list_screen_sources` | `listScreenSources()` `commands.ts:1315` | 无 | `{ screens: ScreenSourceItem[], windows: ScreenSourceItem[], audio_inputs: AudioDeviceItem[], ffmpeg: {...}, platform: "darwin"\|"win32"\|"linux" }`（`ffmpeg_manager.py:486-508`） | Sidecar | 通用 |
 | `start_screen_cast` | `startScreenCast(params)` `commands.ts:1307` | `params: ScreenCastStartParams`，**整个对象直接作为 Sidecar 的 params**（`lib.rs:744-752`，前端 `{ params }` → Rust 形参 `params` 原样下传） | 成功：dlna → `{ok:true, target:"dlna", device_id, session_id, url}`；browser → `{ok:true, target:"browser", session_id, watch_url, width, height, fps}`（`manager.py:322-339`）。失败：`{ok:false, error}` | Sidecar | **校验类错误全部走 `{ok:false,error}` 而不是异常**（`manager.py:92-169`）：`已有投屏正在进行，请先停止`、`未知目标类型: <t>`、FFmpeg 不可用原文、`窗口源缺少窗口信息`、`未选择系统声音设备（…）`、`未选择麦克风设备`、`选中的<麦克风/系统声音>设备已不可用：<名>；请重新选择（…）`、`麦克风采到的全是静音…`、`缺少目标设备 (device_id)`、`设备不存在或已离线: <id>`、`HTTP 服务启动失败`、`会话注册失败`、`屏幕捕获失败`、`电视拒绝播放（…），可换较低分辨率/码率后重试`、`启动失败: <异常>` |
-| `stop_screen_cast` | `stopScreenCast()` `commands.ts:1312` | 无 | `{ok:true, control_failed: string[], reasons: Record<string,string>}`；本来就没在跑 → `{ok:true, already_stopped:true}`（`manager.py:204-229`） | Sidecar | 幂等，不抛错。dlna 目标会复用 `_stop_cast` 的 `control_failed` 语义 |
-| `screen_cast_status` | `getScreenCastStatus()` `commands.ts:1317` | 无 | `_state` 全量 + `viewers`（仅 browser 通道）+ `pull`（有 session_id 时）+ `ffmpeg`（`manager.py:231-241`） | Sidecar | 通用 |
+| `stop_screen_cast` | `stopScreenCast()` `commands.ts:1325` | 无 | `{ok:true, control_failed: string[], reasons: Record<string,string>}`；本来就没在跑 → `{ok:true, already_stopped:true}`（`manager.py:204-229`） | Sidecar | 幂等，不抛错。dlna 目标会复用 `_stop_cast` 的 `control_failed` 语义 |
+| `screen_cast_status` | `getScreenCastStatus()` `commands.ts:1330` | 无 | `_state` 全量 + `viewers`（仅 browser 通道）+ `pull`（有 session_id 时）+ `ffmpeg`（`manager.py:231-241`） | Sidecar | 通用 |
 | `set_ffmpeg_path` | `setFfmpegPath(path)` `commands.ts:1322` | `path: string` | `{ok:true, path, version}` 或 `{ok:false, error}`（`ffmpeg_manager.py:448-462`）；**只能设不能清**，落盘键 `screencast.ffmpeg_path` | Sidecar | `缺少路径`（`manager.py:243-247`）；`文件不存在: <abs>`、`不是有效的 FFmpeg 可执行文件`（`ffmpeg_manager.py:450-454`） |
 | `ffmpeg_status` | `ffmpegStatus(refresh)` `commands.ts:1328` | `refresh?: bool`（用户点「重新检测」时传 `true`） | 检测报告：`ok / path / version / source / ffprobe_path / items[] / missing[] / optional_missing[] / managed_dir / platform / arch / install_commands[] / download / error`（`ffmpeg_deps.py:189-252`） | Sidecar | 缺依赖不算异常：`ok:false` + 中文 `error`，前端据此弹窗 |
-| `ffmpeg_download_start` | `ffmpegDownloadStart()` `commands.ts:1334` | 无 | `{ok:true, task:{status, stage, ...}}`；已在下 → `already_running` | Sidecar | 起不来后台线程时 `{ok:false,error}`；压缩包 >512MB 直接拒（`ffmpeg_deps.py:448-469`） |
-| `ffmpeg_download_status` | `ffmpegDownloadStatus()` `commands.ts:1339` | 无 | 后台任务快照（`status/stage/received_bytes/total_bytes/speed/path/error`），`Command_TIMEOUT=60s` 所以下载绝不占住命令循环（`ffmpeg_deps.py:470-474`） | Sidecar | 通用 |
-| `open_ffmpeg_dir` | `openFfmpegDir()` `commands.ts:1345` | 无 | `{ok:true, path}`（回显目录，成败由调用方按「有没有窗口」判断） | **壳层就地**（`lib.rs:817-844`） | `Sidecar 未返回 FFmpeg 目录`、`目录创建失败: <e>`、`无法打开目录: <e>`；路径由 Sidecar 的 `managed_dir` 给出，**不接受前端传入**，否则等于开放「用资源管理器打开任意路径」；**只 spawn 不 wait**——`xdg-open` 活到文件管理器关闭为止，等它等于把按钮按死在命令循环里 |
+| `ffmpeg_download_start` | `ffmpegDownloadStart()` `commands.ts:1347` | 无 | `{ok:true, task:{status, stage, ...}}`；已在下 → `already_running` | Sidecar | 起不来后台线程时 `{ok:false,error}`；压缩包 >512MB 直接拒（`ffmpeg_deps.py:448-469`） |
+| `ffmpeg_download_status` | `ffmpegDownloadStatus()` `commands.ts:1352` | 无 | 后台任务快照（`status/stage/received_bytes/total_bytes/speed/path/error`），`Command_TIMEOUT=60s` 所以下载绝不占住命令循环（`ffmpeg_deps.py:470-474`） | Sidecar | 通用 |
+| `open_ffmpeg_dir` | `openFfmpegDir()` `commands.ts:1358` | 无 | `{ok:true, path}`（回显目录，成败由调用方按「有没有窗口」判断） | **壳层就地**（`lib.rs:817-844`） | `Sidecar 未返回 FFmpeg 目录`、`目录创建失败: <e>`、`无法打开目录: <e>`；路径由 Sidecar 的 `managed_dir` 给出，**不接受前端传入**，否则等于开放「用资源管理器打开任意路径」；**只 spawn 不 wait**——`xdg-open` 活到文件管理器关闭为止，等它等于把按钮按死在命令循环里 |
 | `notify_os` | `notify()` `commands.ts:1414`（内部先 `raiseIfHidden()` `:1401`） | `title: string`、`body: string` | `Ok(())` 或 `Err(msg)` | **壳层就地**（`lib.rs:909`；macOS 实现在 `src-tauri/src/macos_notify.rs`，命令里 `run_on_main_thread` 排到主线程再调 UN） | macOS 用 `UNUserNotificationCenter`——插件那条路走已废弃的 `NSUserNotificationCenter`，实测只入通知中心不弹横幅；**非 macOS 一律回 `Err("本平台由前端走通知插件")`**，前端 catch 后改调 `tauri-plugin-notification`。通知失败从不影响投屏本身 |
 
 壳层定义：`lib.rs:735-844`。Sidecar 注册 `commands.py:185-192`、处理函数 `commands.py:1041-1078`，投屏实现在 `screencast/manager.py`、依赖检测与下载在 `utils/ffmpeg_deps.py`。
@@ -237,10 +237,10 @@ Sidecar 侧还有两条**前端调不到**的命令：`unhide_device`（`command
 | 命令名 | 前端封装 | 入参 | 返回 | 执行层 | 可能的错误 |
 | --- | --- | --- | --- | --- | --- |
 | `respond_cast_confirm` | `respondCastConfirm(requestId, approved, policy)` `commands.ts:1078` | `requestId: string`、`approved: boolean`、`policy: string`（`"once"`/`"always"`/`"blacklist"`） | `boolean`（壳层 `as_bool().unwrap_or(false)`，`lib.rs:638-640`） | Sidecar | 通用（`Missing field: 'request_id'/'approved'`）；请求已超时/不存在时返回 `false` 而非报错（`guard.py:301-314`） |
-| `get_guard_devices` | `getGuardDevices()` `commands.ts:1087` | 无 | `{ trusted: GuardDevice[], blacklisted: GuardDevice[] }`（`commands.py:959-964`） | Sidecar | 通用 |
+| `get_guard_devices` | `getGuardDevices()` `commands.ts:1242` | 无 | `{ trusted: GuardDevice[], blacklisted: GuardDevice[] }`（`commands.py:959-964`） | Sidecar | 通用 |
 | `remove_guard_device` | `removeGuardDevice(deviceKey)` `commands.ts:1092` | `deviceKey: string`，UDN 或 IP 都认（`guard.py:322-344`） | `boolean` | Sidecar | 通用 |
 | `set_guard_policy` | `setGuardPolicy(deviceKey, policy)` `commands.ts:1097` | `deviceKey: string`、`policy: "trusted" \| "blacklisted"`（`commands.py:974`） | `boolean` | Sidecar | 通用；非法 policy 由 `guard.set_policy` 判定后返回 `false` |
-| `get_guard_settings` | `getGuardSettings()` `commands.ts:1105` | 无 | `{ enabled: boolean, confirm_timeout: number }`（`commands.py:977-982`，单位秒，默认 15，`guard.py:77`） | Sidecar | 通用 |
+| `get_guard_settings` | `getGuardSettings()` `commands.ts:1260` | 无 | `{ enabled: boolean, confirm_timeout: number }`（`commands.py:977-982`，单位秒，默认 15，`guard.py:77`） | Sidecar | 通用 |
 | `save_guard_settings` | `saveGuardSettings({enabled?, confirm_timeout?})` `commands.ts:1110` | `settings: { enabled?: boolean, confirm_timeout?: number }` | `void` | Sidecar | 通用。**注意壳层不解包**：`.send_command("save_guard_settings", settings)`（`lib.rs:691`），Python 直接读 `params["enabled"]` / `params["confirm_timeout"]`（`commands.py:984-990`）—— 与 `save_settings`（会包一层 `{"settings": …}`，`lib.rs:562`）不一致 |
 
 壳层定义：`lib.rs:626-696`。Sidecar 处理函数：`commands.py:943-990`，实现在 `security/guard.py`。
@@ -253,11 +253,11 @@ Device Guard 管的是**接收投屏**方向：外部设备往本机推流时，
 
 | 命令名 | 前端封装 | 入参 | 返回 | 执行层 | 可能的错误 |
 | --- | --- | --- | --- | --- | --- |
-| `plugin_list` | `pluginList()` `commands.ts:791` | 无 | `{ plugins: PluginInfo[] }`，前端解包成数组（`commands.py:659-662`） | Sidecar | 通用 |
-| `rule_inventory` | `ruleInventory()` `commands.ts:838` | 无 | `{ rules_dir: string, script_packs: PluginInfo[], declarative: DeclarativeRuleInfo[] }`（`share_resolver.py:385-397`） | Sidecar | 通用。声明式规则 JSON 写坏时不报错，坏条目带 `error` 字段照样列出（`declarative.py:262-269`） |
-| `failure_list` | `failureList()` `commands.ts:849` | 无 | `{ enabled, path, hosts: FailureHost[], total }`（`failures.py:167-190`） | Sidecar | 通用 |
+| `plugin_list` | `pluginList()` `commands.ts:946` | 无 | `{ plugins: PluginInfo[] }`，前端解包成数组（`commands.py:659-662`） | Sidecar | 通用 |
+| `rule_inventory` | `ruleInventory()` `commands.ts:993` | 无 | `{ rules_dir: string, script_packs: PluginInfo[], declarative: DeclarativeRuleInfo[] }`（`share_resolver.py:385-397`） | Sidecar | 通用。声明式规则 JSON 写坏时不报错，坏条目带 `error` 字段照样列出（`declarative.py:262-269`） |
+| `failure_list` | `failureList()` `commands.ts:1004` | 无 | `{ enabled, path, hosts: FailureHost[], total }`（`failures.py:167-190`） | Sidecar | 通用 |
 | `failure_delete` | `failureDelete(host?, url?)` `commands.ts:855` | `host?: string`、`url?: string`（前端把空串转成 `null`，`commands.ts:858`） | `{ removed: number, enabled, path, hosts, total }`（`commands.py:674-678`） | Sidecar | 通用 |
-| `failure_clear` | `failureClear()` `commands.ts:862` | 无 | `{ removed: number, enabled, path, hosts, total }`（`commands.py:680-682`） | Sidecar | 通用 |
+| `failure_clear` | `failureClear()` `commands.ts:1017` | 无 | `{ removed: number, enabled, path, hosts, total }`（`commands.py:680-682`） | Sidecar | 通用 |
 | `plugin_check_updates` | `pluginCheckUpdates(indexUrl?)` `commands.ts:877` | `indexUrl?: string`（空 → 走后台参数 `rules.index_url`） | `{ index_url, updates: PackUpdateEntry[], available: PackIndexEntry[], installed: number }`（`jsplugins.py:448-470`） | Sidecar（**经 `plugin_task_start` 轮询**，`lib.rs:331-383`） | `索引地址必须是 http(s)（当前：…）`、`索引拉取失败: 镜像 HTTP <code>；直连 <异常>`（`jsplugins.py:392-432`）；`规则包操作忙，请稍后重试`、`规则包操作超时，已请求取消`；通用 |
 | `plugin_pull` | `pluginPull(name, indexUrl?)` `commands.ts:894` | `name: string`、`indexUrl?: string` | `{ plugins: PluginInfo[] }`（`commands.py:749-760`） | Sidecar（**经 `plugin_task_start` 轮询**） | `缺少包名`（`commands.py:758`）；`官方索引不可用，「<name>」也没声明更新地址：…`、`「<name>」既不在官方索引里，也没声明 update_url`（`jsplugins.py:468-492`）；`包校验失败（sha256 不匹配，可能是镜像过期）: <前12位>…`（`jsplugins.py:687`）；下载类错误见下 |
 | `plugin_import` | `pluginImportFile(filePath)` `:797` / `pluginImportData(dataBase64)` `:803` / `pluginImportUrl(url)` `:809` | 三选一：`filePath` / `dataBase64` / `url`（壳层合成一个对象下传，`lib.rs:414-433`） | `{ plugins: PluginInfo[] }`（`commands.py:762-777`） | Sidecar（**经 `plugin_task_start` 轮询**） | `需要 path / data_base64 / url 之一`；`插件包超过 2MB 上限`、`不是合法的 zip 包: …`、`插件包文件数超过 128 上限`、`插件包解压后超过 8MB 上限`、`zip 内路径不合法: …`、`zip 内不允许的文件（只收 manifest.json 和 .js）: …`、`单文件超过 2MB: …`、`zip 内不允许软链接: …`、`插件包必须恰好含一个 manifest.json`、`manifest.json 不是合法 JSON: …`、`manifest scripts 条目必须是 .js 文件名: …`、`manifest scripts 引用了不存在的文件: …`（`jsplugins.py:580-641`）；`只支持 http(s) 下载地址`、`HTTP <code>`（`jsplugins.py:64-89`） |
@@ -270,9 +270,9 @@ Device Guard 管的是**接收投屏**方向：外部设备往本机推流时，
 
 壳层定义：`lib.rs:282-407`。Sidecar 处理函数：`commands.py:659-734`。
 
-约定：**所有会改动插件仓库的命令（import / remove / set_rule_enabled / pull）都返回全量 `{plugins: [...]}`**，前端拿它直接刷新列表，不需要再调一次 `plugin_list`（`commands.py:691-694` 的注释就是这个意思）。`rule_inventory` 是例外，它返回的是 `script_packs` 键。
+约定：**所有会改动插件仓库的命令（import / remove / set_rule_enabled / pull）都返回全量 `{plugins: [...]}`**，前端拿它直接刷新列表，不需要再调一次 `plugin_list`（`commands.py:161` 的注释就是这个意思）。`rule_inventory` 是例外，它返回的是 `script_packs` 键。
 
-规则包索引默认地址来自后台参数 `rules.index_url`（`params.py:21-22`、`PARAM_SPECS` 中 `rules` 段），`plugin_pull` 会按索引条目的 `sha256` 校验下载内容，**对不上就不落盘**（`jsplugins.py:548-553`）。
+规则包索引默认地址来自后台参数 `rules.index_url`（默认值 `DEFAULT_RULES_INDEX` `params.py:19-23`，登记表条目 `params.py:222-224`），`plugin_pull` 会按索引条目的 `sha256` 校验下载内容，**对不上就不落盘**（`jsplugins.py:682-688`）。
 
 **GitHub 国内镜像开关**（`github.mirror_enabled`，`params.py:245-264`）：打开后，凡是
 `github.com` / `raw.githubusercontent.com` / `api.github.com` / `codeload.github.com` /
@@ -289,10 +289,10 @@ Device Guard 管的是**接收投屏**方向：外部设备往本机推流时，
 
 | 命令名 | 前端封装 | 入参 | 返回 | 执行层 | 可能的错误 |
 | --- | --- | --- | --- | --- | --- |
-| `get_settings` | `getSettings()` `commands.ts:1018` | 无 | `{ usn, friendly_name, version, media_port, default_device, network_interface, settings }`（`utils/config.py:94-104`） | Sidecar | 通用 |
+| `get_settings` | `getSettings()` `commands.ts:1173` | 无 | `{ usn, friendly_name, version, media_port, default_device, network_interface, settings }`（`utils/config.py:94-104`） | Sidecar | 通用 |
 | `save_settings` | `saveSettings(settings)` `commands.ts:1023` | `settings: Partial<AppSettings>`；壳层包成 `{"settings": …}`（`lib.rs:562`） | `void` | Sidecar | 通用（`Missing field: 'settings'`）。`friendly_name` 传空串会被静默改回当前值、不阻断其余项保存（`commands.py:752-755`） |
-| `list_network_interfaces` | `listNetworkInterfaces()` `commands.ts:1028` | 无 | `{ interfaces: NetworkInterface[], selected: string }`（`commands.py:739-744`） | Sidecar | 通用 |
-| `get_params` | `getParams()` `commands.ts:1034` | 无 | `{ specs: ParamSpec[] }`（**32 条**，`params.py:41-265`；`specs()` 给每条补 `value` 与 `overridden`，`params.py:271-279`），前端解包成数组 | Sidecar | 通用 |
+| `list_network_interfaces` | `listNetworkInterfaces()` `commands.ts:1183` | 无 | `{ interfaces: NetworkInterface[], selected: string }`（`commands.py:739-744`） | Sidecar | 通用 |
+| `get_params` | `getParams()` `commands.ts:1189` | 无 | `{ specs: ParamSpec[] }`（**32 条**，`params.py:41-265`；`specs()` 给每条补 `value` 与 `overridden`，`params.py:271-279`），前端解包成数组 | Sidecar | 通用 |
 | `save_params` | `saveParams(values)` `commands.ts:1041` | `values: Record<key, number\|boolean\|string>`；壳层包成 `{"values": …}`（`lib.rs:589`） | `{ ok: boolean, errors: string[], specs: ParamSpec[] }`（`commands.py:783-791`）。`ok = errors.length === 0` | Sidecar | **不抛错**，逐项校验失败写进 `errors`：`未知参数: <key>`、`<中文标签>: <原因>`（`params.py:332-340`）。成功项照常落库，是部分成功语义 |
 
 壳层定义：`lib.rs:551-593`。Sidecar 处理函数：`commands.py:736-791`。
@@ -314,7 +314,7 @@ Device Guard 管的是**接收投屏**方向：外部设备往本机推流时，
 | --- | --- | --- | --- | --- | --- |
 | `get_logs` | `getLogs(query)` `commands.ts:1125` | `params: { limit?, module?, level?, keyword?, include_older? }`；壳层**不解包**，`params` 原样下传（`lib.rs:788`） | `{ lines: LogLine[], total, truncated, path, level, modules: LogModule[] }`（`utils/logger.py:207-215`）。`limit` 被夹到 1..5000（`logger.py:163`） | Sidecar | 通用。`level` 非法时不报错，等同于不过滤（`logger.py:166-167`） |
 | `set_log_level` | `setLogLevel(level)` `commands.ts:1130` | `level: string` | `{ ok: true, level: string }`（`commands.py:1059-1063`） | Sidecar | `未知日志级别: <level>`（`logger.py:131`）；通用 |
-| `export_logs` | `exportLogs()` `commands.ts:1120` | 无 | `boolean`：`true` = 已复制，`false` = 用户在保存对话框里取消（`lib.rs:837-845`） | **壳层** | `日志文件不存在`（`lib.rs:824`）；`无法获取 APPDATA 目录`（`lib.rs:809`）/ `无法获取 HOME 目录`（`lib.rs:814`、`819`）；`Invalid path: <e>`（`lib.rs:839`）；`复制日志文件失败: <e>`（`lib.rs:841`） |
+| `export_logs` | `exportLogs()` `commands.ts:1275` | 无 | `boolean`：`true` = 已复制，`false` = 用户在保存对话框里取消（`lib.rs:837-845`） | **壳层** | `日志文件不存在`（`lib.rs:824`）；`无法获取 APPDATA 目录`（`lib.rs:809`）/ `无法获取 HOME 目录`（`lib.rs:814`、`819`）；`Invalid path: <e>`（`lib.rs:839`）；`复制日志文件失败: <e>`（`lib.rs:841`） |
 
 壳层定义：`lib.rs:783-799`（前两条）、`lib.rs:801-846`（`export_logs`）。
 
@@ -339,7 +339,7 @@ Device Guard 管的是**接收投屏**方向：外部设备往本机推流时，
 
 | 命令名 | 前端封装 | 入参 | 返回 | 执行层 | 可能的错误 |
 | --- | --- | --- | --- | --- | --- |
-| `read_clipboard` | `readClipboardText()` `commands.ts:934` | 无 | `string` | **壳层** | clipboard 插件错误原文（`lib.rs:416`）。封装层会 try/catch 掉，失败后回落 `navigator.clipboard.readText()`，再失败返回 `''`（`commands.ts:936-946`）——**调用方看不到异常** |
+| `read_clipboard` | `readClipboardText()` `commands.ts:1089` | 无 | `string` | **壳层** | clipboard 插件错误原文（`lib.rs:416`）。封装层会 try/catch 掉，失败后回落 `navigator.clipboard.readText()`，再失败返回 `''`（`commands.ts:936-946`）——**调用方看不到异常** |
 | `write_clipboard` | `writeClipboardText(text)` `commands.ts:950` | `text: string` | `void` | **壳层** | clipboard 插件错误原文（`lib.rs:423-425`）。这条**不降级**，失败直接抛给调用方 |
 
 壳层定义：`lib.rs:414-426`。
@@ -350,8 +350,8 @@ Device Guard 管的是**接收投屏**方向：外部设备往本机推流时，
 
 | 命令名 | 前端封装 | 入参 | 返回 | 执行层 | 可能的错误 |
 | --- | --- | --- | --- | --- | --- |
-| `minimize_window` | `minimizeWindow()` `commands.ts:1058` | 无 | `void` | **壳层** | 无。`window.minimize().ok()` 把错误丢掉（`lib.rs:153`） |
-| `close_window` | `closeWindow()` `commands.ts:1067` | 无 | `void` | **壳层** | 无。`window.hide().ok()`（`lib.rs:159`）——**不是退出**，是隐藏到托盘 |
+| `minimize_window` | `minimizeWindow()` `commands.ts:1213` | 无 | `void` | **壳层** | 无。`window.minimize().ok()` 把错误丢掉（`lib.rs:153`） |
+| `close_window` | `closeWindow()` `commands.ts:1222` | 无 | `void` | **壳层** | 无。`window.hide().ok()`（`lib.rs:159`）——**不是退出**，是隐藏到托盘 |
 
 壳层定义：`lib.rs:151-160`。
 
@@ -363,8 +363,8 @@ Device Guard 管的是**接收投屏**方向：外部设备往本机推流时，
 
 | 命令名 | 前端封装 | 入参 | 返回 | 执行层 | 可能的错误 |
 | --- | --- | --- | --- | --- | --- |
-| `is_store_version` | `isStoreVersion()` `commands.ts:1149` | 无 | `boolean` | **壳层** | 无。判定纯靠可执行文件路径是否含 `windowsapps` / `553787e6.hancast` / `build-msix`（`lib.rs:698-712`）；非 Windows 恒为 `false`。封装层 catch 后返回 `false`（`commands.ts:1149-1156`） |
-| `get_autostart` | `getAutostart()` `commands.ts:1047` | 无 | `boolean` | **壳层** | MSIX 路径：`获取启动任务失败: …` / `等待启动任务失败: …` / `获取启动任务状态失败: …`（`lib.rs:861-868`）；非 MSIX：`tauri-plugin-autostart` 的错误原文（`lib.rs:933`） |
+| `is_store_version` | `isStoreVersion()` `commands.ts:1304` | 无 | `boolean` | **壳层** | 无。判定纯靠可执行文件路径是否含 `windowsapps` / `553787e6.hancast` / `build-msix`（`lib.rs:698-712`）；非 Windows 恒为 `false`。封装层 catch 后返回 `false`（`commands.ts:1149-1156`） |
+| `get_autostart` | `getAutostart()` `commands.ts:1202` | 无 | `boolean` | **壳层** | MSIX 路径：`获取启动任务失败: …` / `等待启动任务失败: …` / `获取启动任务状态失败: …`（`lib.rs:861-868`）；非 MSIX：`tauri-plugin-autostart` 的错误原文（`lib.rs:933`） |
 | `set_autostart` | `setAutostart(enabled)` `commands.ts:1052` | `enabled: boolean` | `void`；成功后 emit `autostart-changed`（`lib.rs:955`） | **壳层** | MSIX 路径：`请求启用启动任务失败: …` / `等待启用结果失败: …` / `禁用启动任务失败: …`（`lib.rs:884-891`）；非 MSIX：autolaunch 错误原文（`lib.rs:945-951`）。非 Windows 的 `MSIX 开机自启仅在 Windows 上可用`（`lib.rs:912`）实际不可达 —— `is_store_version()` 在非 Windows 恒 `false`（`lib.rs:897-901` 的注释也这么说） |
 | `check_mpv` | **无** | 无 | `{ status: "ready"\|"not_found"\|"error", path, version, source, error }`（`models/mpv.py:17-27`、`commands.py:993-996`） | Sidecar | 通用 |
 | `set_mpv_path` | **无** | `path: string` | 同 `check_mpv`；成功时会热替换 MPV 渲染器（`commands.py:998-1024`） | Sidecar | 通用 |
@@ -682,7 +682,7 @@ async function onPasteFromClipboard() {
 }
 ```
 
-要点：`readClipboardText()` **不会抛异常**（封装层三级降级，最终返回 `''`，`commands.ts:934-947`），所以调用方只能靠空串判断失败。同文件 `onUrlPaste`（`MediaInput.vue:377-384`）走的是浏览器原生 `ClipboardEvent`，不经过壳层。
+要点：`readClipboardText()` **不会抛异常**（封装层三级降级，最终返回 `''`，`commands.ts:934-947`），所以调用方只能靠空串判断失败。同文件 `onUrlPaste`（`MediaInput.vue:371`）走的是浏览器原生 `ClipboardEvent`，不经过壳层。
 
 ### 4.11 窗口与托盘 — `src/components/TitleBar.vue:6` + `:26`、`:74`
 
@@ -763,7 +763,7 @@ async function toggleAutostart() {
 
 ### 6.3 `PackIndexEntry.sha256` 在 `check_updates` 里被丢掉
 
-`fetch_index` 解析出了 `sha256`（`jsplugins.py:368`），但 `check_updates` 组装 `updates` / `available` 条目时只取 `name` / `version` / `url` / `description`（`jsplugins.py:377-379`）。前端 `PackIndexEntry.sha256?`（`commands.ts:735`）因此永远是 `undefined`。真实下载时 `pull` 会重新 `fetch_index` 拿摘要（`jsplugins.py:395-396`），校验本身没被绕过，只是前端拿不到这个值。
+`fetch_index` 解析出了 `sha256`（`jsplugins.py:445`），但 `check_updates` 组装 `updates` / `available` 条目时只取 `name` / `version` / `url` / `description`（`jsplugins.py:459-460`）。前端 `PackIndexEntry.sha256?`（`commands.ts:735`）因此永远是 `undefined`。真实下载时 `pull` 会重新 `fetch_index` 拿摘要（`jsplugins.py:478`、`:490`），校验本身没被绕过，只是前端拿不到这个值。
 
 ### 6.4 `get_cast_state()` 不带参数时返回的不是 `CastState`
 
@@ -784,7 +784,9 @@ async function toggleAutostart() {
 - 壳层 `SessionLogger` 写 `app_data_dir()/logs/hancast.log`（目录拼接在 `lib.rs:1054-1059`），且**每次启动清空**（`lib.rs:126-133`，`fs::write(&path, "")` 在 `:131`）。`app_data_dir` 由 identifier `com.han.hancast` 推导（`tauri.conf.json:5`）。
 - Python 写 `~/Library/Application Support/HanCast/logs/hancast.log`（macOS，`logger.py:19-24`）。
 
-`export_logs`（`lib.rs:806-821`）和 `get_logs`（`logger.py:156-216`）读的都是**后者**。前者里的壳层日志不会出现在日志面板和导出文件里。
+`export_logs`（`lib.rs:950`）和 `get_logs`（`lib.rs:932`，取数走 `read_logs` `logger.py:156-218`）读的都是**后者**。前者里的壳层日志不会出现在日志面板和导出文件里。
+
+> **例外（v2.3.23 起）**：macOS 通知的授权状态与投递错误由壳层 `macos_notify::log()` 直接追加到**后者**那份文件（路径拼接在 `macos_notify.rs:30-40`，行格式与 Python logger 一致：`[时间] hancast.notify INFO: …`），为的就是让后台日志面板当场读到——上一版把 add 的 completion handler 传成 `None`，等于亲手丢掉了唯一的直接证据。
 
 ### 6.8 Guard 的 `'reject'` 策略后端不认
 
@@ -795,7 +797,7 @@ async function toggleAutostart() {
 - `save_settings`：壳层包一层 → `json!({"settings": settings})`（`lib.rs:562`），Python 读 `params["settings"]`（`commands.py:747`）。
 - `save_guard_settings`：壳层**原样下传** → `.send_command("save_guard_settings", settings)`（`lib.rs:691`），Python 直接读 `params["enabled"]`（`commands.py:986`）。
 
-同样是「保存一个设置对象」，两条命令的信封结构不同。`start_screen_cast`（`lib.rs:748`）和 `get_logs`（`lib.rs:788`）也是原样下传。
+同样是「保存一个设置对象」，两条命令的信封结构不同。`start_screen_cast`（`lib.rs:805`）和 `get_logs`（`lib.rs:932`）也是原样下传。
 
 ### 6.10 `unhide_device` / `get_hidden_devices` 前端调不到
 
@@ -895,4 +897,4 @@ Sidecar 实现了（`commands.py:381-389`）并注册在 `_commands` 里（`comm
 
 1. **`ready` 事件是否有壳层消费者** —— ⚠️ 未验证。已确认 `src/` 下无 `listen('ready')`（§3.1），且 `sidecar.rs` 里事件是被无条件 `app.emit` 转发的（`sidecar.rs:358-361`），但壳层 `new()` 里是否用别的方式等待就绪（例如 `send_command` 重试）没有逐行追完；从 `lib.rs:1211` 那句「睡 3 秒等 sidecar 就绪」推断，握手事件在壳层大概率被忽略，但这是推断而非实证。
 2. **`set_mpv_path` 热替换渲染器后的实际可用性** —— ⚠️ 未验证。`commands.py:998-1024` 的实现完整（新建 renderer → `protocol.set_renderer` → `start()` → 关旧的），但前端没有任何调用点，无法确认这条路径在当前版本仍被使用还是已成为死代码。
-3. **MSIX 分支的运行时行为** —— ⚠️ 未验证。`get_autostart_msix` / `set_autostart_msix`（`lib.rs:858-913`）依赖 WinRT `StartupTask` 与 `AppxManifest.xml` 里的 `uap10:Parameters`，本次校对在 macOS 上进行，未读 `AppxManifest.xml`、也未在 Windows 上实跑，只核对了 Rust 侧代码路径与错误字符串。
+3. **MSIX 分支的运行时行为** —— ⚠️ 未验证。`get_autostart_msix` / `set_autostart_msix`（`lib.rs:1007-1052`，非 Windows 的 stub 在 `:1053-1070`）依赖 WinRT `StartupTask` 与 `AppxManifest.xml` 里的 `uap10:Parameters`，本次校对在 macOS 上进行，未读 `AppxManifest.xml`、也未在 Windows 上实跑，只核对了 Rust 侧代码路径与错误字符串。

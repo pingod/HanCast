@@ -1,3 +1,5 @@
+<!-- 最后校对：2026-10-24，对应版本 v2.3.23（package.json:4）。数字与 文件:行号 引用由 tools/check-doc-freshness.py 机械核对 -->
+
 <p align="center">
   <a href="README.md"><img src="https://img.shields.io/badge/README-CN-blue?style=flat-square&logo=github" alt="中文"></a>
   <a href="README_en.md"><img src="https://img.shields.io/badge/README-EN-blue?style=flat-square&logo=github" alt="English"></a>
@@ -35,8 +37,12 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/screenshot-windows.png" alt="HanCast Windows 界面预览" width="100%">
+  <img src="docs/images/ui-native-light.png" alt="HanCast 界面预览（浅色）" width="31%">
+  <img src="docs/images/ui-native-dark.png" alt="HanCast 界面预览（深色）" width="31%">
+  <img src="docs/images/screenshot-windows.png" alt="HanCast Windows 界面预览" width="31%">
 </p>
+
+<p align="center"><sub>左/中：v2.3.20 起的「克制精致的原生工具」界面（亮 / 暗）；右：Windows 实机。</sub></p>
 
 ---
 
@@ -61,8 +67,25 @@ B 站投屏还能在播放中**切换画质**，切完自动续上进度。
 把本机屏幕或**指定窗口**推上大屏，同时给浏览器一个免安装观看页（HLS，两条通道独立）。
 
 - Windows 可采**系统声音**（WASAPI 环回）与麦克风，macOS 走 CoreAudio Audio Tap
+- Linux 的 Wayland 会话（Hyprland / sway）由随包原生 helper `hancast-wlgrab` 抓屏
+  ——ffmpeg 在 Wayland 下只能抓到空的 root window，**投得起来、帧率正常、每帧纯黑**，
+  所以 v2.3.19 起宁可失败并报原因，也不退回 x11grab
 - 观看页链接一键复制，手机扫码即看
 - 投屏中实时显示观众数、分片状态与失败原因
+
+### 投屏失败看得见
+
+窗口收进托盘时，界面里那条红字没人看得见——表现就是「点了没反应，不知道为什么」。
+所以五条失败出口都会**发系统通知**并把**隐藏的窗口带回前台**，正文是设备返回的原文：
+
+| 场景 | 通知内容 |
+|------|----------|
+| 投屏被设备拒绝 | `投屏失败` + `设备名：电视返回的原因`（如 `HTTP 500 …请在电视上打开「多屏互动/无线投屏/DLNA」`） |
+| 停止指令没送达 | `已停止，但电视可能还在播` + 未确认的设备与原因 |
+| 屏幕投屏会话中途报错 | 采集进程退出的原文（同一句话只弹一次） |
+
+macOS 由壳层直发 `UNUserNotificationCenter`（系统通知权限在每次重新打包后需重新授予），
+Linux 走 DBus 桌面通知，Windows 走 Toast；拿不到权限时静默降级，界面里的红条始终在。
 
 ### 解析规则包
 
@@ -120,6 +143,11 @@ B 站投屏还能在播放中**切换画质**，切完自动续上进度。
 | Gitee Releases（国内加速） | https://gitee.com/buxiangqumingzi/han-cast/releases/latest |
 | Microsoft Store | https://apps.microsoft.com/detail/9nk1xwpg6hd5 |
 
+> CI 每个 tag 产出的是 **draft Release**，人工验收后才 publish——所以 `releases/latest`
+> 只到最近一次 publish 的版本。开发分支的产物在
+> [pingod/HanCast Releases](https://github.com/pingod/HanCast/releases) 里逐个 tag 存放，
+> 想试最新改动就从那里取。
+
 Windows（x64 NSIS 安装包）、macOS（arm64 `.app` / `.dmg`）、Linux（deb / rpm / AppImage）
 与 Arch（`hancast-<版本>-1-x86_64.pkg.tar.zst`，装法 `sudo pacman -U <包文件>`）产物
 均由 CI 随每个 tag 发布，详见 [docs/构建与发布.md](docs/构建与发布.md)。
@@ -150,7 +178,7 @@ Windows（x64 NSIS 安装包）、macOS（arm64 `.app` / `.dmg`）、Linux（deb
 
 ```bash
 # 克隆仓库
-git clone https://github.com/your-username/HanCast.git
+git clone https://github.com/lanzeweie/HanCast.git
 cd HanCast
 
 # 安装依赖
@@ -221,8 +249,11 @@ Sidecar 由 `npm run build:sidecar`（Nuitka）先行产出，再由 `scripts/sy
 | 播放器 | MPV (外部依赖) | 接收投屏播放、IPC 控制 |
 | 采集 | FFmpeg (外部依赖) + WASAPI/Audio Tap | 屏幕/窗口采集与 HLS 切片 |
 
-前端通过 Tauri `invoke()` 调用 Rust 命令（66 条），Rust 通过 stdin/stdout JSON 与 Python Sidecar 通信
-（Sidecar 侧注册 59 条，另有 8 个事件回推前端）。完整契约见 [docs/HanCast-Frontend-API.md](docs/HanCast-Frontend-API.md)。
+前端通过 Tauri `invoke()` 调用 Rust 命令（**67 条**，`generate_handler!` 见
+`src-tauri/src/lib.rs:1457-1525`），Rust 通过 stdin/stdout JSON 与 Python Sidecar 通信
+（Sidecar 侧注册 **62 条**；回推前端的事件 **8 条** = Python 6 条 + 壳层 2 条，Sidecar 另有
+`browser_request` 只到壳层）。完整契约见 [docs/HanCast-Frontend-API.md](docs/HanCast-Frontend-API.md)。
+数字口径以代码为准，`python3 tools/check-doc-freshness.py` 会逐项核对。
 
 ---
 
@@ -241,20 +272,22 @@ HanCast/
 │   │   ├── FfmpegDepsModal.vue # 「需要下载运行依赖」弹窗（FFmpeg 不随包）
 │   │   └── PluginSettings.vue  # 规则包管理与「检查规则包更新」
 │   ├── stores/                 # Pinia 状态管理（9 个）
-│   ├── locales/                # 国际化资源（zh-CN / en-US，键数必须相等）
+│   ├── locales/                # 国际化资源（zh-CN / en-US，各 324 键，必须等键）
+│   ├── i18n.ts                 # vue-i18n 实例 + 非组件环境取文案的 tt()
 │   └── api/commands.ts         # Tauri invoke 封装
 │
 ├── src-tauri/                  # Rust Tauri 壳层
 │   ├── src/
-│   │   ├── lib.rs              # Tauri 命令定义（清单见 generate_handler!）
-│   │   └── sidecar.rs          # SidecarManager（Rust ↔ Python）
+│   │   ├── lib.rs              # Tauri 命令定义（67 条，清单见 generate_handler!）
+│   │   ├── sidecar.rs          # SidecarManager（Rust ↔ Python）
+│   │   └── macos_notify.rs     # macOS 系统通知（UNUserNotificationCenter，须主线程）
 │   ├── mpv/                    # 外部播放器（构建前放这里；FFmpeg 不随包）
 │   └── Cargo.toml
 │
 ├── hancast-backend/            # Python 后端（Sidecar）
 │   └── hancast_sidecar/
 │       ├── main.py             # Sidecar 入口（stdin/stdout JSON 循环）
-│       ├── commands.py         # 命令路由（59 条注册表见该文件）
+│       ├── commands.py         # 命令路由（62 条注册表见该文件）
 │       ├── params.py           # 32 项后台参数登记表
 │       ├── ssdp.py             # SSDP 设备发现（组播失败回退子网广播）
 │       ├── protocol/
@@ -264,15 +297,16 @@ HanCast/
 │       │   └── mpv.py          # MPV 渲染器（IPC 控制）
 │       ├── media/
 │       │   ├── parser.py       # 媒体文件/URL 解析
-│       │   ├── rules/          # 规则注册表（JS 包 + 声明式 JSON，无编译内置规则）
+│       │   ├── rules/          # 规则注册表（JS 包 + 声明式 JSON + QuickJS 沙箱 + 慢操作后台任务 tasks.py）
 │       │   ├── share_resolver.py # 分享文本 → 可播地址（规则来自规则包）
 │       │   ├── failures.py     # 解析失败台账（按域名）
 │       │   └── server.py       # 本地文件 HTTP 服务 + 链路内代理
-│       ├── screencast/         # 屏幕投屏：采集、HLS 分片、供流、浏览器观看页
+│       ├── screencast/         # 屏幕投屏：采集（含 Wayland helper wlgrab）、HLS 分片、供流、观看页
 │       ├── security/           # 投屏确认（Device Guard）
 │       └── xml/                # UPnP 描述文件
 │
-├── rule-packs/                 # 官方解析规则包（源码 / dist zip / index.json）
+├── rule-packs/                 # 官方解析规则包（4 个：bilibili / cms / douyin / template）
+├── linux-capture/              # hancast-wlgrab 源码（Rust，Wayland 抓屏 helper）
 ├── tools/                      # 验收与探针脚本（索引见 tools/README.md）
 ├── scripts/                    # 版本同步、产物校验等构建脚本
 ├── .github/workflows/build.yml # 三平台 CI + draft Release
@@ -290,7 +324,7 @@ HanCast/
 |------|------|
 | [docs/架构总览.md](docs/架构总览.md) | 三进程分层、端口/线程/落盘状态、架构不变量 |
 | [docs/开发指南.md](docs/开发指南.md) | 环境、跑法、测试口径、调试、提交与发版规矩 |
-| [docs/HanCast-Frontend-API.md](docs/HanCast-Frontend-API.md) | 66 条 invoke 命令与 8 个事件的全量契约 |
+| [docs/HanCast-Frontend-API.md](docs/HanCast-Frontend-API.md) | 67 条 invoke 命令与 8 个事件的全量契约 |
 | [docs/HanCast-Frontend-Spec.md](docs/HanCast-Frontend-Spec.md) | 组件 / store / 视图、样式与 i18n 约定 |
 | [docs/故障排查.md](docs/故障排查.md) | 按症状索引：发现不了、推不上去、停不下来、没声音…… |
 | [docs/屏幕投屏.md](docs/屏幕投屏.md) · [docs/投屏确认.md](docs/投屏确认.md) | 两个子系统的行为契约 |

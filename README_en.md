@@ -1,3 +1,5 @@
+<!-- 最后校对：2026-10-24，对应版本 v2.3.23（package.json:4）。数字与 文件:行号 引用由 tools/check-doc-freshness.py 机械核对 -->
+
 <p align="center">
   <a href="README.md"><img src="https://img.shields.io/badge/README-CN-blue?style=flat-square&logo=github" alt="中文"></a>
   <a href="README_en.md"><img src="https://img.shields.io/badge/README-EN-blue?style=flat-square&logo=github" alt="English"></a>
@@ -35,8 +37,12 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/screenshot-windows.png" alt="HanCast Windows Interface Preview" width="100%">
+  <img src="docs/images/ui-native-light.png" alt="HanCast interface (light)" width="31%">
+  <img src="docs/images/ui-native-dark.png" alt="HanCast interface (dark)" width="31%">
+  <img src="docs/images/screenshot-windows.png" alt="HanCast Windows Interface Preview" width="31%">
 </p>
+
+<p align="center"><sub>Left / centre: the restrained native-tool UI introduced in v2.3.20 (light / dark); right: on real Windows hardware.</sub></p>
 
 ---
 
@@ -63,8 +69,28 @@ Mirror your whole screen or a **specific window** to the big screen, with an ins
 browser watch page handed out at the same time (HLS, two independent channels).
 
 - Windows captures **system audio** (WASAPI loopback) and the mic; macOS uses a CoreAudio Audio Tap
+- On Linux Wayland sessions (Hyprland / sway) frames come from the bundled native helper
+  `hancast-wlgrab` — ffmpeg can only grab the empty root window there, which casts **at full frame
+  rate, entirely black, with a clean log**, so since v2.3.19 we fail loudly instead of falling back to x11grab
 - One click to copy the watch-page link, phone scans the QR and watches
 - Live viewer count, segment status and failure reasons while casting
+
+### Cast failures actually reach you
+
+When the window is hidden in the tray nobody sees the red inline error — all you get is "I clicked and
+nothing happened". All five failure exits therefore **raise a system notification** and **bring the
+hidden window back to the front**, with the device's own words in the body:
+
+| Situation | Notification |
+|-----------|--------------|
+| Device refused the cast | `Cast failed` + `device name: the reason it returned` (e.g. `HTTP 500 … open Multi-Screen / Screen Mirroring / DLNA on the TV`) |
+| Stop never delivered | `Stopped locally, but the TV may still be playing` + which devices and why |
+| Screen-cast session died mid-way | the capture process' exit reason (identical text is de-duplicated) |
+
+macOS posts through `UNUserNotificationCenter` from the shell (notification permission has to be
+re-granted after every re-pack, since each build is a new linker-signed identity); Linux uses DBus
+desktop notifications; Windows uses Toast. Without permission everything degrades silently and the
+inline error is still there.
 
 ### Rule Packs
 
@@ -112,7 +138,7 @@ After casting starts, click the device card to open the control panel:
 
 ![Settings page](docs/images/settings.png)
 
-- 27 background parameters (discovery heartbeat, resolve budget, index timeout, user agents, segment length, …)
+- 32 background parameters (discovery heartbeat, index timeout, user agents, segment length, GitHub mirror, …)
   are tunable from the settings page, take effect on the next call, and stay on your machine
 - The in-app log panel shows Sidecar logs with per-module filtering, temporary level escalation and
   one-click export — no need to guess where the log file lives
@@ -124,6 +150,10 @@ After casting starts, click the device card to open the control panel:
 | GitHub Releases | https://github.com/lanzeweie/HanCast/releases/latest |
 | Gitee Releases (faster in mainland China) | https://gitee.com/buxiangqumingzi/han-cast/releases/latest |
 | Microsoft Store | https://apps.microsoft.com/detail/9nk1xwpg6hd5 |
+
+> CI creates a **draft** release per tag and a human publishes it after acceptance, so
+> `releases/latest` only ever points at the last published version. Artifacts of the development
+> line live in [pingod/HanCast Releases](https://github.com/pingod/HanCast/releases).
 
 CI publishes Windows (x64 NSIS installer), macOS (arm64 `.app` / `.dmg`) and Linux
 (deb / rpm / AppImage, plus a pacman-installable `.pkg.tar.zst`) artifacts for every tag —
@@ -158,7 +188,7 @@ See [docs/屏幕投屏.md](docs/屏幕投屏.md).
 
 ```bash
 # Clone the repo
-git clone https://github.com/your-username/HanCast.git
+git clone https://github.com/lanzeweie/HanCast.git
 cd HanCast
 
 # Install dependencies
@@ -232,9 +262,12 @@ resources by `scripts/sync-sidecar.cjs`.
 | Player | MPV (external dependency) | Receiver playback, IPC control |
 | Capture | FFmpeg (external dependency) + WASAPI / Audio Tap | Screen & window capture, HLS segmentation |
 
-The frontend calls 66 Rust commands via Tauri `invoke()`; Rust talks to the Python Sidecar over
-stdin/stdout JSON (59 commands registered Sidecar-side, 8 events pushed back to the frontend).
-Full contract: [docs/HanCast-Frontend-API.md](docs/HanCast-Frontend-API.md).
+The frontend calls **67** Rust commands via Tauri `invoke()` (`generate_handler!`,
+`src-tauri/src/lib.rs:1457-1525`); Rust talks to the Python Sidecar over stdin/stdout JSON
+(**62** commands registered Sidecar-side; **8** events reach the frontend = 6 from Python + 2 from the
+shell, plus `browser_request` which stops at the shell). Full contract:
+[docs/HanCast-Frontend-API.md](docs/HanCast-Frontend-API.md). `python3 tools/check-doc-freshness.py`
+re-checks every one of these numbers against the code.
 
 ---
 
@@ -252,12 +285,14 @@ HanCast/
 │   │   ├── ScreenCastPanel.vue # Screen cast panel
 │   │   └── PluginSettings.vue  # Rule pack management & "check for updates"
 │   ├── stores/                 # Pinia state management (9 stores)
-│   ├── locales/                # i18n resources (zh-CN / en-US, key sets must match)
+│   ├── locales/                # i18n resources (zh-CN / en-US, 324 keys each, must match)
+│   ├── i18n.ts                 # vue-i18n instance + tt() for use outside components
 │   └── api/commands.ts         # Tauri invoke wrapper
 │
 ├── src-tauri/                  # Rust Tauri Shell
 │   ├── src/
-│   │   ├── lib.rs              # Tauri commands (see generate_handler! for the list)
+│   │   ├── lib.rs              # Tauri commands (67; see generate_handler! for the list)
+│   │   ├── macos_notify.rs     # macOS notifications via UNUserNotificationCenter (main thread!)
 │   │   └── sidecar.rs          # SidecarManager (Rust ↔ Python)
 │   ├── mpv/                    # External player binary (placed before build; FFmpeg is not bundled)
 │   └── Cargo.toml
@@ -265,8 +300,8 @@ HanCast/
 ├── hancast-backend/            # Python Backend (Sidecar)
 │   └── hancast_sidecar/
 │       ├── main.py             # Sidecar entry (stdin/stdout JSON loop)
-│       ├── commands.py         # Command router (registry of 59 commands lives here)
-│       ├── params.py           # 27 background parameters
+│       ├── commands.py         # Command router (registry of 62 commands lives here)
+│       ├── params.py           # 32 background parameters
 │       ├── ssdp.py             # SSDP discovery (broadcast fallback when multicast fails)
 │       ├── protocol/
 │       │   ├── dlna.py         # DLNA protocol implementation
@@ -279,11 +314,12 @@ HanCast/
 │       │   ├── share_resolver.py # Share text -> playable URL (rules come from installed packs)
 │       │   ├── failures.py     # Resolve failure ledger (per domain)
 │       │   └── server.py       # Local file HTTP server + in-path proxy
-│       ├── screencast/         # Screen cast: capture, HLS segments, serving, watch page
+│       ├── screencast/         # Screen cast: capture (incl. the Wayland helper wlgrab), HLS, serving, watch page
 │       ├── security/           # Cast confirmation (Device Guard)
 │       └── xml/                # UPnP description files
 │
-├── rule-packs/                 # Official rule packs (sources / dist zips / index.json)
+├── rule-packs/                 # Official rule packs (4: bilibili / cms / douyin / template)
+├── linux-capture/              # hancast-wlgrab source (Rust; Wayland screen capture)
 ├── tools/                      # Acceptance & probe scripts (index in tools/README.md)
 ├── scripts/                    # Version sync and artifact verification scripts
 ├── .github/workflows/build.yml # 3-platform CI + draft Release
@@ -302,7 +338,7 @@ paths and states the maintenance rules. Frequently used:
 |----------|-------------|
 | [docs/架构总览.md](docs/架构总览.md) | Process layout, ports/threads/on-disk state, invariants |
 | [docs/开发指南.md](docs/开发指南.md) | Setup, run modes, test discipline, debugging, release rules |
-| [docs/HanCast-Frontend-API.md](docs/HanCast-Frontend-API.md) | Full contract of 66 invoke commands and 8 events |
+| [docs/HanCast-Frontend-API.md](docs/HanCast-Frontend-API.md) | Full contract of 67 invoke commands and 8 events |
 | [docs/HanCast-Frontend-Spec.md](docs/HanCast-Frontend-Spec.md) | Components / stores / views, styling, i18n |
 | [docs/故障排查.md](docs/故障排查.md) | Symptom-indexed: devices not found, cast won't start, won't stop, no audio… |
 | [docs/屏幕投屏.md](docs/屏幕投屏.md) · [docs/投屏确认.md](docs/投屏确认.md) | Behaviour contracts of the two subsystems |

@@ -2,11 +2,11 @@
 
 > 这份文档回答：`tools/` 下这些脚本各自验什么、怎么跑、需要什么环境，以及新增脚本要守哪些约定。
 >
-> 最后校对：2026-10-24，对应版本 v2.3.20。
+> 最后校对：2026-10-24，对应版本 v2.3.23（分类表按当前工作区重数；新增 §1.8 文档体检）
 
 `tools/` 里放的是**可重复运行的验收 / 探针脚本**，不是一次性的 `/tmp` 手搓脚本。它们必须自适应当前机器——设备名、网卡、产物路径、参数条数都从现场现读，不写死。用法上的两条铁律：**修 bug 之前先跑它复现，修完之后再用它证明**。「证明」的对象是判据（退出码 / PASS-FAIL 行），不是截图，也不是「我点了一下看起来对」。
 
-当前分类表收录 **53 个顶层脚本 + 1 个目录型验收包**（`browser-channel-livecheck/`，4 个文件合写成 §1.7 的一行）。口径为当前工作区（包括本轮新加的 3 个前端回归脚本）：顶层 `.py/.sh/.cmd/.ps1/.mjs/.cjs` 共 54 个，扣除不入分类表的 `audit-doc-refs.py` 为 53；文档体检用法见 [docs/README.md](../docs/README.md) §4。历史 v2.3.19 已提交快照为 50 个分类脚本，`git ls-files` 在新增脚本提交前不会包含它们；目录和 `__pycache__/` 不计入脚本数。
+当前分类表收录 **55 个顶层脚本 + 1 个目录型验收包**（`browser-channel-livecheck/`，4 个文件合写成 §1.7 的一行）。口径为当前工作区（含 v2.3.23 新加的 `check-doc-freshness.py`）：顶层 `.py/.sh/.cmd/.ps1/.mjs/.cjs` 共 55 个，全部进分类表；两份文档体检脚本单独立在 §1.8，用法与放行口径见 [docs/README.md](../docs/README.md) §4。历史 v2.3.19 已提交快照为 50 个分类脚本，`git ls-files` 在新增脚本提交前不会包含它们；目录和 `__pycache__/` 不计入脚本数。
 
 ---
 
@@ -113,6 +113,15 @@ ssh administrator@192.168.1.68 "schtasks /delete /tn <TASK> /f"      # 收尾
 | `verify-params-ui.mjs` | 设置页「后台参数」区块的浏览器验收：用真实 Chromium（headless shell + CDP）渲染，不靠快照推断布局。走 vite dev 的 mock 通道，只验 UI 行为（展开 / 四类控件 / 待保存计数 / 保存回落 / 恢复默认）。分组标题是**逐串比对**的（v2.3.12 起期望值含「GitHub 加速」），所以新增 section 忘了补 i18n 时它会红 | `node tools/verify-params-ui.mjs [base-url]`（默认 `http://localhost:5199`） | 先起 vite：`node node_modules/vite/bin/vite.js --port 5199`；`~/.cache/puppeteer/chrome-headless-shell` 下有 `mac_arm-*` 构建；CDP 端口 9337；截图落 `.tmp-win/hancast-params-ui.png`；退出码 0 = 全部断言通过。**后端契约不由它负责**——那是 `hancast-backend/tests/test_params*.py` 与 `tools/accept-macos-artifact.sh` 的活 |
 | `verify-error-wrap-ui.mjs` | 「解析失败原因」整行可见的浏览器验收（v2.3.12）：走 vite dev 的 mock 通道喂一条非媒体网页地址，mock 后端抛的就是真后端那条长错误，于是文案与样式都是真实形状。判据用**几何**不用文本——`textContent` 永远完整，截断只发生在渲染上，所以量「换了几行」「有没有一行的右边界超出元素盒子」，并在 **420px 窄窗**里测（宽窗会把老的 `nowrap` 样式也放过）<br>| `node tools/verify-error-wrap-ui.mjs [base-url]`（默认 `http://localhost:5199`） | 先起 vite：`node node_modules/vite/bin/vite.js --port 5199`；Chrome 同 §1.6 上一行；截图落 `.tmp-win/hancast-error-wrap.png`；退出码 0 = 全部断言通过 |
 | `verify-sidecar-utf8-protocol.py` | 验证 sidecar 的 stdin/stdout 协议在「父进程没有 locale」时仍走得通。登记表/错误文案全是中文，而 stdout 就是与 Rust 的通信通道；父进程没给 `LANG`/`LC_*` 时 Python 的 stdout 会退回 ASCII，`emit_response(..., ensure_ascii=False)` 直接抛 `UnicodeEncodeError`，表现为「命令永远失败」而不是「编码不对」 | `python3 tools/verify-sidecar-utf8-protocol.py [python 二进制]`（缺省用 `sys.executable`；可指向打包版 sidecar） | 后端源码可 import；无需外网、无需真机。判据：hostile env（`LC_ALL=C` 等）下 `get_params` 必须成功、条数不少于 18、中文标签原样回来；`stop_screen_cast`（空载）这种带中文提示的响应也必须回来。v2.2.18 用打包版实测撞到过 `{"id":2,"success":false,"error":"'ascii' codec can't encode characters …"}` |
+
+### 1.8 文档体检
+
+| 脚本 | 一句话用途 | 运行方式 | 前置环境 |
+|------|-----------|---------|---------|
+| `check-doc-freshness.py` | **文档新鲜度闸门**（v2.3.23 立项）。补 `audit-doc-refs.py` 查不了的那一类：行号还在、但指的行已经不是那回事。三道检查：① **内容校验**——引用旁边反引号里的符号必须真的落在那个行号窗口里；归因规则是「贴着引用才算」（中间最多夹 4 个标点），放宽一点就会把表格第一列的命令名算给右边的行号、一次误报 489 条；② **校对戳**——头部「最后校对 vX.Y.Z」落后于 `package.json` 即报，已声明退役的历史稿（前 15 行含「已被/取代/历史稿/留档」）按 `audit-doc-refs.py` 同一口径放行；③ **硬数字**——壳层 `#[tauri::command]`、Sidecar 注册表、`PARAM_SPECS`、组件/store/locale 键数/官方包/测试文件数逐项与代码实测比对。`--defscan` 是返工用的加细档：报「窗口里只有调用、没有定义行」的引用，软提示、不影响退出码。立项当轮用它抓出并修掉 **108 处**静默漂移的 `文件:行号`（单是 `docs/屏幕投屏.md` 就有 70 处，且其中一半连闸门第一版都抓不到） | `python3 tools/check-doc-freshness.py [docs/x.md ...] [--citations|--stamps|--numbers|--defscan] [--max-lag N]` | 无依赖，纯 stdlib；只读仓库，不写盘、不动设备 |
+| `audit-doc-refs.py` | 文档引用的**文件是否存在 + 行号是否越界**（内容对不对由上面那道管）；四类刻意引用进「放行」计数 | `python3 tools/audit-doc-refs.py [docs/x.md] [--show]` | 无依赖，纯 stdlib；需要 `git check-ignore` 判定运行时落盘文件 |
+
+---
 
 ### 1.7 反爬：TLS 指纹与浏览器通道
 

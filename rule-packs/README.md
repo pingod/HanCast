@@ -2,7 +2,7 @@
 
 > 这个目录回答一个问题：**官方解析规则包的「源 / 产物 / 索引」三件套是怎么组织的、怎么打包发布、用户机器上怎么装到**。写规则包的 API 细节不在这里。
 >
-> 最后校对：2026-10-17，对应版本 v2.3.17（`package.json:4`）
+> 最后校对：2026-10-24，对应版本 v2.3.23（`package.json:4`。本轮只重跑闸门：引用行号与「4 个官方包 / 32 项后台参数」的实测口径都还成立）
 
 ---
 
@@ -110,7 +110,7 @@ dist/
         └── *.js
 ```
 
-- `share_rules` 根可被设置项覆盖（`config.py:117-122`，默认 `os.path.join(SETTING_DIR, "share_rules")`）；解析器取它再拼 `plugins`（`hancast-backend/hancast_sidecar/media/share_resolver.py:341-344`）。
+- `share_rules` 根可被设置项覆盖（`config.py:117-122`，默认 `os.path.join(SETTING_DIR, "share_rules")`）；解析器取它再拼 `plugins`（`hancast-backend/hancast_sidecar/media/share_resolver.py:318-319`）。
 - 目录布局与 `state.json` / `_cache/` 的说明是 `jsplugins.py:7-14` 的模块 docstring 原文。
 - 安装目录名 = `manifest.name`，不是 zip 文件名（`jsplugins.py:520`，`target = os.path.join(self.root, name)`）。
 

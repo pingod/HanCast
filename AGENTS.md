@@ -157,7 +157,7 @@ HanCast/
 │   ├── Cargo.toml / Cargo.lock  # --locked 构建；不依赖 GTK
 │   └── src/main.rs              # 886 行：list / capture --output --fps，帧按紧凑 BGRA 写 stdout
 ├── scripts/                     # 壳层脚本：sync-version / check-version / sync-sidecar / check-resources / build-arch-pkg（均为 .cjs）
-├── tools/                       # 50 个顶层脚本 + 1 个目录型验收包（browser-channel-livecheck/），索引与计数口径见 tools/README.md
+├── tools/                       # 55 个顶层脚本 + 1 个目录型验收包（browser-channel-livecheck/），索引与计数口径见 tools/README.md
 ├── mpv/                         # 本地放置的 MPV（`.gitignore:86-87` 只留 portable_config/）
 │   └── portable_config/mpv.conf # 入库：弹幕/OSD 脚本、着色器、字体
 ├── docs/                        # 设计文档，**入口是 docs/README.md**
@@ -229,9 +229,12 @@ HanCast/
 3. **UTF-8 stdio 在 logger 初始化之前强制**（`main.py:21-28`）：Windows 打包版默认 cp936/ascii，
    中文日志行会先被编码器吞掉，v2.2.18 就是这么撞到 `'ascii' codec can't encode characters` 的。
 
-事件总账：**Sidecar 主动推送 6 条**（`ready`、`device_found`、`device_lost`、`cast_state_changed`、
-`cast_confirm_request`、`screen_cast_state_changed`），Rust 侧另发 2 条（`update-available`、`autostart-changed`）；
-前端合计监听 8 条。`ready` 两侧都没有订阅者（只作握手痕迹），`cast_error` 是前端遗留的死监听（`src/stores/cast.ts:728`）。
+事件总账（两个口径别混）：`grep -rn "emit_event(" hancast_sidecar/ | grep -o '"[a-z_]*"' | sort -u` 数出
+**Sidecar 发出的事件名 7 条**（`ready`、`device_found`、`device_lost`、`cast_state_changed`、
+`cast_confirm_request`、`screen_cast_state_changed`、`browser_request`），但 **`browser_request` 不转发前端**——
+它是壳层↔Sidecar 的反向 RPC，`sidecar.rs:361` 的专分支转给离屏渲染窗口。所以**回推前端 6 条**，
+Rust 侧另发 2 条（`update-available`、`autostart-changed`），**前端合计监听 8 条**。
+`ready` 两侧都没有订阅者（只作握手痕迹），`cast_error` 是前端遗留的死监听（`src/stores/cast.ts:728`）。
 完整清单与触发时机见 docs/HanCast-Frontend-API.md。
 
 ### Tauri 命令列表（节选，完整清单以 `src-tauri/src/lib.rs` 的 `generate_handler!`（lib.rs:1457-1525，**67 条**）为准）
@@ -665,10 +668,11 @@ bash tools/rust-check.sh
 
 # 前端没有测试脚本（package.json 里没有 test）；类型检查走 npm run build 的 vue-tsc
 node tools/verify-params-ui.mjs        # 参数表与 tag 源码逐键比对（UI 侧验收）
-python3 tools/audit-doc-refs.py        # 文档引用的 文件:行号 是否还成立
+python3 tools/audit-doc-refs.py        # 文档引用的 文件:行号 是否还成立（只查文件在不在、越不越界）
+python3 tools/check-doc-freshness.py   # 引用**内容**对不对 + 校对戳 + 硬数字（v2.3.23 起，见「文档维护约定」）
 ```
 
-`tools/` 下 50 个顶层脚本（+ `browser-channel-livecheck/` 目录型验收包）按用途分类见 tools/README.md（计数口径同那里）；端到端验收脚本的判据写在
+`tools/` 下 55 个顶层脚本（+ `browser-channel-livecheck/` 目录型验收包）按用途分类见 tools/README.md（计数口径同那里，且由闸门逐行点名核对）；端到端验收脚本的判据写在
 docs/构建与发布.md §6 与各专题文档，不要凭脚本退出码 0 就当作功能可用。
 
 ## 窗口配置
@@ -780,15 +784,27 @@ alpha 保持 0，Hyprland 直接把后面的桌面（还带模糊）透出来，
    （用户可感知的变化 + 发布提交号）。
 2. **每条关键论断挂 `文件:行号`**，行号会漂，所以大改后跑体检：
    ```bash
-   python3 tools/audit-doc-refs.py                      # 全仓 md
+   python3 tools/audit-doc-refs.py                      # 全仓 md：文件在不在、行号越不越界
    python3 tools/audit-doc-refs.py docs/故障排查.md --show   # 单份，附带被引原文
+   python3 tools/check-doc-freshness.py                       # 引用**内容** + 校对戳 + 硬数字（v2.3.23 起必跑）
+   python3 tools/check-doc-freshness.py --defscan             # 返工时用：连「只剩调用、没有定义」也报
    ```
+   两道不是重复劳动：前者只答「文件在不在、行号越界没越界」，**行号还在但指向别处**它看不见——
+   本项目为此返工过三次（v2.3.19 的 `build.yml` +47 行、v2.3.21 的 locale 插键、v2.3.23 复查发现
+   `docs/投屏确认.md` 有 26 处 `commands.py` 引用整体漂移），后者就是为这一类加的，立项当轮抓出
+   **108 处**静默漂移。它的归因规则要保持紧（只有贴着引用的反引号符号才算声称），
+   松一格就误报几百条，闸门就废了。
    「文件找不到」要自己分辨是已退役的历史文件名（写成「曾经/已于 vX 删除」即可）还是真写错；
    运行时才生成的落盘文件（`hancast_setting.json`、`window_config.json` 等）脚本已放行。
 3. **每份文档头部留一行「最后校对：YYYY-MM-DD，对应版本 vX.Y.Z」**，改了内容就改这行。
+   两类例外由闸门承认，别硬盖章：已被取代的历史稿在**前 15 行**声明「已被…取代/仅作留档」即可放行
+   （给退役稿盖「校对过」反而是说谎）；门面 `README.md` / `README_en.md` 用 **HTML 注释**藏这一行
+   （GitHub 上不可见，但 `check-doc-freshness.py` 读得到）。
 4. **数字必须写口径**。例：`#[tauri::command]` 67 条（`lib.rs:1457-1525`）/ Sidecar 注册 62 条
-   （`commands.py:131-222`）/ 前端 `commands.ts` 导出 65 个 / 事件 8 条（Python 6 + Rust 2）。
-   不写口径，下次改动看起来就像文档坏了。
+   （`commands.py:131-222`）/ 前端 `commands.ts` 导出 65 个；
+   事件是**三个数**：Sidecar 发出 7 个事件名、其中 6 条转发前端（`browser_request` 只到壳层）、
+   壳层自加 2 条 ⇒ 前端监听 8 条。不写口径，下次改动看起来就像文档坏了。
+   `tools/` 的顶层脚本数也一样要写口径，且由闸门逐行点名核对（漏一行就报）。
 5. **别静默删证据**。被推翻的结论保留「历史一句」（为什么曾经这么做、哪一版改的），
    就像本文件「安全约束」第 3 条那样标注更正来源。
 6. **主动维护**：动到上述契约面的改动，收尾前必须自己回答「哪几份文档现在说谎了」并当场改掉，
