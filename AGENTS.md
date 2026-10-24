@@ -3,7 +3,7 @@
 > 旧名 `CLAUDE.md`（Claude Code 私有约定），2026-10-15 改名为跨工具的 `AGENTS.md`；
 > `CLAUDE.md` 现在只留三行指针指向本文件。
 
-> 最后校对：2026-10-24，对应版本 v2.3.20（`package.json:4`）。
+> 最后校对：2026-10-24，对应版本 v2.3.21（`package.json:4`）。
 > 本文件是速览与硬约束；逐模块的深度内容在 **docs/README.md** 的索引里，别在这里找细节。
 
 ## 项目概述
@@ -12,7 +12,7 @@
 
 - **项目名**: HanCast
 - **作者**: lanzeweie@foxmail.com
-- **版本**: 2.3.19（版本 SSOT 是 `package.json` 的 `version`，`scripts/sync-version.cjs:4`；改版本只走 `npm run version:set`，见「版本管理」）
+- **版本**: 2.3.21（版本 SSOT 是 `package.json` 的 `version`，`scripts/sync-version.cjs:4`；改版本只走 `npm run version:set`，见「版本管理」）
 - **性质**: 二次开发（非原项目官方更新）
 - **原始代码**: [xfangfang/Macast](https://github.com/xfangfang/Macast)（原作者 xfangfang，最后更新 2022-01）。仓库里**不含** `Macast-main/`、`Macast-plugins-main/` 这些本地目录，1.x 源码只作为移植参考，见「原始代码复用情况」
 - **目标架构**: Tauri 2.0 前端 + Rust 桥接 + Python Sidecar（+ MPV 接收端播放、FFmpeg 屏幕抓取）
@@ -50,7 +50,8 @@ HanCast/
 ├── index.html                   # Vite 入口 HTML
 │
 ├── src/                         # Vue 3 前端源码
-│   ├── main.ts                  # 应用入口（Pinia/Router/i18n 初始化）
+│   ├── main.ts                  # 应用入口（装配 Pinia/Router/i18n）
+│   ├── i18n.ts                  # vue-i18n 实例 + 非组件环境取文案的 `tt()`（2026-10-24 从 main.ts 拆出：store 层要取文案，反向 import main 会绕成循环依赖）
 │   ├── App.vue                  # 根组件（主题检测、设置加载、全局事件订阅）
 │   ├── api/
 │   │   └── commands.ts          # Tauri invoke 封装 + 浏览器 mock
@@ -304,6 +305,7 @@ Rust 命令名与 Sidecar `cmd` 名不一定同名（例如 Rust 的 `plugin_lis
 {
   "@tauri-apps/api": "^2.0.0",
   "@tauri-apps/plugin-dialog": "^2.7.1",
+  "@tauri-apps/plugin-notification": "^2.7.0",
   "@tauri-apps/plugin-shell": "^2.0.0",
   "pinia": "^2.1.7",
   "vue": "^3.4.0",
@@ -322,6 +324,7 @@ tauri-plugin-clipboard-manager = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-autostart = "2"
 tauri-plugin-single-instance = "2"
+tauri-plugin-notification = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["sync", "macros", "rt-multi-thread", "time"] }
@@ -717,7 +720,12 @@ alpha 保持 0，Hyprland 直接把后面的桌面（还带模糊）透出来，
    投屏请求过 Device Guard 确认（`security/guard.py`），并且**只在本机使用时开启屏幕投屏**。
    > 这条曾被写成「仅监听 127.0.0.1，不暴露到网络」，是与实现相反的历史描述，已按代码更正。
 4. **Sidecar 通信**：stdin/stdout 管道，不暴露网络端口
-5. **规则包沙箱**：站点脚本跑在 QuickJS 里（`media/rules/jsruntime.py`），只有 `host.*` 受限接口，
+5. **投屏失败必须让用户看见**：窗口收进托盘时界面红条没人看得到，所以 `start_cast` 失败与
+   「停止未送达」两条路径都会发**系统通知**（`src/api/commands.ts` 的 `notify()` →
+   `tauri-plugin-notification`，capability `notification:default`）。权限只在真要发时申请，
+   被拒或不在 Tauri 里就静默降级——**不许**为此弹窗阻塞或改投屏流程；正文用的是 Sidecar 原文，
+   所以 macOS 上每次重新打包（linker-signed 换身份）后系统通知权限都要重新授予。
+6. **规则包沙箱**：站点脚本跑在 QuickJS 里（`media/rules/jsruntime.py`），只有 `host.*` 受限接口，
    拿不到 Python 运行时；导入侧限额见 `media/rules/jsplugins.py:44-47`
    （ZIP ≤2MB、条目 ≤128、解压后 ≤8MB、单文件 ≤2MB），官方索引产物按 sha256 校验后才落盘。
 

@@ -179,7 +179,7 @@ const MOCK_DEVICES: Device[] = [
 const MOCK_SETTINGS: AppSettings = {
   usn: 'hancast-uuid-001',
   friendly_name: 'HanCast',
-  version: '2.3.20',
+  version: '2.3.21',
   media_port: 8080,
   default_device: null,
   network_interface: '',
@@ -615,8 +615,8 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
     case 'check_update':
       return {
         has_update: false,
-        current: '2.3.20',
-        latest: '2.3.20',
+        current: '2.3.21',
+        latest: '2.3.21',
         url: '',
         body: '',
         source: 'github',
@@ -1358,4 +1358,50 @@ export async function ffmpegDownloadStatus(): Promise<FfmpegDownloadTask> {
 export async function openFfmpegDir(): Promise<{ ok: boolean; path?: string; error?: string }> {
   const invoke = await initInvoke()
   return invoke('open_ffmpeg_dir')
+}
+
+// ── 系统通知 ────────────────────────────────────────────────
+// 投屏失败时窗口常常已经收进托盘，界面里那条红字用户根本看不见——
+// 电视返回的原因必须落到 OS 通知里，否则表现就是「点了没反应」。
+
+let notifyGranted: Promise<boolean> | null = null
+
+async function notificationModule() {
+  try {
+    return await import('@tauri-apps/plugin-notification')
+  } catch {
+    return null // 浏览器 dev，或没装插件的旧版壳层
+  }
+}
+
+/** 权限只在真要发通知时申请一次；被拒不缓存，下次失败还能再问（用户可能后来在系统设置里放开） */
+async function ensureNotifyPermission(): Promise<boolean> {
+  if (notifyGranted) {
+    const ok = await notifyGranted
+    if (!ok) notifyGranted = null
+    return ok
+  }
+  notifyGranted = (async () => {
+    const n = await notificationModule()
+    if (!n) return false
+    try {
+      if (await n.isPermissionGranted()) return true
+      return (await n.requestPermission()) === 'granted'
+    } catch {
+      return false
+    }
+  })()
+  return notifyGranted
+}
+
+/** 发一条系统通知。没权限 / 不在 Tauri 里就静默——调用方的界面提示仍然在。 */
+export async function notify(title: string, body: string): Promise<void> {
+  if (!(await ensureNotifyPermission())) return
+  const n = await notificationModule()
+  if (!n) return
+  try {
+    n.sendNotification({ title, body })
+  } catch {
+    /* 通知本身失败不该再冒一层错，也不该影响投屏流程 */
+  }
 }

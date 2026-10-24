@@ -137,11 +137,14 @@ async function fixture(locale = 'en-US') {
   const clock = new Clock()
   const logs = []
   const calls = []
+  // 系统通知记录：断言「失败必须落到 OS 通知」，而不是只写进界面红条
+  const notified = []
   const handlers = {
     getCastState: async () => ({ sessions: {} }), getCastUrl: async () => info(),
     startCast: async () => {}, stopCast: async () => ({}), pauseCast: async () => {},
     resumeCast: async () => {}, seekCast: async () => {}, setVolume: async v => v,
     setMute: async () => {}, getAutostart: async () => true,
+    notify: async (title, body) => { notified.push({ title, body }) },
     resolveShare: async () => ({ ...media, uri: 'https://invalid.test/high.mp4', quality: 'high' }),
   }
   const api = Object.fromEntries(Object.keys(handlers).map(name => [name, (...args) => {
@@ -153,6 +156,7 @@ async function fixture(locale = 'en-US') {
     vue: { ...vue, Transition: vue.BaseTransition }, pinia,
     'vue-i18n': require('vue-i18n'),
     '@/api/commands': api,
+    '@/i18n': { tt: (key) => `«${key}»` },
     '@tauri-apps/api/event': { listen: async (name, fn) => {
       listeners.set(name, fn)
       return () => listeners.delete(name)
@@ -160,9 +164,9 @@ async function fixture(locale = 'en-US') {
   }
   imports['@/types/cast'] = evaluate(fs.readFileSync(path.join(root, 'src/types/cast.ts'), 'utf8'),
     path.join(root, 'src/types/cast.ts'), imports, clock, logs)
+  imports['@/stores/device'] = { useDeviceStore: pinia.defineStore('device', () => ({ devices: vue.ref([]) })) }
   const storeModule = evaluate(storeSource, storeFile, imports, clock, logs)
   imports['@/stores/cast'] = storeModule
-  imports['@/stores/device'] = { useDeviceStore: pinia.defineStore('device', () => ({ devices: vue.ref([]) })) }
   const Controller = evaluate(script.content, controllerFile, imports, clock, logs).default
   Controller.render = evaluate(template.code, `${controllerFile}.render.js`, imports, clock, logs).render
   const body = node('body')
@@ -183,7 +187,7 @@ async function fixture(locale = 'en-US') {
   app.mount(container)
   await flush()
   return {
-    store, handlers, calls, clock, logs, listeners, body, showChild,
+    store, handlers, calls, clock, logs, listeners, body, showChild, notified,
     get ui() { return instance.subTree.component.setupState },
     count(name) { return calls.filter(call => call.name === name).length },
     find(className) { return allNodes(body).find(el => el.props.class?.split(' ').includes(className)) },
@@ -583,6 +587,34 @@ test('scoped style and both locale contracts cover theme contrast and long/narro
     for (const key of ['cast.error', 'common.confirm', 'cast.play', 'cast.pause']) assert.ok(locale[key], key)
   }
   await f.start()
+})
+
+test('cast failure and undelivered stop both raise a system notification', async f => {
+  const reason = 'unknown tcl 的 DLNA 控制服务返回 HTTP 500：请在电视上打开「多屏互动」'
+  f.handlers.startCast = async () => { throw new Error(reason) }
+  await f.store.startCast('tv9', 'https://invalid.test/a.mp4')
+  assert.equal(f.notified.length, 1, '投屏失败要发一条系统通知')
+  assert.equal(f.notified[0].title, '«notify.castFailed»')
+  assert.ok(f.notified[0].body.includes(reason), f.notified[0].body)
+  assert.ok(f.notified[0].body.includes('tv9'), '设备名/ id 要在正文里')
+
+  f.notified.length = 0
+  f.handlers.startCast = async () => {}          // 恢复正常起播，别把上一段的抛错带进来
+  await f.start()
+  assert.deepEqual(f.notified, [], '起播成功不该发通知')
+  f.handlers.stopCast = async () => ({ control_failed: ['a'], reasons: { a: '控制接口不可达' } })
+  await f.store.stopCast('a')
+  assert.equal(f.notified.length, 1, '电视没确认 Stop 也要通知')
+  assert.equal(f.notified[0].title, '«notify.stopNotDelivered»')
+  assert.match(f.notified[0].body, /控制接口不可达/)
+
+  // 成功路径不许发通知
+  f.notified.length = 0
+  await f.start()
+  f.handlers.stopCast = async () => ({})
+  await f.start()
+  await f.store.stopCast('a')
+  assert.deepEqual(f.notified, [], '正常停止不该打扰用户')
 })
 
 test('preview never loads a video as an image and recovers after a broken cover', async f => {

@@ -219,6 +219,8 @@ function fixture(t, delayed = false) {
           if (id === 'pinia') return pinia
           if (id === 'vue-i18n') return require('vue-i18n')
           if (id === '@/api/commands') return commands
+          // 本用例测的是「监听随根组件存续」，文案层给最小替身即可
+          if (id === '@/i18n') return { tt: (key) => key, i18n: { global: { t: (k) => k } } }
           if (id === '@tauri-apps/api/event') return events
           const leaf = /^@\/components\/(\w+)\.vue$/.exec(id)
           if (leaf && leafNames.has(leaf[1])) {

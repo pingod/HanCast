@@ -18,6 +18,9 @@ import {
   resolveShare,
 } from '@/api/commands'
 import type { StopWarning } from '@/api/commands'
+import { notify } from '@/api/commands'
+import { tt } from '@/i18n'
+import { useDeviceStore } from '@/stores/device'
 
 /** Parse "HH:MM:SS" to total seconds */
 function parseTimeToSeconds(time: string): number {
@@ -51,6 +54,18 @@ export const useCastStore = defineStore('cast', () => {
   }
   function dismissError() {
     lastError.value = null
+  }
+
+  /** 设备名：首次投屏失败时本地还没有会话，只能去设备表里查 */
+  function deviceLabel(deviceId: string) {
+    return sessions.value[deviceId]?.device_name
+      ?? useDeviceStore().devices.find((d) => d.id === deviceId)?.name
+      ?? deviceId
+  }
+
+  /** 投屏失败要发系统通知：窗口收进托盘时，界面里的红条没人看得见 */
+  function alertDevice(title: string, body: string) {
+    void notify(title, body)
   }
 
   // ── Progress simulation timers ──
@@ -389,6 +404,7 @@ export const useCastStore = defineStore('cast', () => {
     } catch (err) {
       if (isCurrentOperation(deviceId, operation)) {
         lastError.value = String(err)
+        alertDevice(tt('notify.castFailed'), `${deviceLabel(deviceId)}：${lastError.value}`)
         if (sessions.value[deviceId]) updateSession(deviceId, { status: 'error' })
       }
       console.error('Failed to start cast:', err)
@@ -456,10 +472,11 @@ export const useCastStore = defineStore('cast', () => {
         showController.value = false
       }
       if (failed.length) {
-        stopWarning.value = {
-          devices: failed.map((id) => names[ids.indexOf(id)] ?? id),
-          reasons: reasons.filter(Boolean),
-        }
+        const who = failed.map((id) => names[ids.indexOf(id)] ?? id)
+        stopWarning.value = { devices: who, reasons: reasons.filter(Boolean) }
+        const why = reasons.filter(Boolean).join('；')
+        alertDevice(tt('notify.stopNotDelivered'),
+                    `${who.join('、')}：${why || tt('notify.stopNotDeliveredBody')}`)
       }
       loading.value = false
     }

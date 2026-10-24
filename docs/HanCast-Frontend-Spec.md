@@ -2,11 +2,11 @@
 
 > 本文档回答：HanCast 桌面端（Tauri 2 + Vue 3）的界面层是怎么搭起来的——窗口壳层、路由视图、组件与 Store 全量清单、真实数据流时序、样式与国际化机制、浏览器 mock 模式，以及写代码前必须知道的约束与坑。
 >
-> 最后校对：2026-10-24，对应版本 v2.3.20
+> 最后校对：2026-10-24，对应版本 v2.3.21
 
 术语约定：**Sidecar** = Python 后台进程（`hancast-backend/`，打包为 `hancast-sidecar`）；**壳层** = Rust/Tauri 层（`src-tauri/`）；**规则包** = JS 解析插件 zip；**声明式规则** = JSON 站点规则；**屏幕投屏** = screencast（把电脑屏幕投出去）；**接收投屏** = 本机作为 DLNA 渲染端被别的设备投；**投屏确认** = Device Guard；**后台参数** = `params.py` 可调项。
 
-本轮仅校对前端美化与 bug 修复涉及的事实、引用；相关行号以 2026-10-24 工作区为准，其余沿用 2026-10-15 的取证记录，未作全量版本/行号刷新。未能核实的论断一律标注「⚠️ 未验证」。
+本轮仅校对前端美化、bug 修复与投屏失败系统通知涉及的事实、引用；相关行号以 2026-10-24 工作区为准，其余沿用 2026-10-15 的取证记录，未作全量版本/行号刷新。未能核实的论断一律标注「⚠️ 未验证」。
 
 ---
 
@@ -22,6 +22,7 @@
 | 国际化 | `vue-i18n` | ^9.9.0 |
 | Tauri 桥 | `@tauri-apps/api` | ^2.0.0 |
 | Tauri 插件 | `@tauri-apps/plugin-dialog` | ^2.7.1 |
+| Tauri 插件 | `@tauri-apps/plugin-notification` | ^2.7.0 |
 | Tauri 插件 | `@tauri-apps/plugin-shell` | ^2.0.0 |
 | 构建 | `vite` | ^5.0.0 |
 | 构建 | `@vitejs/plugin-vue` | ^5.0.0 |
@@ -44,6 +45,7 @@ npm scripts：`dev` = `vite`、`build` = `vue-tsc && vite build`、`build:sideca
 |---|---|---|
 | `tauri` | 2（features：`protocol-asset`、`tray-icon`） | 窗口/托盘/asset 协议 |
 | `tauri-plugin-shell` | 2 | 打开外部链接、执行进程 |
+| `tauri-plugin-notification` | 2 | 投屏失败/停止未送达的系统通知（2026-10-24 加） |
 | `tauri-plugin-clipboard-manager` | 2 | Rust 侧剪贴板（见 §10.1） |
 | `tauri-plugin-dialog` | 2 | 原生文件选择/消息框 |
 | `tauri-plugin-autostart` | 2 | 开机自启（非 MSIX 平台） |
@@ -129,7 +131,7 @@ default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src '
 
 ### 2.7 capabilities（`src-tauri/capabilities/default.json`）
 
-窗口范围 `["main"]`。权限：`core:default`、`core:window:allow-start-dragging`（自定义标题栏拖拽）、`core:window:allow-minimize/hide/show/set-focus`、`core:event:default`、`shell:allow-open/execute/spawn`、`clipboard-manager:allow-write-text/read-text`、`dialog:default`、`autostart:default`。
+窗口范围 `["main"]`。权限：`core:default`、`core:window:allow-start-dragging`（自定义标题栏拖拽）、`core:window:allow-minimize/hide/show/set-focus`、`core:event:default`、`shell:allow-open/execute/spawn`、`clipboard-manager:allow-write-text/read-text`、`dialog:default`、`autostart:default`、`notification:default`（投屏失败要能落到 OS 通知；权限在真要发通知时才申请，被拒只降级不报错）。
 
 ### 2.8 壳层其他与 UI 相关的行为
 
@@ -243,7 +245,7 @@ default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src '
 
 | Store | 行数 | 核心 state（类型） | 主要 actions | 订阅事件 | 调用的壳层命令 | 与其他 store 耦合 |
 |---|---|---|---|---|---|---|
-| `cast.ts` | 795 | `sessions: Record<string, CastSession>`、`focusedDeviceId: string\|null`、`showController`、`stopWarning: StopWarning\|null`、`lastError: string\|null`、`qualitySwitching`、`showAutostartPrompt`、`loading`；兼容用 computed `castState`（:88-111，把多设备折叠成聚焦设备视图） | `fetchState`(:175-219，恢复时也校验操作代次)、`startCast`(:341-399)、`stopCast`(:422-466)、`switchQuality`(:510-576，重解析 + restorePosition 最多 4 次 seek)、pause/resume/seek/setVolume/setMute、`startPolling`（1s tick、单飞与 epoch/逐设备操作 token 过滤旧响应，:221-288，见 §10.8）、`startSim`(:290-313，前端每秒 +1 模拟进度)、`checkAutostartPrompt`(:402-420，localStorage `has_asked_autostart` + 6s 延迟)、`openController`/`dismissStopWarning`/`dismissError` | `cast_state_changed`(:636-706)、`cast_error`(:711-720) | `get_cast_state`、`start_cast`、`stop_cast`、`pause_cast`、`resume_cast`、`seek_cast`、`set_volume`、`set_mute`、`get_cast_url` | 无 |
+| `cast.ts` | 811 | `sessions: Record<string, CastSession>`、`focusedDeviceId: string\|null`、`showController`、`stopWarning: StopWarning\|null`、`lastError: string\|null`、`qualitySwitching`、`showAutostartPrompt`、`loading`；兼容用 computed `castState`（:103-127，把多设备折叠成聚焦设备视图） | `fetchState`(:190-236，恢复时也校验操作代次)、`startCast`(:356-417)、`stopCast`(:438-484)、`switchQuality`(:527-572，重解析 + restorePosition 最多 4 次 seek)、pause/resume/seek/setVolume/setMute、`startPolling`（1s tick、单飞与 epoch/逐设备操作 token 过滤旧响应，:237-305，见 §10.8）、`startSim`(:306-329，前端每秒 +1 模拟进度)、`checkAutostartPrompt`(:418-437，localStorage `has_asked_autostart` + 6s 延迟)、`openController`/`dismissStopWarning`/`dismissError` | `cast_state_changed`(:653-724)、`cast_error`(:728-738) | `get_cast_state`、`start_cast`、`stop_cast`、`pause_cast`、`resume_cast`、`seek_cast`、`set_volume`、`set_mute`、`get_cast_url` | **→ device**（`deviceLabel()` :60-66 在首次投屏失败时查设备名，本地那时会话还没建起来）；**失败出口**：`startCast` 失败与 `stopCast` 的 `control_failed` 除写 `lastError`/`stopWarning` 外还经 `alertDevice()`（:67-72）调 `notify()` 发系统通知——标题走 `tt()`、正文是 Sidecar 原文 |
 | `device.ts` | 179 | `devices: Device[]`、`selectedDevice`、`manualDevices`、`showAddModal` | `fetchDevices`（30s 自动取列表 :148-152）、`refresh`（手动发现 :38-47）、`addDevice`(:94-112，直接并入设备列表)、`openAddModal`、rename/setDefault/hide | `device_found`(:121-135，upsert)、`device_lost`(:138-142) | `get_devices`、`refresh_devices`、`add_device`、`get_manual_devices`、`rename_device`、`remove_device`、`hide_device`、`set_default_device` | 无 |
 | `media.ts` | 230 | `state: 'idle'\|'dragover'\|'input'\|'parsing'\|'ready'`、`mediaInfo: MediaInfo\|null`、`localFile: File\|null`、`urlInput`、`error`、`ledgerHint` | `parseFile`(:83-116，路径字符串→Tauri；File 对象→本地元数据 + localFile，预览 URL 由 MediaInput 生成)、`parseUrl`(:124-203，见 §6 链路 1)、`setInputChange`/`reset` 递增 `parseGeneration` 使旧请求失效（:42-78）；新解析清空旧预览，仅最新代次可写回成功/失败，直链降级容忍畸形百分号（:173-180）；`setThumbnail` | 无 | `parse_media_file`、（经 `resolveShare`）`resolve_share` + `get_resolve_result` | 无 |
 | `guard.ts` | 190 | `pendingRequest: CastConfirmRequest\|null`、`countdown`、`settings: GuardSettings`、`trustedDevices`/`blacklistedDevices: GuardDevice[]`、`loading` | `handleResponse`(:72-86)、`fetchDevices`、`fetchSettings`、`removeDevice`、`setPolicy`、倒计时（到 0 自动拒绝 `handleResponse(false,'once')` :33-39）；`setupListeners` 在 `onMounted` 之外也被立即调用一次（:171，保证 App 级弹窗不依赖组件挂载时机） | `cast_confirm_request`(:126-149：guard 禁用时自动批准 :129-132；已有 pending 时拒绝新请求 :134-137；`win.show()+setFocus()` 把窗口拉到前台 :141-148) | `respond_cast_confirm`、`get_guard_devices`、`remove_guard_device`、`set_guard_policy`、`get_guard_settings`、`save_guard_settings` | 无 |
@@ -251,7 +253,8 @@ default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src '
 | `theme.ts` | 49 | `mode: 'light'\|'dark'\|'system'`、内部响应式 `systemDark`、computed `applied`（:9-17；不是 `resolved`） | `apply`/`toggle`(:24-32)；`persist`(:19-22)：写 `data-theme` + `localStorage 'hancast-theme'`；非法已存模式回退 system；持续监听 matchMedia change 更新 systemDark，system 模式才更新 DOM，`onScopeDispose` 移除监听（:37-45，见 §7.2） | 无（matchMedia 非 Tauri 事件） | 无 | 无 |
 | `logs.ts` | 124 | `visible`、`page: LogPage\|null`、`query: LogQuery`、`level` | `open`/`close`、`refresh`（`TAIL_INTERVAL = 3000` :7；撞车时排队 `pendingRefresh` :33-36）、`toggleDebug`（setLogLevel DEBUG/INFO） | 无 | `get_logs`、`set_log_level`、`export_logs` | 无 |
 | `update.ts` | 131 | `info: UpdateInfo\|null`、`modalState: UpdateModalState`、`showModal`、`storeVersion` | `checkUpdate`（商店版跳过 :28-31）、`ignoreVersion`、`openDownload`(:71-76，window.open) | `update-available`(:94-97，Rust 启动 3s 后推送) | `check_update`、`ignore_update_version`、`is_store_version` | 无 |
-| `screencast.ts` | 327 | `state: ScreenCastState`、`sources: ScreenSources\|null`、`stopWarning`、`showDepsModal`(:37)、`ffmpegReport: FfmpegStatus\|null`(:38)、`downloadTask: FfmpegDownloadTask\|null`(:39)、`downloading`(:40)、`reportLoading`(:41)；computed `ffmpegOk`(:46) | `fetchSources`(:56-70，顺带把 `sources.ffmpeg` 回填进 `ffmpegReport`)、`refreshFfmpegReport`(:73-88，`refresh=false` 吃后端 30s 缓存，弹窗首开秒出)、`startFfmpegDownload`(:114-127，起任务后 1s `setInterval` 轮询 `pollDownload` :97-111，`done` 自动重测)、`resumeDownloadPolling`(:143-157，打开依赖弹窗时向后端对齐；下载定时器现在由 App 生命周期持有，路由切换不再触发 :287-291 的清理，旧「关面板就断」注释不再代表当前挂载关系)、`openFfmpegDir`(:129-139)、`openDepsModal`/`closeDepsModal`(:159-167)、`start`(:177-196)、`stop`(:198-231，`control_failed` → stopWarning，**借 `useDeviceStore` 把 device_id 翻译成设备名** :221)、`setFfmpegPath`(:233-247)、`dismissStopWarning`(:324) | `screen_cast_state_changed`(:268-274，迟到注册在卸载后立即释放 :275-276) | `list_screen_sources`、`start_screen_cast`、`stop_screen_cast`、`screen_cast_status`、`set_ffmpeg_path`、`ffmpeg_status`、`ffmpeg_download_start`、`ffmpeg_download_status`、`open_ffmpeg_dir` | **→ device**（唯一一处 store 间依赖，grep 验证） |
+| `screencast.ts` | 327 | `state: ScreenCastState`、`sources: ScreenSources\|null`、`stopWarning`、`showDepsModal`(:37)、`ffmpegReport: FfmpegStatus\|null`(:38)、`downloadTask: FfmpegDownloadTask\|null`(:39)、`downloading`(:40)、`reportLoading`(:41)；computed `ffmpegOk`(:46) | `fetchSources`(:56-70，顺带把 `sources.ffmpeg` 回填进 `ffmpegReport`)、`refreshFfmpegReport`(:73-88，`refresh=false` 吃后端 30s 缓存，弹窗首开秒出)、`startFfmpegDownload`(:114-127，起任务后 1s `setInterval` 轮询 `pollDownload` :97-111，`done` 自动重测)、`resumeDownloadPolling`(:143-157，打开依赖弹窗时向后端对齐；下载定时器现在由 App 生命周期持有，路由切换不再触发 :287-291 的清理，旧「关面板就断」注释不再代表当前挂载关系)、`openFfmpegDir`(:129-139)、`openDepsModal`/`closeDepsModal`(:159-167)、`start`(:177-196)、`stop`(:198-231，`control_failed` → stopWarning，**借 `useDeviceStore` 把 device_id 翻译成设备名** :221)、`setFfmpegPath`(:233-247)、`dismissStopWarning`(:324) | `screen_cast_state_changed`(:268-274，迟到注册在卸载后立即释放 :275-276) | `list_screen_sources`、`start_screen_cast`、`stop_screen_cast`、`screen_cast_status`、`set_ffmpeg_path`、`ffmpeg_status`、`ffmpeg_download_start`、`ffmpeg_download_status`、`open_ffmpeg_dir` | **→ device**（设备 id 翻译成设备名） |
+**store 间耦合共两处**：`screencast → device` 与 2026-10-24 起的 `cast → device`（`deviceLabel()` 在首次投屏失败时查设备名，那时本地还没有会话）。此前这里写的是「`screencast → device` 是唯一一处」，那句现在不成立了。
 
 ---
 
@@ -377,18 +380,18 @@ default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src '
 
 ### 8.1 结构与初始化
 
-`src/main.ts:18-26`：`createI18n({ legacy: false, locale: 'zh-CN', fallbackLocale: 'en-US', messages: { 'zh-CN': zhCN, 'en-US': enUS } })`。Composition API 模式（`useI18n()` 的 `t`/`locale`）。
+`src/i18n.ts`：`createI18n({ legacy: false, locale: 'zh-CN', fallbackLocale: 'en-US', messages: { 'zh-CN': zhCN, 'en-US': enUS } })`，`main.ts` 只 `import { i18n } from './i18n'` 后 `app.use(i18n)`。Composition API 模式（组件里 `useI18n()` 的 `t`/`locale`）。**2026-10-24 从 `main.ts` 拆出**：store 层（投屏失败发通知）也要取文案，`src/stores/cast.ts` 反向 `import '@/main'` 会把 `main → App → store → main` 绕成循环依赖，所以实例单独成模块，并导出 `tt(key, values?)` 给非组件环境用。
 
-语言文件：`src/locales/zh-CN.json`、`src/locales/en-US.json`（2026-10-24 工作区各 323 行，包含本轮新增首页文案）。
+语言文件：`src/locales/zh-CN.json`、`src/locales/en-US.json`（2026-10-24 工作区各 326 行、扁平 **324 key**；含首页文案与 `notify.*` 三条投屏失败通知文案）。
 
 ### 8.2 key 命名约定
 
-- 两级为主：`模块.camelCaseKey`。顶层命名空间 16 个（2026-10-24 按首个点号前缀去重）：`app`、`autostartPrompt`、`cast`、`close`、`common`、`controller`、`devices`、`footer`、`guard`、`home`、`logs`、`media`、`screencast`、`settings`、`theme`、`update`。本轮新增 `home`，旧取证为 15 个。
+- 两级为主：`模块.camelCaseKey`。顶层命名空间 17 个（2026-10-24 按首个点号前缀去重）：`app`、`autostartPrompt`、`cast`、`close`、`common`、`controller`、`devices`、`footer`、`guard`、`home`、`logs`、`media`、`notify`、`screencast`、`settings`、`theme`、`update`。新增 `notify`（投屏失败系统通知）与 `home`，旧取证为 15 个。
 - **点号陷阱**：动态拼 key 时，模块名里的点会被 vue-i18n 当成路径分隔符。`LogsPanel.vue:38-41` 的 `modLabel` 因此把日志模块名中的 `.` 换成 `_` 再查 key，并做了查表缓存。
 
 ### 8.3 两语言是否等键（脚本比对结果）
 
-2026-10-24 读取两份扁平 JSON 比对：**zh-CN / en-US 各 321 个 key，双向差集为 0**。此前 278 个是历史取证数，不能继续当作现值。
+2026-10-24 读取两份扁平 JSON 比对：**zh-CN / en-US 各 324 个 key，双向差集为 0**。278、321 都是历史取证数，不能继续当作现值。
 
 ### 8.4 覆盖范围与已知缺口
 
@@ -511,6 +514,6 @@ Modal 打开后聚焦 dialog，自带 Escape 关闭、Tab/Shift+Tab 循环与关
 
 2026-10-24 本轮补充：完整阅读本文，以及最新 App、HomeView/SettingsView、DeviceCard/List、MediaInput、Modal/CustomSelect、CastController、media/theme/cast/device/screencast stores、两份 styles 与 main.ts；核对相关工作区 diff。只更新受影响事实，不将旧取证日期/计数整体换成新结果。
 
-**本轮验证结果与边界**：`tools/verify-media-theme.cjs` 的 73 项、`tools/verify-cast-ui.cjs` 原 20 项及封面新增 1 项、`tools/verify-app-lifecycle.cjs` 的 2 项均通过（合计 96 个不同用例，按受影响部分分批运行，未跑全仓测试）。这些测试编译真实源码并使用 Vue/Pinia，但命令/设备/计时器为内存替身，不访问 Sidecar、网络或用户设置。类型检查与最终 Vite 构建通过；中英各 321 个文案键一致。
+**本轮验证结果与边界**：`tools/verify-media-theme.cjs` 的 73 项、`tools/verify-cast-ui.cjs` 22 项（封面 1 项 + 2026-10-24 系统通知 1 项）、`tools/verify-app-lifecycle.cjs` 的 2 项均通过（合计 97 个不同用例，按受影响部分分批运行，未跑全仓测试）。这些测试编译真实源码并使用 Vue/Pinia，但命令/设备/计时器为内存替身，不访问 Sidecar、网络或用户设置。类型检查与最终 Vite 构建通过；中英各 324 个文案键一致。
 
 浏览器运行真实前端（内建 mock 设备），已验 346×472 / 434×634 / 800×900 无横向溢出，及英文设置/高级参数、键盘下拉选择、日志弹窗焦点与边界、屏幕面板、解析→投屏控制→暂停/停止/清空。最终 [浅色截图](images/ui-native-light.png) / [深色截图](images/ui-native-dark.png) 已保留。不得据此声称真实电视投屏成功或三平台 WebView/安装包验证通过；后端待修问题见 [架构总览 §11](架构总览.md#11-2026-10-24-架构复查与增强顺序)。

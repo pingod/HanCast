@@ -1,6 +1,6 @@
 # Changelog
 
-> 最后校对：2026-10-24，对应版本 v2.3.20（`package.json:4`）
+> 最后校对：2026-10-24，对应版本 v2.3.21（`package.json:4`）
 
 本文件记录 HanCast 的版本历史。口径说明：
 
@@ -8,6 +8,24 @@
 - 版本号唯一来源是 **`package.json` 的 `version`**（`scripts/sync-version.cjs:4,17`），`npm run version:set <x.y.z>` 把它刷进 7 处契约点：`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`（本地包那条，v2.3.8 起收进来——此前每版都靠人肉补）、`hancast-backend/pyproject.toml`、`hancast_sidecar/utils/config.py:39`、`src/api/commands.ts`（mock）、`src/stores/settings.ts`。`scripts/check-version.cjs` 自称以 `tauri.conf.json` 为源（口径相反），但全仓无人调用，是未接线的孤儿脚本——判定以 `sync-version.cjs` 为准。详见 [docs/构建与发布.md](docs/构建与发布.md) §1。
 - 下表「提交」列即 `git tag <版本>` 指向的提交；细节以 `git show <提交>` 为准，本文只留用户可感知的变化。
 - 新加版本时**同一次提交**里补这里，并按 [docs/README.md](docs/README.md) §4 的约定同步对应文档。
+
+---
+
+## v2.3.21 — 2026-10-24（本轮发布提交）
+
+一轮只补一件事：**投屏失败的原因要送到用户眼前，而不是只留在看不见的那块屏上**。用户可感知面——窗口收进托盘后往电视投被拒，桌面会弹一条系统通知「投屏失败 / 设备名：电视返回的原文」。没有新能力、没有视觉改动。
+
+- **现象与真因**：2026-10-24 用户报「投 TCL 怎么没反应」，实际电视回的是 `HTTP 500 …请在电视上打开「多屏互动/无线投屏/DLNA」`。这条原因 v2.3.20 已经放进首页红条（`src/stores/cast.ts` 的 `lastError`），**但 HanCast 平时收在托盘里**——窗口不在前台时那条红字没人看得见，于是错误「产生了、没送达」。修的是投递，不是采集。
+- **两条路径进系统通知**：① `startCast` 抛错 → `notify.castFailed`（`src/stores/cast.ts:407`）；② 停止指令未送达设备（`stop_cast` 的 `control_failed`）→ `notify.stopNotDelivered`（`:478-479`），正文原样带 Sidecar 给的失败原因，前端不改写、不翻译。第二次是同一类坑的另一半：「本机停了、电视还在播」也只有红条说得出。
+- **接线四处**：npm `@tauri-apps/plugin-notification@^2.7.0`（`package.json:20`）/ Rust `tauri-plugin-notification = "2"`，锁到 **2.4.0**（`src-tauri/Cargo.toml:26`）/ `.plugin(tauri_plugin_notification::init())`（`src-tauri/src/lib.rs:1124`，紧挨着插件链、带一句「窗口收进托盘时红条没人看得见」的为什么）/ capability `notification:default`（`src-tauri/capabilities/default.json:22`）。三平台后端由 `notify-rust 4.18.2` 分派，`Cargo.lock:2259-2268` 可见 `mac-notification-sys`（macOS）+ `zbus`（Linux DBus）+ `tauri-winrt-notification`（Windows Toast）。
+- **`src/api/commands.ts:1367-1406` 的三条设计约束**：**权限惰性申请**（只在真要发通知时 `requestPermission()`，投屏路径绝不因申请权限而等待或失败）；**被拒不缓存**（`notifyGranted` 在返回 false 时清空，用户后来在系统设置里放开后，下一次失败还能再问一次）；**动态 `import()`**（浏览器 dev 与没装该插件的旧壳层直接 no-op，界面里那条红条作为兜底仍然存在）。
+- **i18n 从 `main.ts` 拆出**（新增 `src/i18n.ts`，19 行；`main.ts` 改成 `import { i18n } from './i18n'`）：store 层也要取文案，反向 import `main.ts` 会把 `main → App → store → main` 绕成循环依赖；`tt()` 是非组件环境的取文案出口。**这不只是通知这一处用到**——以后任何 store 里的用户可读错误都得走它。
+- **设备名从哪来**：`deviceLabel()`（`cast.ts:60-64`）先查本机会话、再查设备表、最后退回 device id——首次投屏失败时本地还没有会话，只有设备表里有名字。
+- **文案**：zh/en 各 **+3 条 key**（321 → **324**，两侧键集零差异）。
+- **测试**：`tools/verify-cast-ui.cjs` 21 → **22**，新增那条同时断言「投屏失败发 `notify.castFailed`」「停止未送达发 `notify.stopNotDelivered`」「**投屏成功一条都不发**」，标题、正文里的原因原文、设备名回退都 checked。本轮裁剪跑：`vue-tsc` + `vite build` 通过、`cargo check` 通过——后者顺带证明 `notification:default` 是合法 capability 标识（Tauri 构建期校验 capability，写错直接 fail），并且 `sendNotification` 在 `dist/assets/` 里独立成 chunk（动态导入被 Vite 正确切开）。**没跑全量，按既定口径。**
+- **文档同轮修订**：AGENTS.md（前端与 Rust 两张依赖表各一行、结构树补 `src/i18n.ts`、**安全约束新增第 5 条**：投屏失败必须进系统通知、权限只能惰性申请且不得阻断投屏、macOS linker-signed 每版换签名身份所以通知授权可能要重给，原第 5 条「规则包沙箱」顺延为 6、项目概述的版本号从滞后的 2.3.19 更正）；docs/HanCast-Frontend-Spec.md（依赖表两行、capability 清单、§8.1 记录 i18n 位置迁移的理由、store 间耦合从「唯一一处」更正为两处、cast.ts 行重写为通知出口 + 全部 `:NNN-NNN` 区间按新行号重锚、key 计数 321 → 324 与命名空间 16 → 17）；docs/README.md（索引里 Frontend-Spec 行数按现读 `wc -l` 重锚）；docs/开发指南.md（i18n 等键数从滞后的 278 更正为现读 324）。
+- **版本与契约点**：`npm run version:set -- 2.3.21` 刷 7 处（`package.json` / `tauri.conf.json` / `Cargo.toml` / `Cargo.lock` / `pyproject.toml` / `config.py` / `commands.ts` / `settings.ts`）。
+- **没闭合的口子（别当成已验）**：① **真机通知横幅在打 tag 前未复验**——证据链是「前端隔离用例证明 cast.ts 会调用」+「cargo check 证明插件与 capability 成立」，中间那段「macOS 真弹出、首次 `requestPermission()` 那个系统弹窗长什么样」要装机后往电视投一次失败才算走完（v2.3.20 遗留的「点一次设置 → 解析插件 → 检查规则包更新」同理仍未走）。② **Linux 靠 DBus 桌面通知**：`zbus` 只负责发，没有通知守护进程（mako/dunst…）或 `DBUS_SESSION_BUS_ADDRESS` 不在（ systemd --user 起的应用常见）时表现为**静默无花**，界面上仍有红条；CachyOS/Hyprland 那台有没有装 mako 还没查。③ **Windows Toast 未实测**（`.68` 那台还没装这一版）。④ **没做「点通知唤回窗口」**——点击回调要 Rust 侧监听 `notification://click-notification`，本轮只在 JS 侧发。⑤ 连点多次投屏会连弹多条通知，未去重、未限流。
 
 ---
 
