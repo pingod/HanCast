@@ -31,11 +31,19 @@ class DeviceCastSession:
         self.protocol.set_device(device)
         self.cast_state = CastState(device_id=self.device_id)
         self.media_server = media_server
+        # 同一个电视可能被「媒体投屏」和「屏幕投屏」两条通道争用；归属写在
+        # 会话实例上，停止通道时只认自己那一份，不再按 device_id 误停对方。
+        self.owner = "media"
 
-        # 进度轮询
+        # 每轮独立的取消令牌同时作为代次标识，旧线程不能借新一轮的 running 复活。
+        # 锁序：handler registry 锁 -> 本锁；网络调用与上层回调都不能持有本锁。
+        self._poll_lock = threading.Lock()
+        self._poll_generation: Optional[threading.Event] = None
         self._poll_running = False
         self._poll_thread: Optional[threading.Thread] = None
-        self._poll_callback: Optional[Callable] = None
+        self._poll_callback: Optional[
+            Callable[["DeviceCastSession", str, threading.Event], None]
+        ] = None
         # 最近一次 stop() 未送达的原因（None = 已送达或尚未停止）
         self.stop_error: Optional[str] = None
 
@@ -52,16 +60,20 @@ class DeviceCastSession:
 
     def play(self, media_uri: str, mime_type: str = "",
              metadata: str = "") -> None:
-        """播放媒体"""
+        """播放媒体；调用方在 handler registry 锁下串行化播放替换。"""
+        # 必须先失效旧轮询，包括视频切图片，以及 serve_file/play 失败的路径。
+        self.stop_poll()
         # 如果是本地文件，通过媒体服务器提供 HTTP 访问
         if not media_uri.startswith("http"):
             media_uri = self.media_server.serve_file(media_uri)
 
         self.protocol.play(media_uri, metadata)
-        self.cast_state.status = "playing"
-        # 从协议状态同步 URL/title（协议 state dict 在 play() 时已更新）
-        self.cast_state.position = self.protocol.get_state_position() or "00:00:00"
-        self.cast_state.duration = self.protocol.get_state_duration() or "00:00:00"
+        position = self.protocol.get_state_position() or "00:00:00"
+        duration = self.protocol.get_state_duration() or "00:00:00"
+        with self._poll_lock:
+            self.cast_state.status = "playing"
+            self.cast_state.position = position
+            self.cast_state.duration = duration
 
         # 图片类媒体不需要轮询进度
         if mime_type.startswith("image/"):
@@ -142,99 +154,145 @@ class DeviceCastSession:
             "cast_state": self.cast_state.to_dict(),
         }
 
-    def set_poll_callback(self, callback: Callable) -> None:
-        """设置进度轮询回调"""
-        self._poll_callback = callback
+    def set_poll_callback(
+        self, callback: Callable[["DeviceCastSession", str, threading.Event], None]
+    ) -> None:
+        """设置 callback(session, event_type, generation)，在 session 锁外调用。"""
+        with self._poll_lock:
+            self._poll_callback = callback
+
+    def is_current_poll(self, generation: threading.Event) -> bool:
+        """代次是否仍有效（不等于线程仍在运行）。
+
+        STOPPED/连续失败自行结束时保留代次，以便递送最后一个事件；显式
+        stop_poll 或下一次启动才失效。handler 必须在 registry 锁下同时校验
+        映射对象 is session 和此方法，因为锁外回调可能跨越播放替换。
+        """
+        with self._poll_lock:
+            return (generation is not None
+                    and self._poll_generation is generation
+                    and not generation.is_set())
 
     def start_poll(self) -> None:
-        """启动进度轮询线程"""
-        if self._poll_running:
-            return
-        self._poll_running = True
-        self._poll_thread = threading.Thread(target=self._poll_loop, daemon=True)
-        self._poll_thread.start()
+        """启动新一代轮询；正在运行时保持幂等。"""
+        with self._poll_lock:
+            if self._poll_running:
+                return
+            if self._poll_generation is not None:
+                self._poll_generation.set()
+            generation = threading.Event()
+            self._poll_generation = generation
+            self._poll_running = True
+            thread = threading.Thread(
+                target=self._poll_loop, args=(generation,), daemon=True)
+            self._poll_thread = thread
+        thread.start()
         logger.debug(f"Progress polling started for device: {self.device.display_name}")
 
     def stop_poll(self) -> None:
-        """停止进度轮询线程"""
-        self._poll_running = False
+        """失效当前代次并唤醒等待；不 join 尚在网络调用或等待 handler 锁的线程。"""
+        with self._poll_lock:
+            if self._poll_generation is not None:
+                self._poll_generation.set()
+            self._poll_generation = None
+            self._poll_running = False
         logger.debug(f"Progress polling stopped for device: {self.device.display_name}")
 
-    def _poll_loop(self) -> None:
-        """轮询远程设备的播放进度"""
+    def _emit_poll_event(self, generation: threading.Event, event_type: str) -> None:
+        with self._poll_lock:
+            if self._poll_generation is not generation or generation.is_set():
+                return
+            callback = self._poll_callback
+        # 不可持 session 锁回调：handler 持 registry 锁后会再次校验代次。
+        if callback:
+            try:
+                callback(self, event_type, generation)
+            except Exception:
+                # 上层回调异常不是设备失联，不计入网络连续失败次数。
+                logger.exception("Poll callback failed: %s", event_type)
+
+    def _poll_loop(self, generation: threading.Event) -> None:
+        """轮询远程设备；网络返回后校验代次与写状态必须在同一临界区。"""
         transport_check_counter = 0
         consecutive_failures = 0
-        last_status = self.cast_state.status  # 记录上次状态，用于检测变化
-        # 首次轮询前等待，让 DLNA 设备有时间加载媒体元数据
-        # 部分设备在收到 SetAVTransportURI+Play 后需要 2-3 秒才返回正确的
-        # TrackDuration/RelTime，否则持续返回 00:00:00
-        threading.Event().wait(2.0)
+        with self._poll_lock:
+            if self._poll_generation is not generation or generation.is_set():
+                return
+            last_status = self.cast_state.status
+        # 部分设备需要 2-3 秒加载媒体元数据；取消必须能立即唤醒这段等待。
+        if generation.wait(2.0):
+            return
 
-        while self._poll_running:
+        while self.is_current_poll(generation):
             try:
-                # 查询进度
                 pos_info = self.protocol.get_position_info()
                 duration = pos_info.get('TrackDuration', '00:00:00')
                 position = pos_info.get('RelTime', '00:00:00')
+                if not self.is_current_poll(generation):
+                    return
 
-                # 传输状态只每 3 秒查一次（变化不频繁，减少网络开销）
+                # 传输状态只每 3 秒查一次（变化不频繁，减少网络开销）。
                 transport_check_counter += 1
-                if transport_check_counter >= 3:
+                check_transport = transport_check_counter >= 3
+                state = ''
+                if check_transport:
                     transport_check_counter = 0
                     transport_info = self.protocol.get_transport_info()
                     state = transport_info.get('CurrentTransportState', '')
-                    if state == 'STOPPED':
-                        logger.info(f"Playback stopped on device: {self.device.display_name}")
-                        self.cast_state.status = "idle"
-                        self.stop_poll()
-                        # 触发回调通知前端
-                        if self._poll_callback:
-                            self._poll_callback(self.device_id, "playback_stopped")
-                        return
-                    elif state == 'PLAYING':
-                        self.cast_state.status = "playing"
-                    elif state == 'PAUSED_PLAYBACK':
-                        self.cast_state.status = "paused"
-
-                    # 检测状态变化，触发回调通知前端
-                    # 前端依赖 cast_state_changed 事件同步 simTimers 状态
-                    if self.cast_state.status != last_status:
-                        logger.info(f"Device {self.device.display_name} status changed: {last_status} -> {self.cast_state.status}")
-                        last_status = self.cast_state.status
-                        if self._poll_callback:
-                            self._poll_callback(self.device_id, "status_changed")
-
-                # 更新状态（仅在设备返回有效值时更新，避免覆盖已有的正确值）
-                if duration and duration != '00:00:00':
-                    self.cast_state.duration = duration
-                if position and position != '00:00:00':
-                    self.cast_state.position = position
-                consecutive_failures = 0
-
-                # 触发回调
-                if self._poll_callback:
-                    self._poll_callback(self.device_id, "progress_update")
-
             except Exception as e:
-                consecutive_failures += 1
+                with self._poll_lock:
+                    if self._poll_generation is not generation or generation.is_set():
+                        return
+                    consecutive_failures += 1
+                    terminal = consecutive_failures >= self.POLL_FAIL_LIMIT
+                    if terminal:
+                        self.cast_state.status = "idle"
+                        # 自行终止不取消代次，最后一个事件仍可通过 handler 校验。
+                        self._poll_running = False
                 logger.warning(
                     f"Polling failed for device {self.device.display_name}"
                     f" ({consecutive_failures}/{self.POLL_FAIL_LIMIT}): {e}")
-                if consecutive_failures >= self.POLL_FAIL_LIMIT:
-                    # 设备已失联（关机/切源/掉线）：再轮询下去只会刷屏，
-                    # 且会话永远停在「正在投屏」假象里，用户无法收尾
+                if terminal:
                     logger.error(
                         f"Device {self.device.display_name} unreachable, "
                         f"release session")
-                    self.cast_state.status = "idle"
-                    self.stop_poll()
-                    if self._poll_callback:
-                        try:
-                            self._poll_callback(self.device_id,
-                                                "device_unreachable")
-                        except Exception:
-                            logger.exception("Unreachable callback failed")
+                    self._emit_poll_event(generation, "device_unreachable")
+                    return
+            else:
+                events = []
+                with self._poll_lock:
+                    if self._poll_generation is not generation or generation.is_set():
+                        return
+                    terminal = state == 'STOPPED'
+                    if terminal:
+                        self.cast_state.status = "idle"
+                        self._poll_running = False
+                        events.append("playback_stopped")
+                    else:
+                        if state == 'PLAYING':
+                            self.cast_state.status = "playing"
+                        elif state == 'PAUSED_PLAYBACK':
+                            self.cast_state.status = "paused"
+                        if check_transport and self.cast_state.status != last_status:
+                            last_status = self.cast_state.status
+                            events.append("status_changed")
+
+                        # 避免设备的空值覆盖已有进度。
+                        if duration and duration != '00:00:00':
+                            self.cast_state.duration = duration
+                        if position and position != '00:00:00':
+                            self.cast_state.position = position
+                        consecutive_failures = 0
+                        events.append("progress_update")
+                if terminal:
+                    logger.info(f"Playback stopped on device: {self.device.display_name}")
+                elif "status_changed" in events:
+                    logger.info(
+                        f"Device {self.device.display_name} status changed: {last_status}")
+                for event_type in events:
+                    self._emit_poll_event(generation, event_type)
+                if terminal:
                     return
 
-            # 轮询间隔
-            threading.Event().wait(1.0)
+            if generation.wait(1.0):
+                return

@@ -58,6 +58,11 @@ class ScreenCastManager:
         self.httpd = ScreenCastHttpd(hls_root=_hls_root())
         self._capture: Optional[FfmpegCapture] = None
         self._session_id: Optional[str] = None
+        self._dlna_session = None
+        self._pending_error: Optional[str] = None
+        self._operation_lock = handler._cast_lock
+        self._state_lock = threading.RLock()
+        self._starting = False
         self._state: Dict = {
             "running": False,
             "target": None,
@@ -80,6 +85,12 @@ class ScreenCastManager:
         return self.ffmpeg.list_sources()
 
     def start(self, params: Dict) -> Dict:
+        # Ownership changes share the handler lock. Capture callbacks record
+        # errors under _state_lock only; they must not wait here during startup.
+        with self._operation_lock:
+            return self._start_requested(params)
+
+    def _start_requested(self, params: Dict) -> Dict:
         """开始屏幕投屏
 
         params:
@@ -164,17 +175,33 @@ class ScreenCastManager:
 
         # 每次会话一个全新的分片目录 + 全新的 URL
         self._session_id = secrets.token_hex(3)
+        # 采集线程在 Play 返回前后都可能报错；这段时间 running 还是 False，
+        # 错误必须先记下来，由本路径统一回滚，否则就是「返回成功却没有画面」。
+        with self._state_lock:
+            self._starting = True
+            self._pending_error = None
         try:
             result = self._start(target, params, source, audio, video)
         except Exception as e:
             logger.exception("[ScreenCast] start failed")
-            self._teardown()
-            return {"ok": False, "error": f"启动失败: {e}"}
+            result = {"ok": False, "error": f"启动失败: {e}"}
 
-        if result.get("ok"):
-            self._emit()
-        else:
+        with self._state_lock:
+            self._starting = False
+            pending = self._pending_error
+            self._pending_error = None
+        if result.get("ok") and pending:
+            # 错误落在 Play 与「标记 running」之间：看门狗已经退出，
+            # 不能再把这次启动报成成功
+            result = {"ok": False, "error": pending}
+
+        if not result.get("ok"):
+            # 启动失败一律回滚：电视会话、FFmpeg、分片目录都不留残骸
+            self._release_dlna_session()
             self._teardown()
+            return result
+
+        self._emit()
         return result
 
     def _missing_audio_devices(self, audio: Dict,
@@ -214,30 +241,74 @@ class ScreenCastManager:
 
     def stop(self) -> Dict:
         """停止屏幕投屏（幂等）"""
+        with self._operation_lock:
+            return self._stop_requested()
+
+    def _stop_requested(self) -> Dict:
         if not self._state.get("running"):
+            self._release_dlna_session()
             self._teardown()
             return {"ok": True, "already_stopped": True}
 
-        target = self._state.get("target")
-        device_id = self._state.get("device_id")
         control_failed: list = []
         reasons: Dict[str, str] = {}
-        if target == "dlna":
+        # 只停「屏幕通道自己那份」会话：电视此时可能已被媒体投屏接管，
+        # 按 device_id 停会把别人的画面一起停掉。
+        session, self._dlna_session = self._dlna_session, None
+        if self._state.get("target") == "dlna" and session is not None:
             try:
                 res = self.handler._stop_cast(
-                    {"device_id": device_id} if device_id else {})
+                    {"device_id": session.device_id}, expected_session=session)
                 control_failed = res.get("control_failed") or []
                 reasons = res.get("reasons") or {}
             except Exception as e:
                 logger.warning(f"[ScreenCast] dlna stop: {e}")
-                control_failed = [device_id] if device_id else []
-                reasons = {device_id: str(e)} if device_id else {}
+                control_failed = [session.device_id]
+                reasons = {session.device_id: str(e)}
 
         self._teardown()
         self._emit()
         # 分片目录已删、HTTP 服务已停，电视顶多把缓冲播完；但 Stop 没送达时
         # 必须让前端知道，否则用户以为「停止」= 电视已经回到待机。
         return {"ok": True, "control_failed": control_failed, "reasons": reasons}
+
+    def stop_for_device(self, device_id: str) -> Dict:
+        """媒体投屏要接管这台电视：屏幕通道让位，关掉采集与 HLS。
+
+        不发 SOAP Stop——紧接着的 Play 会替换电视上的内容，停一次反而闪一下。
+        由 `_start_cast` 在 handler 锁内调用。
+        """
+        if (self._dlna_session is None
+                or self._dlna_session.device_id != device_id):
+            return {"ok": True, "released": False}
+        logger.info(f"[ScreenCast] 让位给媒体投屏: {device_id}")
+        self._release_dlna_session(stop_remote=False)
+        self._teardown()
+        self._emit()
+        return {"ok": True, "released": True}
+
+    def release_session(self, session) -> None:
+        """handler 丢弃某个设备会话时的回调：若那正是屏幕通道的会话就收尾。
+
+        只做本地收尾，绝不回手调 `_stop_cast`（否则递归）。
+        """
+        if session is None or self._dlna_session is not session:
+            return
+        self._dlna_session = None
+        if self._state.get("running") or self._capture is not None:
+            logger.info("[ScreenCast] 电视会话已被释放，同步停止屏幕采集")
+            self._teardown()
+            self._emit()
+
+    def _release_dlna_session(self, stop_remote: bool = True) -> None:
+        session, self._dlna_session = self._dlna_session, None
+        if session is None or not stop_remote:
+            return
+        try:
+            self.handler._stop_cast({"device_id": session.device_id},
+                                    expected_session=session)
+        except Exception as e:
+            logger.warning(f"[ScreenCast] release dlna session: {e}")
 
     def status(self) -> Dict:
         """当前投屏状态"""
@@ -288,48 +359,46 @@ class ScreenCastManager:
             return {"ok": False, "error": "会话注册失败"}
 
         hls_dir = os.path.join(_hls_root(), self._session_id)
-        capture = FfmpegCapture(self.ffmpeg.get_path())
+        # 先登记再判成败：_teardown 才有机会回收已起起来的子进程
+        capture = self._capture = FfmpegCapture(self.ffmpeg.get_path())
+        sid = self._session_id
         result = capture.start_hls(
             source, audio, video, hls_dir,
-            on_error=lambda msg: self._on_capture_error(msg),
+            on_error=lambda msg, sid=sid: self._on_capture_error(msg, sid),
             target=target)
         if not result.get("ok"):
-            self.httpd.unregister_session(self._session_id)
             return {"ok": False, "error": result.get("error", "屏幕捕获失败")}
 
-        self._capture = capture
         m3u8_url = (f"http://{self._local_ip()}:{self.httpd.port}"
                     f"/hls/{self._session_id}/live.m3u8")
 
         if target == "dlna":
             logger.info(f"[ScreenCast] DLNA push: {device_id} <- {m3u8_url}")
-            session = self.handler._get_or_create_session(device_id)
+            # owner="screen"：这条电视会话归屏幕通道，媒体投屏不会再共用它
+            session = self.handler._get_or_create_session(device_id, owner="screen")
+            self._dlna_session = session
             didl = build_didl_item(
                 m3u8_url, HLS_MIME, f"{device.display_name} 屏幕投屏")
             try:
                 session.play(m3u8_url, HLS_MIME, metadata=didl)
             except (ControlUrlUnavailable, RendererUnresponsive) as e:
                 logger.error(f"[ScreenCast] DLNA push not delivered: {e}")
-                try:
-                    self.handler._stop_cast({"device_id": device_id})
-                except Exception:
-                    pass
                 return {"ok": False, "error": str(e)}
             except Exception as e:
                 logger.error(f"[ScreenCast] DLNA play failed: {e}")
-                try:
-                    self.handler._stop_cast({"device_id": device_id})
-                except Exception:
-                    pass
                 return {"ok": False,
                         "error": f"电视拒绝播放（{str(e) or e.__class__.__name__}），"
                                  f"可换较低分辨率/码率后重试"}
-            self._state.update({
-                "running": True, "target": "dlna", "source": source,
-                "device_id": device_id, "session_id": self._session_id,
-                "url": m3u8_url, "watch_url": None, "viewers": 0,
-                "error": None, "started_at": time.time(),
-            })
+            with self._state_lock:
+                if self._pending_error:
+                    # Play 期间采集就报错了：别把死流交给电视
+                    return {"ok": False, "error": self._pending_error}
+                self._state.update({
+                    "running": True, "target": "dlna", "source": source,
+                    "device_id": device_id, "session_id": self._session_id,
+                    "url": m3u8_url, "watch_url": None, "viewers": 0,
+                    "error": None, "started_at": time.time(),
+                })
             threading.Thread(
                 target=self._verify_dlna_pull,
                 args=(self._session_id, device.display_name),
@@ -337,12 +406,15 @@ class ScreenCastManager:
             return {"ok": True, "target": "dlna", "device_id": device_id,
                     "session_id": self._session_id, "url": m3u8_url}
         watch_url = f"http://{self._local_ip()}:{self.httpd.port}/r/{self._session_id}"
-        self._state.update({
-            "running": True, "target": "browser", "source": source,
-            "device_id": None, "session_id": self._session_id,
-            "watch_url": watch_url, "url": m3u8_url, "viewers": 0,
-            "error": None, "started_at": time.time(),
-        })
+        with self._state_lock:
+            if self._pending_error:
+                return {"ok": False, "error": self._pending_error}
+            self._state.update({
+                "running": True, "target": "browser", "source": source,
+                "device_id": None, "session_id": self._session_id,
+                "watch_url": watch_url, "url": m3u8_url, "viewers": 0,
+                "error": None, "started_at": time.time(),
+            })
         logger.info(f"[ScreenCast] browser share started: {watch_url}")
         return {"ok": True, "target": "browser",
                 "session_id": self._session_id, "watch_url": watch_url,
@@ -396,24 +468,32 @@ class ScreenCastManager:
             self._state["viewers"] = count
             self._emit()
 
-    def _on_capture_error(self, msg: str):
-        """捕获线程错误回调（FFmpeg 退出/卡流）"""
+    def _on_capture_error(self, msg: str, sid: Optional[str] = None) -> None:
+        """捕获线程错误回调（FFmpeg 退出/卡流）
+
+        `sid` 在起流时绑定：旧会话的看门狗不能来拆新会话。启动期间（running
+        还没置上）只记录，由 start 路径统一回滚并如实报错——直接 return 就是
+        「投屏返回成功、实际一帧都没有」。
+        """
         logger.error(f"[ScreenCast] capture error: {msg}")
-        if not self._state.get("running"):
-            return
-        target = self._state.get("target")
-        device_id = self._state.get("device_id")
-        # _teardown 里的 _reset 会清空 error，必须先拆再写，否则前端拿不到
+        with self._state_lock:
+            if sid is not None and sid != self._session_id:
+                return
+            if self._starting or not self._state.get("running"):
+                if not self._pending_error:
+                    self._pending_error = msg
+                return
+            target = self._state.get("target")
+            device_id = self._state.get("device_id")
+            self._state["running"] = False
+        # 以下都在 _state_lock 之外：handler 侧会取投屏锁，锁序必须一致
+        # 先放电视会话（_teardown 不清 `_dlna_session`，顺序反了就停不掉远端），
+        # 再拆采集；error 必须在 _teardown 的 _reset 之后写，否则前端拿不到
         # 失败原因，只剩一个「不知道为什么不投了」的黑屏
+        if target == "dlna":
+            self._release_dlna_session()
         self._teardown()
         self._state["error"] = msg
-        # 通道一并释放：否则电视继续拉一条死流，前端也起不了下一次
-        if target == "dlna":
-            try:
-                self.handler._stop_cast(
-                    {"device_id": device_id} if device_id else {})
-            except Exception as e:
-                logger.warning(f"[ScreenCast] dlna stop after error: {e}")
         self._emit()
 
     def _teardown(self):

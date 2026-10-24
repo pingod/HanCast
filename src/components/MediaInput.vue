@@ -136,14 +136,8 @@ watch(() => mediaStore.mediaInfo?.uri, (uri) => {
   }
 })
 
-const categoryIcon = computed(() => {
-  switch (mediaCategory.value) {
-    case 'video': return '🎬'
-    case 'image': return '🖼️'
-    case 'audio': return '🎵'
-    case 'link': return '🔗'
-  }
-})
+const previewFailed = ref(false)
+watch(mediaPreviewUrl, () => { previewFailed.value = false })
 
 const categoryLabel = computed(() => {
   switch (mediaCategory.value) {
@@ -492,17 +486,18 @@ function onFileSelected(e: Event) {
     <div
       v-if="mediaStore.state !== 'ready'"
       class="media-input__dropzone"
+      role="button"
+      tabindex="0"
+      :aria-label="t('media.dragHint')"
+      :aria-busy="mediaStore.isParsing"
       @click="openFilePicker"
+      @keydown.enter.prevent="openFilePicker"
+      @keydown.space.prevent="openFilePicker"
     >
       <div class="media-input__icon">
-        <svg viewBox="0 0 64 64" width="64" height="64">
-          <rect x="8" y="18" width="48" height="36" rx="4" fill="#60A5FA" />
-          <path d="M8 22C8 19.79 9.79 18 12 18H26L30 14H52C54.21 14 56 15.79 56 18V22H8Z" fill="#3B82F6" />
-          <polygon points="26,30 26,44 38,37" fill="white" opacity="0.9" />
-          <circle cx="44" cy="38" r="3" fill="white" opacity="0.7" />
-          <path d="M44 35V28" stroke="white" stroke-width="2" opacity="0.7" />
-          <rect x="14" y="32" width="10" height="8" rx="1" fill="white" opacity="0.5" />
-          <circle cx="17" cy="35" r="1.5" fill="#60A5FA" opacity="0.7" />
+        <svg aria-hidden="true" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 8V6a2 2 0 012-2h5l2 3h7a2 2 0 012 2v10a2 2 0 01-2 2H5a2 2 0 01-2-2Z" />
+          <path d="m10 11 5 3-5 3Z" />
         </svg>
       </div>
 
@@ -525,7 +520,7 @@ function onFileSelected(e: Event) {
 
     <!-- ═══ Ready State — Media Preview Card ═══ -->
     <div v-else class="media-input__preview">
-      <button class="media-input__clear" @click="onClear" :title="t('media.clear')">
+      <button class="media-input__clear" @click="onClear" :title="t('media.clear')" :aria-label="t('media.clear')">
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
           <line x1="18" y1="6" x2="6" y2="18" />
           <line x1="6" y1="6" x2="18" y2="18" />
@@ -536,12 +531,18 @@ function onFileSelected(e: Event) {
       <div class="media-input__preview-left">
         <!-- thumbnail (image) -->
         <img
-          v-if="mediaPreviewUrl"
+          v-if="mediaPreviewUrl && !previewFailed"
           :src="mediaPreviewUrl"
           class="media-input__thumb"
           :alt="mediaStore.mediaInfo?.title"
+          @error="previewFailed = true"
         />
-        <span v-else class="media-input__preview-icon">{{ categoryIcon }}</span>
+        <svg v-else class="media-input__preview-icon" viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.4" :aria-label="categoryLabel" role="img">
+          <rect x="3" y="3" width="18" height="18" rx="4" />
+          <path v-if="mediaCategory === 'audio'" d="M14 8v8m0-8 3-1v7M10 16a2 2 0 104 0 2 2 0 00-4 0Z" />
+          <path v-else-if="mediaCategory === 'image'" d="m3 16 5-5 5 5 3-3 5 5M15 8h.01" />
+          <path v-else d="m10 8 6 4-6 4Z" />
+        </svg>
       </div>
 
       <!-- Right: info + actions -->
@@ -574,6 +575,7 @@ function onFileSelected(e: Event) {
         class="media-input__urlinput"
         type="text"
         :placeholder="t('media.linkPlaceholder')"
+        :aria-label="t('media.linkPlaceholder')"
         :value="mediaStore.urlInput"
         @input="mediaStore.setInputChange(($event.target as HTMLInputElement).value)"
         @paste="onUrlPaste"
@@ -645,16 +647,18 @@ function onFileSelected(e: Event) {
 <style scoped>
 .media-input {
   position: relative;
-  border: 2px dashed var(--border-dashed);
+  border: 1px solid var(--border);
   border-radius: var(--r-xl);
-  padding: var(--sp-xl);
+  padding: var(--sp-lg);
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: var(--sp-lg);
+  flex-shrink: 0;
+  min-width: 0;
+  box-shadow: var(--shadow-sm);
   transition: border-color var(--transition-normal), background var(--transition-normal);
   background: var(--bg-card);
-  margin: 0 var(--sp-lg);
   overflow: hidden;
 }
 
@@ -664,8 +668,7 @@ function onFileSelected(e: Event) {
 }
 
 .media-input--ready {
-  border-style: solid;
-  border-color: var(--status-online);
+  border-color: var(--border-focus);
   padding: var(--sp-lg);
   gap: var(--sp-md);
 }
@@ -675,28 +678,44 @@ function onFileSelected(e: Event) {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: var(--sp-sm);
+  gap: 6px;
+  width: 100%;
+  padding: 12px 8px 8px;
+  border: 1px dashed var(--border-dashed);
+  border-radius: var(--r-lg);
+  text-align: center;
   cursor: pointer;
 }
 
+.media-input__dropzone:hover {
+  border-color: var(--border-focus);
+}
+
 .media-input__icon {
-  margin-bottom: var(--sp-sm);
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  color: var(--primary);
+  background: var(--primary-light);
+  margin-bottom: 4px;
 }
 
 .media-input__hint {
-  font-size: 15px;
-  font-weight: 500;
+  font-size: 14px;
+  font-weight: 600;
   color: var(--text-primary);
 }
 
 .media-input__subhint {
-  font-size: 13px;
-  color: var(--text-tertiary);
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 
 .media-input__error {
   font-size: 12px;
-  color: #EF4444;
+  color: var(--danger);
   max-width: 100%;
   /* 失败原因是一整句话（站点 + 状态码 + 下一步动作），截断等于把最有用的后半句丢掉：
      用户只剩「解析失败：https://www.66dpw.vip/…」，分不清是没规则、超时还是被风控。
@@ -788,8 +807,7 @@ function onFileSelected(e: Event) {
 }
 
 .media-input__preview-icon {
-  font-size: 36px;
-  line-height: 1;
+  color: var(--primary);
 }
 
 .media-input__thumb {
@@ -845,7 +863,7 @@ function onFileSelected(e: Event) {
   padding: 8px 18px;
   font-size: 13px;
   font-weight: 500;
-  color: white;
+  color: var(--on-primary);
   background: var(--primary);
   border-radius: var(--r-lg);
   transition: background var(--transition-fast);
@@ -868,9 +886,13 @@ function onFileSelected(e: Event) {
   gap: var(--sp-sm);
   width: 100%;
   background: var(--bg-input);
-  border-radius: var(--r-full);
-  padding: var(--sp-xs) var(--sp-sm);
+  border-radius: var(--r-md);
+  padding: var(--sp-xs) 6px;
   border: 1px solid var(--border);
+}
+
+.media-input__urlbar:focus-within {
+  border-color: var(--border-focus);
 }
 
 .media-input__urlicon {
@@ -912,9 +934,9 @@ function onFileSelected(e: Event) {
   padding: 6px 14px;
   font-size: 13px;
   font-weight: 500;
-  color: white;
+  color: var(--on-primary);
   background: var(--primary);
-  border-radius: var(--r-full);
+  border-radius: var(--r-sm);
   white-space: nowrap;
   flex-shrink: 0;
   transition: background var(--transition-fast);

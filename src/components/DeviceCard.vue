@@ -135,7 +135,15 @@ function toggleMenu() {
     }"
     @contextmenu="onContextMenu"
   >
-    <span class="device-card__status" :style="{ background: getStatusColor(device.status) }" />
+    <div class="device-card__icon" aria-hidden="true">
+      <svg v-if="device.type === 'speaker'" viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.5">
+        <rect x="6" y="2" width="12" height="20" rx="3" /><circle cx="12" cy="14" r="3" /><path d="M10 7h4" />
+      </svg>
+      <svg v-else viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+        <rect x="2" y="3" width="20" height="14" rx="2" /><path d="M8 21h8M12 17v4" />
+      </svg>
+      <span class="device-card__status" :style="{ background: getStatusColor(device.status) }" />
+    </div>
 
     <div class="device-card__info">
       <div class="device-card__name-row">
@@ -147,15 +155,7 @@ function toggleMenu() {
       <div class="device-card__ip">{{ device.ip }}</div>
     </div>
 
-    <!-- Multi-room sync (for speakers) -->
-    <label v-if="device.type === 'speaker' && isOnline()" class="device-card__sync">
-      <input type="checkbox" checked disabled />
-      <span>{{ t('devices.multiRoomSync') }}</span>
-      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="var(--text-tertiary)" stroke-width="2">
-        <circle cx="12" cy="12" r="10" />
-        <path d="M12 16v-4M12 8h.01" />
-      </svg>
-    </label>
+    <!-- Independent speaker sessions are not synchronized multi-room playback. -->
 
     <div class="device-card__actions">
       <!-- Casting: truncated video title + window icon -->
@@ -165,6 +165,7 @@ function toggleMenu() {
           class="device-card__window-icon"
           @click.stop="onRestoreController"
           :title="t('devices.restoreController')"
+          :aria-label="t('devices.restoreController')"
         >
           <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.5">
             <rect x="2" y="3" width="20" height="14" rx="2" />
@@ -190,7 +191,7 @@ function toggleMenu() {
       <span v-if="!isOnline() && !isCastingToDevice" class="device-card__na">{{ t('devices.notApplicable') }}</span>
 
       <div class="device-card__menu-wrap" ref="menuWrapRef">
-        <button class="device-card__more" @click="toggleMenu">
+        <button class="device-card__more" @click="toggleMenu" :aria-label="t('devices.more', { name: device.name })" :aria-expanded="showMenu">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
             <circle cx="12" cy="5" r="1.5" />
             <circle cx="12" cy="12" r="1.5" />
@@ -248,11 +249,14 @@ function toggleMenu() {
 .device-card {
   display: flex;
   align-items: center;
-  gap: var(--sp-md);
-  padding: var(--sp-md) var(--sp-lg);
+  gap: 10px;
+  padding: 12px;
   background: var(--bg-card);
+  border: 1px solid var(--border);
   border-radius: var(--r-lg);
-  transition: background var(--transition-fast);
+  box-shadow: var(--shadow-sm);
+  flex-shrink: 0;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
   position: relative;
 }
 
@@ -261,14 +265,30 @@ function toggleMenu() {
 }
 
 .device-card--offline {
-  opacity: 0.6;
+  background: var(--bg-input);
+  box-shadow: none;
+}
+
+.device-card__icon {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
 }
 
 .device-card__status {
-  width: 8px;
-  height: 8px;
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 9px;
+  height: 9px;
+  border: 2px solid var(--bg-card);
   border-radius: var(--r-full);
-  flex-shrink: 0;
 }
 
 .device-card__info {
@@ -283,9 +303,13 @@ function toggleMenu() {
 }
 
 .device-card__name {
-  font-size: 14px;
-  font-weight: 500;
+  font-size: 13px;
+  font-weight: 600;
   color: var(--text-primary);
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .device-card__name--offline {
@@ -295,7 +319,11 @@ function toggleMenu() {
 .device-card__ip {
   font-size: 11px;
   color: var(--text-tertiary);
-  margin-top: 1px;
+  margin-top: 3px;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .device-card__badge {
@@ -303,24 +331,9 @@ function toggleMenu() {
   padding: 1px 6px;
   background: var(--primary-light);
   color: var(--primary);
-  border-radius: var(--r-full);
+  border-radius: var(--r-sm);
   font-weight: 500;
-}
-
-.device-card__sync {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 12px;
-  color: var(--text-secondary);
-  cursor: default;
   flex-shrink: 0;
-}
-
-.device-card__sync input[type="checkbox"] {
-  accent-color: var(--primary);
-  width: 14px;
-  height: 14px;
 }
 
 .device-card__actions {
@@ -338,18 +351,20 @@ function toggleMenu() {
   font-size: 12px;
   font-weight: 500;
   color: var(--primary);
-  border: 1px solid var(--primary);
-  border-radius: var(--r-full);
+  background: var(--primary-light);
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
   transition: all var(--transition-fast);
 }
 
 .device-card__cast:hover:not(:disabled) {
   background: var(--primary);
-  color: white;
+  color: var(--on-primary);
 }
 
 .device-card__cast:disabled {
-  opacity: 0.4;
+  background: var(--bg-input);
+  color: var(--text-tertiary);
   cursor: not-allowed;
 }
 
@@ -411,37 +426,43 @@ function toggleMenu() {
 
 /* ── Casting state ── */
 .device-card--casting {
-  background: linear-gradient(135deg, var(--bg-card), rgba(251, 191, 36, 0.1));
-  border: 1px solid rgba(251, 191, 36, 0.3);
+  border-color: var(--border-focus);
+}
+
+.device-card--casting .device-card__icon {
+  color: var(--primary);
+  background: var(--primary-light);
+}
+
+@media (max-width: 420px) {
+  .device-card__casting-name { display: none; }
 }
 
 .device-card__casting-name {
   font-size: 11px;
   font-weight: 500;
-  color: #D97706;
-  max-width: 120px;
+  color: var(--primary);
+  max-width: 90px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .device-card__window-icon {
-  width: 40px;
-  height: 40px;
+  width: 34px;
+  height: 34px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 10px;
-  color: #B45309;
-  background: rgba(251, 191, 36, 0.2);
+  border-radius: var(--r-md);
+  color: var(--primary);
+  background: var(--primary-light);
   cursor: pointer;
-  transition: all var(--transition-fast);
-  animation: pulse-icon 2s ease-in-out infinite;
+  transition: background var(--transition-fast);
 }
 
 .device-card__window-icon:hover {
-  background: rgba(251, 191, 36, 0.35);
-  transform: scale(1.08);
+  background: var(--bg-secondary);
 }
 
 @keyframes pulse-icon {
@@ -485,6 +506,7 @@ function toggleMenu() {
 }
 
 .device-card__context-menu button:focus-visible {
-  outline: none !important;
+  outline: 2px solid var(--border-focus);
+  outline-offset: -2px;
 }
 </style>

@@ -255,8 +255,8 @@ async function onCheckUpdate() {
 <template>
   <div class="settings">
     <header class="settings__header" data-tauri-drag-region>
-      <button class="settings__back" @click="goBack">
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+      <button class="settings__back" :aria-label="t('settings.back')" @click="goBack">
+        <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M19 12H5M12 19l-7-7 7-7" />
         </svg>
       </button>
@@ -268,9 +268,10 @@ async function onCheckUpdate() {
       <section class="settings__section">
         <h3 class="settings__section-title">{{ t('settings.general') }}</h3>
 
-        <div class="settings__item">
+        <div class="settings__item settings__item--field">
           <span class="settings__label">{{ t('theme.title') }}</span>
           <CustomSelect
+            :aria-label="t('theme.title')"
             :model-value="themeStore.mode"
             @update:model-value="onThemeChange($event as ThemeMode)"
             :options="[
@@ -281,9 +282,10 @@ async function onCheckUpdate() {
           />
         </div>
 
-        <div class="settings__item">
+        <div class="settings__item settings__item--field">
           <span class="settings__label">{{ t('settings.language') }}</span>
           <CustomSelect
+            :aria-label="t('settings.language')"
             :model-value="locale"
             @update:model-value="onLanguageChange($event as string)"
             :options="[
@@ -298,6 +300,7 @@ async function onCheckUpdate() {
           <label class="settings__toggle">
             <input
               type="checkbox"
+              :aria-label="t('settings.autoStart')"
               :checked="settingsStore.autostart"
               @change="settingsStore.toggleAutostart()"
             />
@@ -310,9 +313,10 @@ async function onCheckUpdate() {
       <section class="settings__section">
         <h3 class="settings__section-title">{{ t('settings.cast') }}</h3>
 
-        <div class="settings__item">
-          <span class="settings__label">{{ t('settings.dlnaName') }}</span>
+        <div class="settings__item settings__item--field">
+          <label class="settings__label" for="settings-friendly-name">{{ t('settings.dlnaName') }}</label>
           <input
+            id="settings-friendly-name"
             class="settings__input"
             type="text"
             v-model="friendlyName"
@@ -320,9 +324,10 @@ async function onCheckUpdate() {
           />
         </div>
 
-        <div class="settings__item">
+        <div class="settings__item settings__item--field">
           <span class="settings__label">{{ t('settings.interfaces') }}</span>
           <CustomSelect
+            :aria-label="t('settings.interfaces')"
             :model-value="networkInterface"
             @update:model-value="onNetworkInterfaceChange($event as string)"
             :options="interfaceOptions"
@@ -341,6 +346,7 @@ async function onCheckUpdate() {
           <label class="settings__toggle">
             <input
               type="checkbox"
+              :aria-label="t('guard.enable')"
               :checked="guardStore.settings.enabled"
               @change="onGuardEnabledChange"
             />
@@ -348,9 +354,10 @@ async function onCheckUpdate() {
           </label>
         </div>
 
-        <div class="settings__item">
+        <div class="settings__item settings__item--field">
           <span class="settings__label">{{ t('guard.timeout') }}</span>
           <CustomSelect
+            :aria-label="t('guard.timeout')"
             :model-value="guardStore.settings.confirm_timeout"
             @update:model-value="onGuardTimeoutChange"
             :options="[
@@ -362,7 +369,7 @@ async function onCheckUpdate() {
           />
         </div>
 
-        <button class="settings__item settings__item--clickable" @click="toggleGuardDevices">
+        <button class="settings__item settings__item--clickable" :aria-expanded="showGuardDevices" :aria-controls="showGuardDevices ? 'settings-guard-devices' : undefined" @click="toggleGuardDevices">
           <span class="settings__label">
             {{ t('guard.trusted') }}
             <span v-if="guardStore.trustedDevices.length" class="settings__badge">
@@ -379,7 +386,7 @@ async function onCheckUpdate() {
         </button>
 
         <Transition name="settings-expand">
-          <div v-if="showGuardDevices" class="settings__guard-list">
+          <div v-if="showGuardDevices" id="settings-guard-devices" class="settings__guard-list">
             <GuardDeviceList />
           </div>
         </Transition>
@@ -389,7 +396,7 @@ async function onCheckUpdate() {
       <section class="settings__section">
         <h3 class="settings__section-title">{{ t('settings.params') }}</h3>
 
-        <button class="settings__item settings__item--clickable" @click="toggleParams">
+        <button class="settings__item settings__item--clickable" :aria-expanded="showParams" :aria-controls="showParams ? 'settings-params' : undefined" @click="toggleParams">
           <span class="settings__label">
             {{ t('settings.paramsToggle') }}
             <span v-if="paramOverriddenCount" class="settings__badge">{{ paramOverriddenCount }}</span>
@@ -404,7 +411,7 @@ async function onCheckUpdate() {
         </button>
 
         <Transition name="settings-expand-lg">
-          <div v-if="showParams" class="settings__params">
+          <div v-if="showParams" id="settings-params" class="settings__params">
             <p class="settings__hint">{{ t('settings.paramsHint') }}</p>
 
             <div v-if="paramsLoading" class="settings__params-empty">{{ t('settings.paramsLoading') }}</div>
@@ -416,8 +423,8 @@ async function onCheckUpdate() {
                 </h4>
 
                 <div v-for="spec in group.items" :key="spec.key" class="settings__param">
-                  <div class="settings__param-head">
-                    <span class="settings__label">
+                  <div class="settings__param-head" :class="{ 'settings__param-head--text': spec.type === 'text' || spec.type === 'string' }">
+                    <span :id="`settings-param-${spec.key}`" class="settings__label">
                       {{ paramLabel(spec) }}
                       <span v-if="spec.overridden" class="settings__badge settings__badge--changed">
                         {{ t('settings.paramsChangedFlag') }}
@@ -430,6 +437,7 @@ async function onCheckUpdate() {
                         class="settings__input settings__input--text"
                         type="text"
                         spellcheck="false"
+                        :aria-labelledby="`settings-param-${spec.key}`"
                         :value="draftOf(spec.key)"
                         @change="onParamTextChange(spec.key, $event)"
                       />
@@ -440,6 +448,7 @@ async function onCheckUpdate() {
                         type="number"
                         :min="spec.min"
                         :max="spec.max"
+                        :aria-labelledby="`settings-param-${spec.key}`"
                         :value="draftOf(spec.key)"
                         @change="onParamNumberChange(spec.key, $event)"
                       />
@@ -447,6 +456,7 @@ async function onCheckUpdate() {
 
                       <CustomSelect
                         v-if="spec.type === 'enum'"
+                        :aria-labelledby="`settings-param-${spec.key}`"
                         :model-value="enumDraft(spec)"
                         :options="paramOptions(spec)"
                         @update:model-value="paramDraft[spec.key] = $event as string"
@@ -455,6 +465,7 @@ async function onCheckUpdate() {
                       <label v-if="spec.type === 'bool'" class="settings__toggle">
                         <input
                           type="checkbox"
+                          :aria-labelledby="`settings-param-${spec.key}`"
                           :checked="draftOf(spec.key) === true"
                           @change="paramDraft[spec.key] = ($event.target as HTMLInputElement).checked"
                         />
@@ -503,7 +514,7 @@ async function onCheckUpdate() {
       <section class="settings__section">
         <h3 class="settings__section-title">{{ t('settings.plugins') }}</h3>
 
-        <button class="settings__item settings__item--clickable" @click="togglePlugins">
+        <button class="settings__item settings__item--clickable" :aria-expanded="showPlugins" :aria-controls="showPlugins ? 'settings-plugins' : undefined" @click="togglePlugins">
           <span class="settings__label">
             {{ t('settings.pluginsToggle') }}
             <span v-if="pluginCount" class="settings__badge">{{ pluginCount }}</span>
@@ -518,7 +529,7 @@ async function onCheckUpdate() {
         </button>
 
         <Transition name="settings-expand-lg">
-          <div v-if="showPlugins" class="settings__params">
+          <div v-if="showPlugins" id="settings-plugins" class="settings__params">
             <PluginSettings />
           </div>
         </Transition>
@@ -540,7 +551,7 @@ async function onCheckUpdate() {
 
         <div class="settings__item">
           <span class="settings__label">{{ t('settings.exportLogs') }}</span>
-          <button class="settings__link" @click="onExportLogs">
+          <button class="settings__link" :aria-label="t('settings.exportLogs')" @click="onExportLogs">
             <span v-if="exportLogsStatus === 'done'" class="settings__check-result">✓</span>
             <span v-else-if="exportLogsStatus === 'error'" class="settings__check-result settings__check-result--error">✕</span>
             <span v-else>{{ t('common.saveAs') }}</span>
@@ -597,30 +608,34 @@ async function onCheckUpdate() {
 .settings {
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  min-height: 0;
   height: 100%;
   background: var(--bg-primary);
 }
 
 .settings__header {
-  height: var(--titlebar-height);
+  height: var(--titlebar-height, 44px);
   display: flex;
   align-items: center;
   gap: var(--sp-sm);
   padding: 0 var(--sp-md);
+  border-bottom: 1px solid var(--border);
   -webkit-app-region: drag;
   flex-shrink: 0;
 }
 
 .settings__back {
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: var(--r-sm);
+  flex-shrink: 0;
+  border-radius: var(--r-md);
   color: var(--text-secondary);
   -webkit-app-region: no-drag;
-  transition: all var(--transition-fast);
+  transition: background var(--transition-fast), color var(--transition-fast);
 }
 
 .settings__back:hover {
@@ -632,50 +647,84 @@ async function onCheckUpdate() {
   font-size: 13px;
   font-weight: 600;
   color: var(--text-primary);
-  -webkit-app-region: no-drag;
+  -webkit-app-region: drag;
 }
 
 .settings__body {
   flex: 1;
+  min-height: 0;
+  min-width: 0;
   overflow-y: auto;
-  padding: var(--sp-md) var(--sp-lg);
+  padding: var(--sp-md) var(--sp-lg) var(--sp-xl);
   display: flex;
   flex-direction: column;
-  gap: var(--sp-lg);
+  align-items: center;
+  gap: var(--sp-md);
 }
 
 .settings__section {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-sm);
+  flex-shrink: 0;
+  width: 100%;
+  max-width: 720px;
+  min-width: 0;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
 }
 
 .settings__section-title {
+  margin: 0;
+  padding: 10px var(--sp-md);
   font-size: 12px;
   font-weight: 600;
-  color: var(--text-tertiary);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  padding-bottom: var(--sp-xs);
+  line-height: 1.5;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
 }
 
 .settings__item {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: var(--sp-sm) var(--sp-md);
-  background: var(--bg-card);
-  border-radius: var(--r-md);
+  gap: var(--sp-md);
+  min-width: 0;
+  min-height: 44px;
+  padding: 9px var(--sp-md);
+  border-top: 1px solid var(--border);
+  text-align: left;
+}
+
+.settings__item:last-child {
+  border-radius: 0 0 var(--r-lg) var(--r-lg);
+}
+
+.settings__item > .settings__label {
+  flex: 1;
+}
+
+.settings__item--field > .settings__input,
+.settings__item--field > .custom-select {
+  flex: 0 1 56%;
+  width: 56%;
+  max-width: 280px;
+  min-width: 0;
 }
 
 .settings__label {
-  font-size: 14px;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.5;
   color: var(--text-primary);
+  overflow-wrap: anywhere;
 }
 
 .settings__value {
-  font-size: 14px;
+  min-width: 0;
+  font-size: 13px;
   color: var(--text-secondary);
+  overflow-wrap: anywhere;
 }
 
 .settings__value--mono {
@@ -690,46 +739,66 @@ async function onCheckUpdate() {
 /* select styles moved to CustomSelect.vue */
 
 .settings__input {
-  padding: 4px 8px;
+  width: 100%;
+  min-width: 0;
+  min-height: 32px;
+  padding: 5px 9px;
   font-size: 13px;
+  line-height: 1.5;
   background: var(--bg-input);
   border: 1px solid var(--border);
-  border-radius: var(--r-sm);
+  border-radius: var(--r-md);
   color: var(--text-primary);
-  width: 180px;
+  transition: border-color var(--transition-fast);
 }
 
 .settings__input--small {
-  width: 80px;
+  width: 88px;
+  max-width: 100%;
 }
 
-/* 地址类参数：整行铺满并允许折行显示，否则长 URL 只能看到尾巴 */
+/* 地址类参数独占一行；单行 input 保留原有编辑行为。 */
 .settings__input--text {
-  width: 100%;
-  min-width: 0;
+  flex: 1 1 160px;
   font-size: 12px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 .settings__input:focus {
   border-color: var(--border-focus);
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
 }
 
 .settings__hint {
+  margin: 0;
   font-size: 12px;
-  color: var(--text-tertiary);
-  line-height: 1.5;
-  padding: 0 var(--sp-md);
-  margin: calc(var(--sp-xs) * -1) 0 0;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.settings__section > .settings__hint {
+  padding: 0 var(--sp-md) var(--sp-md);
 }
 
 .settings__link {
-  font-size: 14px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 3px 0;
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: left;
+  overflow-wrap: anywhere;
   color: var(--text-link);
   background: none;
   border: none;
   cursor: pointer;
-  padding: 0;
+}
+
+.settings__item > .settings__label + .settings__link {
+  max-width: 55%;
+  text-align: right;
 }
 
 .settings__link:hover {
@@ -748,22 +817,31 @@ async function onCheckUpdate() {
 }
 
 .settings__check-result--error {
-  color: #EF4444;
+  color: var(--danger);
 }
 
 /* ── Toggle switch ── */
 .settings__toggle {
   position: relative;
   display: inline-block;
+  flex-shrink: 0;
   width: 40px;
   height: 22px;
   cursor: pointer;
 }
 
 .settings__toggle input {
+  position: absolute;
+  inset: 0;
   opacity: 0;
-  width: 0;
-  height: 0;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+}
+
+.settings__toggle input:focus-visible + .settings__toggle-slider {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 3px;
 }
 
 .settings__toggle-slider {
@@ -802,11 +880,18 @@ async function onCheckUpdate() {
 }
 
 .settings__item--clickable:hover {
-  background: var(--bg-secondary);
+  background: var(--bg-input);
+}
+
+.settings__item--clickable:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: -2px;
 }
 
 /* ── Badge ── */
 .settings__badge {
+  display: inline-block;
+  vertical-align: baseline;
   font-size: 11px;
   padding: 1px 6px;
   background: var(--primary-light);
@@ -829,12 +914,15 @@ async function onCheckUpdate() {
 
 /* ── Guard list expand ── */
 .settings__guard-list {
-  overflow: hidden;
+  min-width: 0;
+  padding: var(--sp-md);
+  border-top: 1px solid var(--border);
 }
 
 .settings-expand-enter-active,
 .settings-expand-leave-active {
-  transition: all var(--transition-normal);
+  overflow: hidden;
+  transition: opacity var(--transition-normal), max-height var(--transition-normal);
   max-height: 500px;
 }
 
@@ -849,11 +937,15 @@ async function onCheckUpdate() {
   display: flex;
   flex-direction: column;
   gap: var(--sp-md);
+  min-width: 0;
+  padding: var(--sp-md);
+  border-top: 1px solid var(--border);
 }
 
 .settings-expand-lg-enter-active,
 .settings-expand-lg-leave-active {
-  transition: all var(--transition-normal);
+  overflow: hidden;
+  transition: opacity var(--transition-normal), max-height var(--transition-normal);
   max-height: 4000px;
 }
 
@@ -866,39 +958,66 @@ async function onCheckUpdate() {
 .settings__params-group {
   display: flex;
   flex-direction: column;
-  gap: var(--sp-xs);
+  min-width: 0;
 }
 
 .settings__params-group-title {
-  font-size: 11px;
+  margin: 0;
+  padding: 8px 0;
+  font-size: 12px;
   font-weight: 600;
-  color: var(--text-tertiary);
-  letter-spacing: 0.5px;
-  padding-left: var(--sp-md);
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
 }
 
 .settings__param {
-  padding: var(--sp-sm) var(--sp-md);
-  background: var(--bg-card);
-  border-radius: var(--r-md);
+  min-width: 0;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
 }
 
 .settings__param-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: var(--sp-sm);
+  gap: var(--sp-sm) var(--sp-md);
+}
+
+.settings__param-head > .settings__label {
+  flex: 1 1 150px;
 }
 
 .settings__param-control {
   display: flex;
+  flex: 1 1 160px;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-end;
   gap: var(--sp-sm);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.settings__param-control > .custom-select {
+  flex: 1 1 100px;
+  max-width: 240px;
+}
+
+.settings__param-head--text {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.settings__param-head--text > .settings__label,
+.settings__param-head--text > .settings__param-control {
+  flex: none;
 }
 
 .settings__param-unit {
   font-size: 12px;
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
 }
 
 .settings__param-reset {
@@ -908,15 +1027,16 @@ async function onCheckUpdate() {
 
 .settings__param-help {
   font-size: 12px;
-  color: var(--text-tertiary);
-  line-height: 1.5;
-  margin-top: var(--sp-xs);
+  color: var(--text-secondary);
+  line-height: 1.6;
+  margin-top: 6px;
+  overflow-wrap: anywhere;
 }
 
 .settings__params-empty {
   font-size: 13px;
-  color: var(--text-tertiary);
-  padding: var(--sp-sm) var(--sp-md);
+  color: var(--text-secondary);
+  padding: var(--sp-sm) 0;
 }
 
 .settings__params-errors {
@@ -924,36 +1044,47 @@ async function onCheckUpdate() {
   flex-direction: column;
   gap: 2px;
   padding: var(--sp-sm) var(--sp-md);
-  background: rgba(239, 68, 68, 0.08);
+  background: var(--danger-light);
   border-radius: var(--r-md);
 }
 
 .settings__params-error {
   font-size: 12px;
-  color: #EF4444;
+  color: var(--danger);
   line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 .settings__params-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--sp-sm);
+  padding-top: var(--sp-md);
+  border-top: 1px solid var(--border);
 }
 
 .settings__params-count {
+  flex: 1 1 120px;
   font-size: 12px;
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
 }
 
 .settings__params-save {
+  min-height: 32px;
   padding: 6px 16px;
   font-size: 13px;
   font-weight: 600;
-  color: var(--bg-primary);
+  color: var(--on-primary, #fff);
   background: var(--primary);
-  border-radius: var(--r-sm);
-  transition: opacity var(--transition-fast);
+  border-radius: var(--r-md);
+  transition: background var(--transition-fast), opacity var(--transition-fast);
+}
+
+.settings__params-save:hover:not(:disabled) {
+  background: var(--primary-hover);
 }
 
 .settings__params-save:disabled {
@@ -963,5 +1094,71 @@ async function onCheckUpdate() {
 
 .settings__badge--changed {
   background: var(--warning-light, var(--primary-light));
+}
+
+/* Expanded plugin content must wrap inside the same narrow card. */
+.settings__params :deep(.plugins) {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.settings__params :deep(.plugins__pack-row),
+.settings__params :deep(.plugins__row),
+.settings__params :deep(.plugins__head) {
+  flex-wrap: wrap;
+}
+
+.settings__params :deep(.plugins__btn) {
+  max-width: 100%;
+  white-space: normal;
+}
+
+@media (max-width: 480px) {
+  .settings__param-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .settings__param-head > .settings__label,
+  .settings__param-head > .settings__param-control {
+    flex: none;
+  }
+
+  .settings__param-control {
+    justify-content: flex-start;
+  }
+
+  .settings__param-control > .custom-select {
+    max-width: none;
+  }
+}
+
+@media (max-width: 380px) {
+  .settings__body {
+    padding-right: var(--sp-md);
+    padding-left: var(--sp-md);
+  }
+
+  .settings__item--field {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+  }
+
+  .settings__item--field > .settings__input,
+  .settings__item--field > .custom-select {
+    flex: none;
+    width: 100%;
+    max-width: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-expand-enter-active,
+  .settings-expand-leave-active,
+  .settings-expand-lg-enter-active,
+  .settings-expand-lg-leave-active {
+    transition: none;
+  }
 }
 </style>

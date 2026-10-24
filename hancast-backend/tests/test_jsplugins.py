@@ -90,6 +90,12 @@ class FakeJsonResponse:
     def json(self):
         return self._doc
 
+    def iter_content(self, chunk_size=65536):
+        yield json.dumps(self._doc).encode("utf-8")
+
+    def close(self):
+        pass
+
 
 class FakeNet:
     """requests.Session 替身：按 URL 派发假响应（dict→索引 JSON，bytes→zip）
@@ -542,7 +548,10 @@ class TestPackDistribution(unittest.TestCase):
             _entry("demo", "1.0.0", ZIP_URL,
                    sha256=hashlib.sha256(blob).hexdigest())]},
             ZIP_URL: blob})
-        fake = SimpleNamespace(share_resolver=SimpleNamespace(plugin_mgr=mgr))
+        # 命令层的规则包入口现在都过一份任务准入（与后台安装互斥）
+        from hancast_sidecar.media.rules.tasks import PluginTaskRunner
+        fake = SimpleNamespace(share_resolver=SimpleNamespace(plugin_mgr=mgr),
+                              _plugin_tasks=PluginTaskRunner(mgr))
         with patch.object(jsplugins_mod.requests, "Session", net.new_session):
             res = CommandHandler._plugin_pull(fake, {"name": "demo", "url": INDEX_URL})
         self.assertEqual([p["name"] for p in res["plugins"]], ["demo"])

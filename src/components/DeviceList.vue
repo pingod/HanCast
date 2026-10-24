@@ -15,11 +15,9 @@ const isSpinning = ref(false)
 const handleRefresh = () => {
   if (isSpinning.value) return // 防止重复点击
   isSpinning.value = true
-  deviceStore.refresh()
-  // 10秒后停止动画
-  setTimeout(() => {
+  deviceStore.refresh().finally(() => {
     isSpinning.value = false
-  }, 10000)
+  })
 }
 </script>
 
@@ -32,6 +30,7 @@ const handleRefresh = () => {
           <path d="M8 21h8M12 17v4" />
         </svg>
         <span>{{ t('devices.title') }}</span>
+        <span class="device-list__count">{{ deviceStore.devices.length }}</span>
       </div>
       <div class="device-list__actions">
         <button
@@ -55,7 +54,7 @@ const handleRefresh = () => {
             <path d="M4 6h16M4 12h16M4 18h10" />
           </svg>
         </button>
-        <button class="device-list__refresh" :title="t('devices.refresh')" @click="handleRefresh">
+        <button class="device-list__refresh" :title="t('devices.refresh')" :aria-label="t('devices.refresh')" :aria-busy="isSpinning" :disabled="isSpinning" @click="handleRefresh">
           <svg
             viewBox="0 0 24 24"
             width="16"
@@ -81,7 +80,10 @@ const handleRefresh = () => {
     </div>
 
     <div v-else class="device-list__empty">
-      <p>{{ t('devices.offline') }}</p>
+      <svg aria-hidden="true" viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round">
+        <rect x="3" y="4" width="18" height="13" rx="2" /><path d="M8 21h8M12 17v4M8 10h.01M12 10h.01M16 10h.01" />
+      </svg>
+      <p>{{ t('devices.emptyTitle') }}</p>
       <p class="device-list__empty-hint">{{ t('devices.emptyHint') }}</p>
       <button class="device-list__empty-btn" @click="deviceStore.openAddModal()">
         {{ t('devices.addDevice') }}
@@ -95,15 +97,26 @@ const handleRefresh = () => {
   flex: 1;
   display: flex;
   flex-direction: column;
-  min-height: 0;
+  min-height: 150px;
+}
+
+.device-list__count {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  border-radius: var(--r-sm);
+  padding: 1px 6px;
+  font-variant-numeric: tabular-nums;
 }
 
 .device-list__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 var(--sp-lg);
-  margin-bottom: var(--sp-md);
+  padding: 0 2px;
+  margin-bottom: 10px;
+  flex-shrink: 0;
 }
 
 .device-list__title {
@@ -140,7 +153,7 @@ const handleRefresh = () => {
 }
 
 .spinning {
-  animation: spin-linear 10s linear;
+  animation: spin 0.8s linear infinite;
 }
 
 @keyframes spin-linear {
@@ -152,8 +165,9 @@ const handleRefresh = () => {
   display: flex;
   flex-direction: column;
   gap: var(--sp-sm);
-  padding: 0 var(--sp-md);
+  padding: 2px 2px 4px;
   overflow-y: auto;
+  min-height: 0;
   flex: 1;
 }
 
@@ -162,9 +176,13 @@ const handleRefresh = () => {
   flex-direction: column;
   align-items: center;
   gap: var(--sp-sm);
-  padding: var(--sp-2xl);
-  color: var(--text-tertiary);
+  padding: var(--sp-xl) var(--sp-lg);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  color: var(--text-secondary);
   font-size: 13px;
+  overflow-y: auto;
 }
 
 .device-list__empty-hint {
@@ -189,5 +207,12 @@ const handleRefresh = () => {
 .device-list__empty-btn:hover {
   border-color: var(--border-focus);
   color: var(--primary);
+}
+
+/* Short windows use one page scroller instead of two nested tiny viewports. */
+@media (max-height: 560px) {
+  .device-list { flex: none; }
+  .device-list__items { flex: none; overflow: visible; }
+  .device-list__empty { overflow: visible; }
 }
 </style>

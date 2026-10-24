@@ -106,7 +106,7 @@ async function submit() {
 .adm-add {
   padding: 6px 12px;
   font-size: 12px;
-  color: white;
+  color: var(--on-primary);
   background: var(--primary);
   border-radius: var(--r-md);
   white-space: nowrap;

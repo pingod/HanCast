@@ -259,18 +259,21 @@ export const useScreenCastStore = defineStore('screencast', () => {
 
   // ── Event listeners ──
   const unlistenFns: UnlistenFn[] = []
+  let disposed = false
 
   async function setupListeners() {
     try {
       const { listen } = await import('@tauri-apps/api/event')
-      unlistenFns.push(
-        await listen<ScreenCastState>('screen_cast_state_changed', (event) => {
-          state.value = event.payload
-          if (event.payload.error) {
-            lastError.value = event.payload.error
-          }
-        })
-      )
+      if (disposed) return
+      const unlisten = await listen<ScreenCastState>('screen_cast_state_changed', (event) => {
+        if (disposed) return
+        state.value = event.payload
+        if (event.payload.error) {
+          lastError.value = event.payload.error
+        }
+      })
+      if (disposed) unlisten()
+      else unlistenFns.push(unlisten)
     } catch {
       // Running outside Tauri, skip listeners
     }
@@ -282,8 +285,9 @@ export const useScreenCastStore = defineStore('screencast', () => {
   })
 
   onUnmounted(() => {
+    disposed = true
     stopDownloadPolling()
-    unlistenFns.forEach((fn) => fn())
+    unlistenFns.splice(0).forEach((fn) => fn())
   })
 
   return {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useCastStore } from '@/stores/cast'
 import { useDeviceStore } from '@/stores/device'
@@ -21,7 +21,7 @@ const mediaMimeType = computed(() => {
   let mime = castStore.castState.media?.mime_type ?? ''
   if (!mime) {
     const uri = castStore.castState.media?.uri ?? ''
-    const ext = uri.split('.').pop()?.toLowerCase() ?? ''
+    const ext = uri.split(/[?#]/)[0].split('.').pop()?.toLowerCase() ?? ''
     const map: Record<string, string> = {
       mp4: 'video/mp4', mkv: 'video/x-matroska', avi: 'video/x-msvideo',
       mov: 'video/quicktime', webm: 'video/webm', flv: 'video/x-flv',
@@ -48,17 +48,15 @@ const qualityOptions = computed(() => {
 })
 const selectedQuality = ref('')
 watch(() => castStore.castState.media?.quality, (q) => {
-  if (q) selectedQuality.value = q
+  selectedQuality.value = q ?? ''
 }, { immediate: true })
 
 async function onQualityChange(e: Event) {
   const qid = (e.target as HTMLSelectElement).value
-  const before = castStore.castState.media?.quality ?? ''
+  selectedQuality.value = qid
   await castStore.switchQuality(qid)
-  // 没切成就把选择器拨回原档位，别显示一个没投出去的画质
-  if (castStore.castState.media?.quality !== qid) {
-    selectedQuality.value = before
-  }
+  // 跟随当前会话；失败时也必须触发 value 更新，复位原生 select。
+  selectedQuality.value = castStore.castState.media?.quality ?? ''
 }
 
 // ── Preview ──
@@ -69,6 +67,8 @@ const previewUrl = computed(() => {
 
   // Prefer thumbnail (e.g. Bilibili cover image, already proxied)
   if (info.thumbnail) return info.thumbnail
+  // Video/audio streams are not images; never hand their URI to an <img>.
+  if (!isImage.value) return null
 
   // Local file → asset:// URL
   if (info.uri && convertFileSrc.value && !info.uri.startsWith('http')) {
@@ -80,6 +80,9 @@ const previewUrl = computed(() => {
 
   return null
 })
+
+const previewFailed = ref(false)
+watch(previewUrl, () => { previewFailed.value = false })
 
 // ── Playback ──
 const isPlaying = computed(() => castStore.castState.status === 'playing')
@@ -109,9 +112,11 @@ function onVolumeInput(e: Event) {
 let _debounce: ReturnType<typeof setTimeout> | null = null
 function onVolumeChange(e: Event) {
   const v = Number((e.target as HTMLInputElement).value)
+  const id = castStore.focusedDeviceId
   if (_debounce) clearTimeout(_debounce)
   _debounce = setTimeout(() => {
-    castStore.setVolume(v)
+    _debounce = null
+    if (id) void castStore.setVolume(v, id)
   }, 50)
 }
 
@@ -128,19 +133,34 @@ const seekLockedPct = ref(0)       // 锁定的百分比位置
 const seekDragging = ref(false)    // 是否正在拖动
 const seekPreview = ref(0)         // 拖动中的预览值
 
-// 当后端报告的位置接近锁定目标时，自动解锁
-// (watch positionSeconds 的变化)
-const _unlockCheck = computed(() => {
-  const pos = castStore.positionSeconds
-  const dur = castStore.durationSeconds
-  if (!seekLocked.value || dur <= 0) return pos
-  const targetSec = (seekLockedPct.value / 100) * dur
-  // 后端位置与 seek 目标相差 < 3 秒 → 认为 seek 生效，解锁
-  if (Math.abs(pos - targetSec) < 3) {
-    seekLocked.value = false
-  }
-  return pos
+let seekUnlockTimer: ReturnType<typeof setTimeout> | null = null
+let seekRequest = 0
+
+function unlockSeek() {
+  seekLocked.value = false
+  if (seekUnlockTimer) clearTimeout(seekUnlockTimer)
+  seekUnlockTimer = null
+}
+
+// computed is lazy: unlocking must be an active watcher, not an unused getter.
+watch([() => castStore.positionSeconds, () => castStore.durationSeconds, seekLocked, seekLockedPct], ([pos, dur]) => {
+  if (!seekLocked.value || dur <= 0) return
+  if (Math.abs(pos - (seekLockedPct.value / 100) * dur) < 3) unlockSeek()
 })
+
+function resetInteractions() {
+  ++seekRequest
+  seekDragging.value = false
+  unlockSeek()
+  if (_debounce) clearTimeout(_debounce)
+  _debounce = null
+}
+
+watch(() => castStore.focusedDeviceId, resetInteractions)
+watch(() => castStore.showController, (visible) => {
+  if (!visible) resetInteractions()
+})
+onUnmounted(resetInteractions)
 
 const displayProgress = computed(() => {
   if (seekDragging.value) return seekPreview.value
@@ -176,13 +196,16 @@ function onSeekInput(e: Event) {
   seekPreview.value = Number((e.target as HTMLInputElement).value)
 }
 
-function onSeekChange(e: Event) {
+async function onSeekChange(e: Event) {
   const val = Number((e.target as HTMLInputElement).value)
+  const request = ++seekRequest
   seekDragging.value = false
+  unlockSeek()
   if (castStore.durationSeconds > 0) {
-    // 锁定进度条到 seek 目标
+    // 锁定到目标，位置追上、请求结束或 5 秒兜底均会解锁。
     seekLocked.value = true
     seekLockedPct.value = val
+    seekUnlockTimer = setTimeout(unlockSeek, 5000)
 
     const targetSeconds = (val / 100) * castStore.durationSeconds
     const h = Math.floor(targetSeconds / 3600)
@@ -191,7 +214,9 @@ function onSeekChange(e: Event) {
     const hh = String(h).padStart(2, '0')
     const mm = String(m).padStart(2, '0')
     const ss = String(s).padStart(2, '0')
-    castStore.seek(`${hh}:${mm}:${ss}`)
+    await castStore.seek(`${hh}:${mm}:${ss}`)
+    // An older seek finishing must not release the next drag's lock.
+    if (request === seekRequest) unlockSeek()
   }
 }
 
@@ -216,11 +241,17 @@ onMounted(async () => {
             </button>
           </div>
 
+          <div v-if="castStore.lastError !== null" class="ctrl__error" role="alert">
+            <strong>{{ t('cast.error') }}</strong>
+            <span>{{ castStore.lastError }}</span>
+            <button type="button" @click="castStore.dismissError()">{{ t('common.confirm') }}</button>
+          </div>
+
           <!-- Image mode: preview + stop -->
           <template v-if="isImage">
             <!-- Image preview -->
             <div class="ctrl__thumb">
-              <img v-if="previewUrl" :src="previewUrl" class="ctrl__thumb-img" :alt="mediaTitle" />
+              <img v-if="previewUrl && !previewFailed" :src="previewUrl" class="ctrl__thumb-img" :alt="mediaTitle" @error="previewFailed = true" />
               <div v-else class="ctrl__thumb-ph">
                 <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.5" opacity=".2">
                   <rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>
@@ -236,8 +267,9 @@ onMounted(async () => {
           <!-- Video/audio mode: full controls -->
           <template v-else>
             <!-- Thumbnail + play/pause overlay -->
-            <div class="ctrl__thumb" @click="togglePlayPause">
-              <img v-if="previewUrl" :src="previewUrl" class="ctrl__thumb-img" :alt="mediaTitle" />
+            <button type="button" class="ctrl__thumb" @click="togglePlayPause"
+              :aria-label="isPlaying ? t('cast.pause') : t('cast.play')">
+              <img v-if="previewUrl && !previewFailed" :src="previewUrl" class="ctrl__thumb-img" :alt="mediaTitle" @error="previewFailed = true" />
               <div v-else class="ctrl__thumb-ph">
                 <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.5" opacity=".2">
                   <rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>
@@ -246,16 +278,16 @@ onMounted(async () => {
               <!-- Play/Pause overlay button -->
               <div class="ctrl__thumb-overlay" :class="{ 'ctrl__thumb-overlay--paused': !isPlaying }">
                 <div class="ctrl__thumb-play">
-                  <svg v-if="isPlaying" viewBox="0 0 24 24" width="28" height="28" fill="white">
+                  <svg v-if="isPlaying" viewBox="0 0 24 24" width="28" height="28" fill="currentColor">
                     <rect x="6" y="4" width="4" height="16" rx="1"/>
                     <rect x="14" y="4" width="4" height="16" rx="1"/>
                   </svg>
-                  <svg v-else viewBox="0 0 24 24" width="28" height="28" fill="white">
+                  <svg v-else viewBox="0 0 24 24" width="28" height="28" fill="currentColor">
                     <polygon points="6 3 20 12 6 21 6 3"/>
                   </svg>
                 </div>
               </div>
-            </div>
+            </button>
 
             <!-- Filename -->
             <div class="ctrl__name">{{ mediaTitle }}</div>
@@ -342,18 +374,46 @@ onMounted(async () => {
 /* ── Modal ── */
 .ctrl-modal {
   width: 240px;
-  background: rgba(248, 248, 248, 0.95);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border-radius: 16px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+  max-width: calc(100% - 24px);
+  max-height: calc(100% - 24px);
+  min-width: 0;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-lg);
   display: flex;
   flex-direction: column;
   align-items: center;
   padding: 0;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
   font-family: var(--font);
   user-select: none;
+}
+.ctrl-modal > * { flex-shrink: 0; }
+
+.ctrl__error {
+  width: calc(100% - 24px);
+  min-width: 0;
+  margin: 4px 12px;
+  padding: 8px;
+  border-radius: var(--r-sm);
+  background: var(--danger-light);
+  color: var(--danger);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: pre-wrap;
+  user-select: text;
+}
+.ctrl__error strong, .ctrl__error span { display: block; }
+.ctrl__error button {
+  display: block;
+  margin-top: 6px;
+  max-width: 100%;
+  color: var(--text-primary);
+  text-decoration: underline;
+  overflow-wrap: anywhere;
 }
 
 /* ── Header ── */
@@ -372,10 +432,12 @@ onMounted(async () => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
   flex: 1;
 }
 
 .ctrl__min {
+  flex-shrink: 0;
   width: 24px;
   height: 24px;
   display: flex;
@@ -388,15 +450,17 @@ onMounted(async () => {
   cursor: pointer;
   transition: background 0.15s;
 }
-.ctrl__min:hover { background: rgba(0,0,0,.08); }
+.ctrl__min:hover { background: var(--bg-secondary); }
 
 /* ── Thumbnail ── */
 .ctrl__thumb {
   width: calc(100% - 24px);
   aspect-ratio: 16 / 10;
+  border: none;
+  padding: 0;
   border-radius: 10px;
   overflow: hidden;
-  background: rgba(0,0,0,.04);
+  background: var(--bg-input);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -418,7 +482,8 @@ onMounted(async () => {
   opacity: 0;
   transition: opacity 0.2s ease;
 }
-.ctrl__thumb:hover .ctrl__thumb-overlay {
+.ctrl__thumb:hover .ctrl__thumb-overlay,
+.ctrl__thumb:focus-visible .ctrl__thumb-overlay {
   opacity: 1;
 }
 .ctrl__thumb-overlay--paused {
@@ -428,16 +493,16 @@ onMounted(async () => {
   width: 44px;
   height: 44px;
   border-radius: 50%;
-  background: rgba(0, 0, 0, 0.55);
-  backdrop-filter: blur(4px);
+  background: var(--primary);
+  color: var(--on-primary);
   display: flex;
   align-items: center;
   justify-content: center;
   transition: transform 0.15s ease, background 0.15s ease;
 }
 .ctrl__thumb-play:hover {
-  transform: scale(1.08);
-  background: rgba(0, 0, 0, 0.7);
+  transform: scale(1.04);
+  background: var(--primary-hover);
 }
 
 /* ── Filename ── */
@@ -466,7 +531,9 @@ onMounted(async () => {
 .ctrl__quality-label {
   font-size: 12px;
   color: var(--text-secondary);
-  flex-shrink: 0;
+  min-width: 0;
+  max-width: 40%;
+  overflow-wrap: anywhere;
 }
 
 .ctrl__quality-select {
@@ -481,6 +548,12 @@ onMounted(async () => {
   padding: 3px 6px;
   cursor: pointer;
   outline: none;
+  text-overflow: ellipsis;
+}
+.ctrl__quality-select:focus-visible,
+.ctrl__slider-input:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
 }
 .ctrl__quality-select:disabled { opacity: .5; cursor: not-allowed; }
 
@@ -489,12 +562,14 @@ onMounted(async () => {
   color: var(--text-tertiary);
   padding: 0 12px;
   width: 100%;
+  overflow-wrap: anywhere;
 }
 
 /* ── Slider (shared by progress + volume) ── */
 .ctrl__slider-wrap {
   position: relative;
   flex: 1;
+  min-width: 0;
   height: 16px;
   display: flex;
   align-items: center;
@@ -509,7 +584,7 @@ onMounted(async () => {
   left: 0;
   right: 0;
   height: 3px;
-  background: #E5E7EB;
+  background: var(--border);
   border-radius: 2px;
   overflow: hidden;
   pointer-events: none;
@@ -528,16 +603,17 @@ onMounted(async () => {
 }
 
 .ctrl__slider-wrap--vol .ctrl__slider-fill {
-  background: #6B7280;
+  background: var(--text-secondary);
 }
 
 .ctrl__slider-wrap--vol:hover .ctrl__slider-fill {
-  background: #4B5563;
+  background: var(--text-primary);
 }
 
 .ctrl__slider-input {
   position: relative;
   width: 100%;
+  min-width: 0;
   height: 100%;
   margin: 0;
   -webkit-appearance: none;
@@ -561,18 +637,18 @@ onMounted(async () => {
 .ctrl__slider-wrap:hover .ctrl__slider-input::-webkit-slider-thumb {
   width: 10px;
   height: 10px;
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+  box-shadow: 0 0 0 3px rgba(var(--primary-rgb), 0.15);
 }
 
 .ctrl__slider-input:active::-webkit-slider-thumb {
   width: 12px;
   height: 12px;
-  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.2);
+  box-shadow: 0 0 0 4px rgba(var(--primary-rgb), 0.2);
 }
 
 /* Volume thumb: gray */
 .ctrl__slider-wrap--vol .ctrl__slider-input::-webkit-slider-thumb {
-  background: #6B7280;
+  background: var(--text-secondary);
   box-shadow: none;
 }
 
@@ -602,6 +678,7 @@ onMounted(async () => {
   font-variant-numeric: tabular-nums;
   color: var(--text-tertiary);
   min-width: 32px;
+  flex-shrink: 0;
   text-align: center;
   user-select: none;
 }
@@ -630,7 +707,7 @@ onMounted(async () => {
   transition: background 0.15s;
 }
 .ctrl__vol-icon:hover {
-  background: rgba(0, 0, 0, 0.08);
+  background: var(--bg-secondary);
 }
 
 /* ── Stop ── */
@@ -640,15 +717,16 @@ onMounted(async () => {
   margin: 8px 12px 12px;
   font-size: 14px;
   font-weight: 600;
-  color: white;
-  background: #EF4444;
+  color: var(--on-primary);
+  background: var(--primary);
+  overflow-wrap: anywhere;
   border: none;
   border-radius: 10px;
   cursor: pointer;
   transition: background .15s;
   font-family: var(--font);
 }
-.ctrl__stop:hover:not(:disabled) { background: #DC2626; }
+.ctrl__stop:hover:not(:disabled) { background: var(--primary-hover); }
 .ctrl__stop:disabled { opacity: .5; cursor: not-allowed; }
 
 /* ── Transition ── */
@@ -671,23 +749,4 @@ onMounted(async () => {
   transform: scale(0.9);
 }
 
-/* ── Dark mode ── */
-[data-theme="dark"] .ctrl-modal { background: rgba(22, 20, 50, 0.95); }
-[data-theme="dark"] .ctrl__min:hover { background: rgba(255,255,255,.1); }
-[data-theme="dark"] .ctrl__vol-icon:hover { background: rgba(255,255,255,.1); }
-[data-theme="dark"] .ctrl__thumb { background: rgba(255,255,255,.05); }
-[data-theme="dark"] .ctrl__slider-track { background: rgba(99, 102, 241, 0.2); }
-[data-theme="dark"] .ctrl__slider-fill { background: #6366F1; }
-[data-theme="dark"] .ctrl__slider-wrap:hover .ctrl__slider-input::-webkit-slider-thumb {
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
-}
-[data-theme="dark"] .ctrl__slider-input:active::-webkit-slider-thumb {
-  box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.25);
-}
-[data-theme="dark"] .ctrl__slider-wrap--vol .ctrl__slider-fill { background: #6E6B8A; }
-[data-theme="dark"] .ctrl__slider-wrap--vol:hover .ctrl__slider-fill { background: #B8B5CC; }
-[data-theme="dark"] .ctrl__slider-wrap--vol .ctrl__slider-input::-webkit-slider-thumb { background: #6E6B8A; }
-[data-theme="dark"] .ctrl__slider-wrap--vol:hover .ctrl__slider-input::-webkit-slider-thumb {
-  box-shadow: 0 0 0 3px rgba(110, 107, 138, 0.15);
-}
 </style>

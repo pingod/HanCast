@@ -33,7 +33,25 @@ export const useCastStore = defineStore('cast', () => {
   const sessions = ref<Record<string, CastSession>>({})
   const focusedDeviceId = ref<string | null>(null)
   const loading = ref(false)
+  const lastError = ref<string | null>(null)
   let pollTimer: ReturnType<typeof setInterval> | null = null
+  let pollInFlight = false
+  let pollEpoch = 0
+
+  // Each playback operation replaces the device's token. Polls issued before it
+  // (or during it) cannot write back, even if the same device is stopped/recast.
+  const deviceOperations = new Map<string, { pending: boolean }>()
+  function beginOperation(deviceId: string) {
+    const operation = { pending: true }
+    deviceOperations.set(deviceId, operation)
+    return operation
+  }
+  function isCurrentOperation(deviceId: string, operation: { pending: boolean }) {
+    return deviceOperations.get(deviceId) === operation
+  }
+  function dismissError() {
+    lastError.value = null
+  }
 
   // ── Progress simulation timers ──
   // Key: deviceId, Value: timer that increments position every second
@@ -112,6 +130,7 @@ export const useCastStore = defineStore('cast', () => {
   }
 
   function removeSession(deviceId: string) {
+    deviceOperations.set(deviceId, { pending: false })
     stopSim(deviceId)
     const { [deviceId]: _, ...rest } = sessions.value
     sessions.value = rest
@@ -146,10 +165,18 @@ export const useCastStore = defineStore('cast', () => {
 
   // ── Fetch state (on mount) ──
   const unlistenFns: UnlistenFn[] = []
+  let disposed = false
+  function registerUnlisten(fn: UnlistenFn) {
+    // Native registration may finish after the root component has unmounted.
+    if (disposed) fn()
+    else unlistenFns.push(fn)
+  }
 
   async function fetchState() {
+    const snapshot = new Map([...deviceOperations].filter(([, op]) => !op.pending))
     try {
       const state = await getCastState() as any
+      if (disposed) return false
       // 后端无 device_id 参数时返回 { sessions: {device_id: state}, current: state }
       // （sessions 包含所有设备的 CastState，current 是主渲染器的兼容状态）
       // 恢复所有非 idle 的活跃会话，避免应用重启后丢失正在投屏的会话。
@@ -157,6 +184,8 @@ export const useCastStore = defineStore('cast', () => {
       let restored = false
       for (const [deviceId, s] of Object.entries(sessionMap)) {
         if (!s || s.status === 'idle') continue
+        const operation = deviceOperations.get(deviceId)
+        if (operation?.pending || operation !== snapshot.get(deviceId)) continue
         // Skip if a session with this device_id is already 'connecting'
         // (i.e. startCast already created it and is still awaiting apiStartCast)
         const existing = sessions.value[deviceId]
@@ -189,68 +218,69 @@ export const useCastStore = defineStore('cast', () => {
     }
   }
 
-  // ── Polling (iterates all active sessions) ──
+  // ── Polling (one in-flight sweep, including across stop/restart) ──
   function startPolling() {
-    if (pollTimer) return
-    pollTimer = setInterval(async () => {
-      const ids = activeDeviceIds.value
-      if (ids.length === 0) {
-        stopPolling()
-        return
-      }
-      const statusMap: Record<string, CastSession['status']> = {
-        PLAYING: 'playing',
-        PAUSED: 'paused',
-        STOPPED: 'stopped',
-        IDLE: 'idle',
-      }
+    if (disposed || pollTimer) return
+    const epoch = ++pollEpoch
+    pollTimer = setInterval(() => { void pollSessions(epoch) }, 1000)
+  }
+
+  async function pollSessions(epoch: number) {
+    if (pollInFlight || epoch !== pollEpoch) return
+    const ids = activeDeviceIds.value
+    if (ids.length === 0) {
+      stopPolling()
+      return
+    }
+    pollInFlight = true
+    const statusMap: Record<string, CastSession['status']> = {
+      PLAYING: 'playing',
+      PAUSED: 'paused',
+      STOPPED: 'stopped',
+      IDLE: 'idle',
+    }
+    try {
       for (const id of ids) {
+        if (epoch !== pollEpoch) break
+        const operation = deviceOperations.get(id)
+        if (operation?.pending || !sessions.value[id]) continue
         try {
           const info = await getCastUrl(id)
           const session = sessions.value[id]
-          if (!session) continue
+          if (!session || epoch !== pollEpoch || operation !== deviceOperations.get(id)) continue
           // 后端带 device_id 返回小写（playing/idle）、不带返回 DLNA 大写，统一归一
           const newStatus = statusMap[info.status.toUpperCase()] ?? session.status
           const updates: Partial<CastSession> = {}
 
-          // Status: only upgrade (connecting→playing, paused→playing)
-          // Never downgrade playing/paused→stopped from polling alone
-          // (events are the source of truth for status)
+          // Never downgrade playing/paused→stopped from polling alone;
+          // events remain the source of truth for status.
           if (newStatus !== session.status && !(session.status === 'playing' || session.status === 'paused')) {
             updates.status = newStatus
           }
 
-          // Position/duration: update from polling, but skip if values are
-          // all-zero while session is playing (getCastUrl returns stale data)
           const posSec = info.position ? parseTimeToSeconds(info.position) : 0
           const durSec = info.duration ? parseTimeToSeconds(info.duration) : 0
           const pollingDataInvalid = posSec === 0 && durSec === 0 && (session.status === 'playing' || session.status === 'paused')
           if (!pollingDataInvalid) {
             if (info.position) {
-              // Take the larger value — simulation may have advanced past polling
-              // This ensures progress never goes backward
-              const maxPos = Math.max(posSec, session.position)
-              updates.position = maxPos
-              updates.positionTime = formatSecondsToTime(maxPos)
+              // A fresh sample is authoritative, including legitimate backward seeks.
+              updates.position = posSec
+              updates.positionTime = formatSecondsToTime(posSec)
             }
-            if (info.duration) {
-              updates.durationTime = info.duration
-            }
+            if (info.duration) updates.durationTime = info.duration
           }
-
-          if (Object.keys(updates).length > 0) {
-            updateSession(id, updates)
-          }
-
-          // NOTE: polling never schedules removeSession — STOPPED is handled by cast_state_changed events only
+          if (Object.keys(updates).length > 0) updateSession(id, updates)
         } catch {
-          // Device may have gone offline
+          // Device may have gone offline; finally still releases the single-flight guard.
         }
       }
-    }, 1000)
+    } finally {
+      pollInFlight = false
+    }
   }
 
   function stopPolling() {
+    ++pollEpoch
     if (pollTimer) {
       clearInterval(pollTimer)
       pollTimer = null
@@ -318,8 +348,12 @@ export const useCastStore = defineStore('cast', () => {
   }) {
     loading.value = true
     stopWarning.value = null
+    dismissError()
+    const operation = beginOperation(deviceId)
+    stopSim(deviceId)
     try {
       await apiStartCast(deviceId, mediaUri, mediaInfo?.mime_type)
+      if (!isCurrentOperation(deviceId, operation)) return
       // Preserve existing session's volume/mute if restarting on same device
       const existing = sessions.value[deviceId]
       sessions.value = {
@@ -353,21 +387,23 @@ export const useCastStore = defineStore('cast', () => {
       // Check if we should prompt for autostart (first successful cast)
       checkAutostartPrompt()
     } catch (err) {
-      const session = sessions.value[deviceId]
-      if (session) updateSession(deviceId, { status: 'error' })
+      if (isCurrentOperation(deviceId, operation)) {
+        lastError.value = String(err)
+        if (sessions.value[deviceId]) updateSession(deviceId, { status: 'error' })
+      }
       console.error('Failed to start cast:', err)
     } finally {
+      operation.pending = false
       loading.value = false
     }
   }
 
   /** Check if we should show the autostart prompt (first successful cast) */
   async function checkAutostartPrompt() {
-    // Only prompt once per app lifetime
-    const hasAsked = localStorage.getItem('has_asked_autostart')
-    if (hasAsked) return
-
     try {
+      // Storage access can throw in restricted WebViews too.
+      const hasAsked = localStorage.getItem('has_asked_autostart')
+      if (hasAsked) return
       const isEnabled = await getAutostart()
       if (!isEnabled) {
         // Delay 6s to let the controller modal appear first
@@ -386,7 +422,14 @@ export const useCastStore = defineStore('cast', () => {
   async function stopCast(deviceId?: string) {
     loading.value = true
     stopWarning.value = null
-    const ids = deviceId ? [deviceId] : Object.keys(sessions.value)
+    dismissError()
+    // Include pending first casts, which do not have a session yet.
+    const ids = deviceId ? [deviceId] : [...new Set([
+      ...Object.keys(sessions.value),
+      ...[...deviceOperations].filter(([, op]) => op.pending).map(([id]) => id),
+    ])]
+    const operations = new Map(ids.map(id => [id, beginOperation(id)]))
+    ids.forEach(stopSim)
     const names = ids.map((id) => sessions.value[id]?.device_name ?? id)
     let failed: string[] = []
     let reasons: string[] = []
@@ -403,14 +446,10 @@ export const useCastStore = defineStore('cast', () => {
     } finally {
       // 本地会话一律先释放：留着它只会让界面停在「正在投屏」，
       // 而这正是用户抱怨的「怎么点都停不掉」
-      if (deviceId) {
-        stopSim(deviceId)
-        removeSession(deviceId)
-      } else {
-        stopAllSim()
-        sessions.value = {}
-        focusedDeviceId.value = null
-        showController.value = false
+      for (const [id, operation] of operations) {
+        operation.pending = false
+        // A new cast may already have started while Stop was awaiting the device.
+        if (isCurrentOperation(id, operation)) removeSession(id)
       }
       if (activeDeviceIds.value.length === 0) {
         stopPolling()
@@ -429,24 +468,38 @@ export const useCastStore = defineStore('cast', () => {
   async function pauseCast(deviceId?: string) {
     const id = deviceId ?? focusedDeviceId.value
     if (!id) return
+    dismissError()
+    const operation = beginOperation(id)
     try {
       await apiPauseCast(id)
+      if (!isCurrentOperation(id, operation)) return
       stopSim(id)
       updateSession(id, { status: 'paused' })
     } catch (err) {
+      if (isCurrentOperation(id, operation)) lastError.value = String(err)
       console.error('Failed to pause cast:', err)
+    } finally {
+      operation.pending = false
+      if (isCurrentOperation(id, operation) && sessions.value[id]?.status === 'playing') startSim(id)
     }
   }
 
   async function resumeCast(deviceId?: string) {
     const id = deviceId ?? focusedDeviceId.value
     if (!id) return
+    dismissError()
+    const operation = beginOperation(id)
     try {
       await apiResumeCast(id)
+      if (!isCurrentOperation(id, operation)) return
       updateSession(id, { status: 'playing' })
       startSim(id)
     } catch (err) {
+      if (isCurrentOperation(id, operation)) lastError.value = String(err)
       console.error('Failed to resume cast:', err)
+    } finally {
+      operation.pending = false
+      if (isCurrentOperation(id, operation) && sessions.value[id]?.status === 'playing') startSim(id)
     }
   }
 
@@ -463,12 +516,16 @@ export const useCastStore = defineStore('cast', () => {
     if (!source || (media.quality ?? '') === qualityId) return
 
     qualitySwitching.value = true
+    dismissError()
+    const operation = beginOperation(id)
     const resumeAt = session.positionTime
     stopSim(id)
     try {
       const info = await resolveShare(source, qualityId)
+      if (!isCurrentOperation(id, operation)) return
       if (!info.uri) throw new Error('解析结果为空')
       await apiStartCast(id, info.uri, info.mime_type)
+      if (!isCurrentOperation(id, operation)) return
       updateSession(id, {
         status: 'playing',
         position: 0,
@@ -483,31 +540,37 @@ export const useCastStore = defineStore('cast', () => {
         },
       })
       startPolling()
-      await restorePosition(id, resumeAt)
-      startSim(id)
+      await restorePosition(id, resumeAt, operation)
     } catch (err) {
+      if (isCurrentOperation(id, operation)) lastError.value = String(err)
       console.error('Failed to switch quality:', err)
     } finally {
+      operation.pending = false
       qualitySwitching.value = false
+      // Resolve/start/restore can all fail while the original session is still playing.
+      if (isCurrentOperation(id, operation) && sessions.value[id]?.status === 'playing') startSim(id)
     }
   }
 
   /** 电视刚换地址时还在加载，Seek 会被拒；重试几次把进度追回来 */
-  async function restorePosition(deviceId: string, positionTime: string) {
+  async function restorePosition(deviceId: string, positionTime: string, operation: { pending: boolean }) {
     if (!positionTime || positionTime === '00:00:00') return
     for (let attempt = 0; attempt < 4; attempt++) {
       await new Promise((r) => setTimeout(r, 1000))
       const session = sessions.value[deviceId]
-      if (!session || ['stopped', 'idle', 'error'].includes(session.status)) return
+      if (!isCurrentOperation(deviceId, operation) || !session || ['stopped', 'idle', 'error'].includes(session.status)) return
       try {
         await apiSeekCast(positionTime, deviceId)
+        if (!isCurrentOperation(deviceId, operation)) return
         updateSession(deviceId, {
           position: parseTimeToSeconds(positionTime),
           positionTime,
         })
         return
-      } catch {
-        // 仍在缓冲，稍后再试
+      } catch (err) {
+        if (!isCurrentOperation(deviceId, operation)) return
+        // 仍在缓冲，稍后再试；最终失败交给 switchQuality 呈现原始原因。
+        if (attempt === 3) throw err
       }
     }
   }
@@ -515,30 +578,35 @@ export const useCastStore = defineStore('cast', () => {
   async function seek(position: string, deviceId?: string) {
     const id = deviceId ?? focusedDeviceId.value
     if (!id) return
+    dismissError()
+    const operation = beginOperation(id)
+    stopSim(id)
     try {
       await apiSeekCast(position, id)
+      if (!isCurrentOperation(id, operation)) return
       // Update position immediately for responsive UI
       const posSec = parseTimeToSeconds(position)
       updateSession(id, { position: posSec, positionTime: position })
-      // Restart simulation from new position
-      stopSim(id)
-      const session = sessions.value[id]
-      if (session?.status === 'playing') {
-        startSim(id)
-      }
     } catch (err) {
+      if (isCurrentOperation(id, operation)) lastError.value = String(err)
       console.error('Failed to seek:', err)
+    } finally {
+      operation.pending = false
+      if (isCurrentOperation(id, operation) && sessions.value[id]?.status === 'playing') startSim(id)
     }
   }
 
   async function setVolume(volume: number, deviceId?: string): Promise<number> {
     const id = deviceId ?? focusedDeviceId.value
     if (!id) return volume
+    dismissError()
+    const operation = deviceOperations.get(id)
     try {
       const result = await apiSetVolume(volume, id)
-      updateSession(id, { volume: result })
+      if (operation === deviceOperations.get(id)) updateSession(id, { volume: result })
       return result
     } catch (err) {
+      lastError.value = String(err)
       console.error('Failed to set volume:', err)
       return sessions.value[id]?.volume ?? volume
     }
@@ -547,10 +615,13 @@ export const useCastStore = defineStore('cast', () => {
   async function setMute(muted: boolean, deviceId?: string): Promise<void> {
     const id = deviceId ?? focusedDeviceId.value
     if (!id) return
+    dismissError()
+    const operation = deviceOperations.get(id)
     try {
       await apiSetMute(muted, id)
-      updateSession(id, { is_muted: muted })
+      if (operation === deviceOperations.get(id)) updateSession(id, { is_muted: muted })
     } catch (err) {
+      lastError.value = String(err)
       console.error('Failed to set mute:', err)
     }
   }
@@ -560,8 +631,10 @@ export const useCastStore = defineStore('cast', () => {
     try {
       const { listen } = await import('@tauri-apps/api/event')
 
-      unlistenFns.push(
+      if (disposed) return
+      registerUnlisten(
         await listen<{ device_id?: string; status: string; position?: string; duration?: string; volume?: number; is_muted?: boolean }>('cast_state_changed', (event) => {
+          if (disposed) return
           const { device_id, status, position, duration } = event.payload
           const mappedStatus: Record<string, CastSession['status']> = {
             PLAYING: 'playing',
@@ -633,13 +706,16 @@ export const useCastStore = defineStore('cast', () => {
         })
       )
 
-      unlistenFns.push(
+      if (disposed) return
+      registerUnlisten(
         await listen<{ device_id?: string; message: string }>('cast_error', (event) => {
+          if (disposed) return
           const targetId = event.payload.device_id ?? focusedDeviceId.value
           if (targetId && sessions.value[targetId]) {
             stopSim(targetId)
             updateSession(targetId, { status: 'error' })
           }
+          lastError.value = String(event.payload.message)
           console.error('Cast error:', event.payload.message)
         })
       )
@@ -658,9 +734,10 @@ export const useCastStore = defineStore('cast', () => {
   })
 
   onUnmounted(() => {
+    disposed = true
     stopPolling()
     stopAllSim()
-    unlistenFns.forEach((fn) => fn())
+    unlistenFns.splice(0).forEach((fn) => fn())
   })
 
   return {
@@ -672,6 +749,7 @@ export const useCastStore = defineStore('cast', () => {
     loading,
     showController,
     stopWarning,
+    lastError,
     qualitySwitching,
 
     // Autostart prompt
@@ -707,6 +785,7 @@ export const useCastStore = defineStore('cast', () => {
     seek,
     setVolume,
     setMute,
+    dismissError,
 
     // Autostart prompt actions
     closeAutostartPrompt: () => { showAutostartPrompt.value = false },

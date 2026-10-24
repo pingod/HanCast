@@ -1,33 +1,33 @@
 :root {
-  /* ── Primary ── */
-  --primary: #3B82F6;
-  --primary-hover: #2563EB;
-  --primary-active: #1D4ED8;
-  --primary-light: rgba(59, 130, 246, 0.08);
+  color-scheme: light;
+  /* One accent across both themes; opaque surfaces also suit Linux SHM. */
+  --primary: #7056d8;
+  --primary-hover: #6045c5;
+  --primary-active: #5139ad;
+  --primary-rgb: 112, 86, 216;
+  --primary-light: #f0ecfb;
+  --on-primary: #ffffff;
 
-  /* ── Background (配合系统特效) ── */
-  --bg-primary: rgba(255, 255, 255, 0.95);
-  --bg-secondary: rgba(243, 244, 246, 0.95);
-  --bg-card: rgba(255, 255, 255, 0.98);
-  --bg-input: rgba(243, 244, 246, 0.92);
+  --bg-primary: #f6f6f9;
+  --bg-secondary: #eeeef3;
+  --bg-card: #ffffff;
+  --bg-input: #f5f5f8;
 
-  /* ── Text ── */
-  --text-primary: #111827;
-  --text-secondary: #6B7280;
-  --text-tertiary: #9CA3AF;
-  --text-link: #3B82F6;
+  --text-primary: #242330;
+  --text-secondary: #656373;
+  --text-tertiary: #767382;
+  --text-link: #684dce;
 
-  /* ── Status ── */
-  --status-online: #10B981;
-  --status-busy: #F59E0B;
-  --status-offline: #9CA3AF;
+  --status-online: #218361;
+  --status-busy: #aa6a16;
+  --status-offline: #8c8998;
+  --danger: #c63e4c;
+  --danger-light: #fff0f1;
 
-  /* ── Border ── */
-  --border: #E5E7EB;
-  --border-focus: #3B82F6;
-  --border-dashed: #D1D5DB;
+  --border: #e5e3ec;
+  --border-focus: #7056d8;
+  --border-dashed: #d7d2e6;
 
-  /* ── Spacing ── */
   --sp-xs: 4px;
   --sp-sm: 8px;
   --sp-md: 12px;
@@ -35,53 +35,53 @@
   --sp-xl: 24px;
   --sp-2xl: 32px;
 
-  /* ── Radius ── */
-  --r-sm: 4px;
+  --r-sm: 6px;
   --r-md: 8px;
   --r-lg: 12px;
   --r-xl: 16px;
   --r-full: 9999px;
 
-  /* ── Shadow ── */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
-  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+  --shadow-sm: 0 1px 3px rgba(33, 27, 56, 0.03);
+  --shadow-md: 0 4px 16px rgba(33, 27, 56, 0.06);
+  --shadow-lg: 0 16px 48px rgba(33, 27, 56, 0.16);
 
-  /* ── Font ── */
   --font: -apple-system, BlinkMacSystemFont, 'Segoe UI',
           'PingFang SC', 'Microsoft YaHei', sans-serif;
-
-  /* ── Titlebar ── */
-  --titlebar-height: 32px;
-
-  /* ── Transition ── */
+  --titlebar-height: 44px;
   --transition-fast: 150ms ease;
-  --transition-normal: 250ms ease;
+  --transition-normal: 220ms ease;
 }
 
-/* ── Dark Theme ── */
 [data-theme="dark"] {
-  --primary: #6366F1;
-  --primary-hover: #4F46E5;
-  --primary-active: #4338CA;
-  --primary-light: rgba(99, 102, 241, 0.12);
+  color-scheme: dark;
+  --primary: #a58af5;
+  --primary-hover: #b49cfb;
+  --primary-active: #9576e9;
+  --primary-rgb: 165, 138, 245;
+  --primary-light: #302a45;
+  --on-primary: #211831;
 
-  --bg-primary: rgba(22, 20, 50, 0.95);
-  --bg-secondary: rgba(32, 30, 66, 0.95);
-  --bg-card: rgba(32, 30, 66, 0.98);
-  --bg-input: rgba(42, 40, 80, 0.92);
+  --bg-primary: #19181f;
+  --bg-secondary: #2b2933;
+  --bg-card: #23222b;
+  --bg-input: #1c1b23;
 
-  --text-primary: #F0EFF5;
-  --text-secondary: #B8B5CC;
-  --text-tertiary: #6E6B8A;
+  --text-primary: #f1eff7;
+  --text-secondary: #b5b0c2;
+  --text-tertiary: #9993a8;
+  --text-link: #baa2ff;
 
-  --text-link: #818CF8;
+  --status-online: #63c6a0;
+  --status-busy: #e3b66c;
+  --status-offline: #8c859a;
+  --danger: #ff929e;
+  --danger-light: #3b252e;
 
-  --border: rgba(99, 102, 241, 0.15);
-  --border-focus: #6366F1;
-  --border-dashed: rgba(99, 102, 241, 0.25);
+  --border: #37333f;
+  --border-focus: #a58af5;
+  --border-dashed: #494151;
 
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.4);
-  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.12);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.16);
+  --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.4);
 }

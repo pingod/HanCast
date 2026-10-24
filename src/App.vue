@@ -4,6 +4,9 @@ import { useSettingsStore } from '@/stores/settings'
 import { useThemeStore } from '@/stores/theme'
 import { useGuardStore } from '@/stores/guard'
 import { useUpdateStore } from '@/stores/update'
+import { useDeviceStore } from '@/stores/device'
+import { useCastStore } from '@/stores/cast'
+import { useScreenCastStore } from '@/stores/screencast'
 import GuardConfirmModal from '@/components/GuardConfirmModal.vue'
 import UpdateModal from '@/components/UpdateModal.vue'
 import LogsPanel from '@/components/LogsPanel.vue'
@@ -13,6 +16,12 @@ const settingsStore = useSettingsStore()
 const themeStore = useThemeStore()
 const guardStore = useGuardStore()
 const updateStore = useUpdateStore()
+// Pinia setup stores are singletons, but their component lifecycle hooks belong
+// to the first caller. Own all persistent subscriptions here, not in a route
+// that is destroyed when opening Settings (returning does not rerun setup).
+useDeviceStore()
+useCastStore()
+useScreenCastStore()
 
 // 非 dev 模式下禁用浏览器默认右键菜单
 function onContextMenu(e: MouseEvent) {

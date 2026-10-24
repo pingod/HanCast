@@ -3,7 +3,7 @@
 > 旧名 `CLAUDE.md`（Claude Code 私有约定），2026-10-15 改名为跨工具的 `AGENTS.md`；
 > `CLAUDE.md` 现在只留三行指针指向本文件。
 
-> 最后校对：2026-10-18，对应版本 v2.3.19（`package.json:4`）。
+> 最后校对：2026-10-24，对应版本 v2.3.20（`package.json:4`）。
 > 本文件是速览与硬约束；逐模块的深度内容在 **docs/README.md** 的索引里，别在这里找细节。
 
 ## 项目概述
@@ -106,7 +106,7 @@ HanCast/
 │   ├── README.md                # Sidecar 范围速查（协议信封、三条铁律、命令分组）
 │   ├── hancast_sidecar/
 │   │   ├── main.py              # Sidecar 入口（148 行：UTF-8 stdio、stdin/stdout JSON 循环、双击兜底）
-│   │   ├── commands.py          # CommandHandler — 命令路由（59 条注册表 commands.py:110-197）
+│   │   ├── commands.py          # CommandHandler — 命令路由（62 条注册表 commands.py:131-222）
 │   │   ├── params.py            # 后台参数 PARAM_SPECS（32 项，params.py:41-265）
 │   │   ├── ssdp.py              # SSDP 设备发现（1322 行；投屏准入见 _provides_cast_service）
 │   │   ├── protocol/
@@ -235,7 +235,7 @@ HanCast/
 
 ### Tauri 命令列表（节选，完整清单以 `src-tauri/src/lib.rs` 的 `generate_handler!`（lib.rs:1373-1440，**66 条**）为准）
 
-Sidecar 侧的注册表是 **59 条**（`commands.py:110-197`）——差的那几条由 Rust 自己实现（窗口、剪贴板、开机自启、
+Sidecar 侧的注册表是 **62 条**（`commands.py:131-222`，v2.3.20 加 3 条规则包任务命令前是 59）——差的那几条由 Rust 自己实现（窗口、剪贴板、开机自启、
 Store 版判定、日志导出等），不下发 Python；`exit` 由 Sidecar 主循环拦下（`main.py:126-128`）。
 Rust 命令名与 Sidecar `cmd` 名不一定同名（例如 Rust 的 `plugin_list` 下发的是 Sidecar 的规则包命令），
 逐条对应关系见 docs/HanCast-Frontend-API.md。
@@ -756,8 +756,8 @@ alpha 保持 0，Hyprland 直接把后面的桌面（还带模糊）透出来，
    「文件找不到」要自己分辨是已退役的历史文件名（写成「曾经/已于 vX 删除」即可）还是真写错；
    运行时才生成的落盘文件（`hancast_setting.json`、`window_config.json` 等）脚本已放行。
 3. **每份文档头部留一行「最后校对：YYYY-MM-DD，对应版本 vX.Y.Z」**，改了内容就改这行。
-4. **数字必须写口径**。例：`#[tauri::command]` 66 条（`lib.rs:1373-1440`）/ Sidecar 注册 59 条
-   （`commands.py:110-197`）/ 前端 `commands.ts` 导出 65 个 / 事件 8 条（Python 6 + Rust 2）。
+4. **数字必须写口径**。例：`#[tauri::command]` 66 条（`lib.rs:1373-1440`）/ Sidecar 注册 62 条
+   （`commands.py:131-222`）/ 前端 `commands.ts` 导出 65 个 / 事件 8 条（Python 6 + Rust 2）。
    不写口径，下次改动看起来就像文档坏了。
 5. **别静默删证据**。被推翻的结论保留「历史一句」（为什么曾经这么做、哪一版改的），
    就像本文件「安全约束」第 3 条那样标注更正来源。

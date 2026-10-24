@@ -10,6 +10,7 @@ import logging
 import threading
 import time
 import uuid
+from functools import wraps
 from typing import Any, Dict, Optional
 from .ssdp import SSDPService, list_network_interfaces
 from .protocol import dlna
@@ -19,6 +20,7 @@ from .renderer.mpv import MPVRenderer
 from .media.parser import MediaParser
 from .media.server import MediaServer
 from .media.share_resolver import ShareResolver
+from .media.rules.tasks import PluginTaskRunner
 from .models.device import Device
 from .models.cast import CastState
 from .models.session import DeviceCastSession
@@ -34,6 +36,19 @@ from .screencast import ScreenCastManager
 import requests
 
 logger = logging.getLogger("hancast.commands")
+
+
+def _cast_serialized(method):
+    """Serialize device ownership changes and capture-error callbacks.
+
+    Lock order: this operation lock, then a session/manager's short state lock.
+    Pollers must release their own state lock before calling the handler.
+    """
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        with self._cast_lock:
+            return method(self, *args, **kwargs)
+    return wrapped
 
 
 class CommandHandler:
@@ -74,11 +89,16 @@ class CommandHandler:
             lan_ip=self.config.network_interface or None)
         # 分享文本/任意页面 → 可播直链解析器（规则全部来自安装的规则包）
         self.share_resolver = ShareResolver(self.media_server, config=self.config)
+        # 规则包慢操作（索引/下载）的后台任务：单执行、零队列
+        self._plugin_tasks = PluginTaskRunner(self.share_resolver.plugin_mgr)
         # 异步解析任务表 {task_id: {status: pending|done|error, result?, error?, ts}}
         self._resolve_tasks: Dict[str, dict] = {}
         self._resolve_lock = threading.Lock()
         self.cast_state = CastState()
 
+        # Shared with ScreenCastManager: ownership changes must be atomic with
+        # the corresponding Play/Stop, including callbacks from capture threads.
+        self._cast_lock = threading.RLock()
         # 多设备投屏会话 {device_id: DeviceCastSession}
         self.device_sessions: Dict[str, DeviceCastSession] = {}
 
@@ -145,6 +165,10 @@ class CommandHandler:
             "plugin_test": self._plugin_test,
             "plugin_check_updates": self._plugin_check_updates,
             "plugin_pull": self._plugin_pull,
+            # 慢操作的后台任务入口（壳层轮询，见 media/rules/tasks.py）
+            "plugin_task_start": self._plugin_task_start,
+            "plugin_task_result": self._plugin_task_result,
+            "plugin_task_cancel": self._plugin_task_cancel,
 
             # 规则总览（脚本包 + 声明式 JSON，两处一屏）
             "rule_inventory": self._rule_inventory,
@@ -263,12 +287,16 @@ class CommandHandler:
 
     def cleanup(self):
         """清理资源（退出路径，幂等）"""
+        # 先关规则包任务：关闭后不再准入，迟到的提交不能把包写到退出流程之后
+        self._plugin_tasks.close()
         # 停止屏幕投屏
         self.screencast.cleanup()
         # 停止所有投屏会话
-        for session in self.device_sessions.values():
-            session.stop()
-        self.device_sessions.clear()
+        with self._cast_lock:
+            sessions = list(self.device_sessions.values())
+            self.device_sessions.clear()
+            for session in sessions:
+                session.stop()
         self.ssdp.stop()
         self.dlna_server.stop()
         self.media_server.stop()
@@ -398,36 +426,42 @@ class CommandHandler:
 
     # ── 投屏控制 ──
 
-    def _get_or_create_session(self, device_id: str) -> DeviceCastSession:
-        """获取或创建设备投屏会话"""
-        if device_id in self.device_sessions:
-            session = self.device_sessions[device_id]
+    @_cast_serialized
+    def _get_or_create_session(self, device_id: str,
+                               owner: str = "media") -> DeviceCastSession:
+        """A screen session owns a distinct instance, never the media instance."""
+        existing = self.device_sessions.get(device_id)
+        if existing is not None and existing.owner == owner:
             live = self.ssdp.get_device(device_id)
-            if live and live.location != session.device.location:
-                # 描述地址变了（如修复前发现的老设备）：重解析控制地址
-                session.refresh_device(live)
-            return session
+            if live and live.location != existing.device.location:
+                existing.refresh_device(live)
+            return existing
 
-        # 创建新会话
         device = self.ssdp.get_device(device_id)
         if not device:
             raise ValueError(f"Device not found: {device_id}")
-
         session = DeviceCastSession(device, self.media_server)
+        session.owner = owner
         session.set_poll_callback(self._on_session_event)
+        if existing is not None:
+            existing.stop_poll()
         self.device_sessions[device_id] = session
         logger.info(f"Created cast session for device: {device.display_name}")
         return session
 
-    def _on_session_event(self, device_id: str, event_type: str) -> None:
-        """Session 事件回调 → 推送到前端"""
+    @_cast_serialized
+    def _on_session_event(self, origin: DeviceCastSession,
+                          event_type: str, generation) -> None:
+        """Ignore callbacks from a retired instance or an earlier play/poll."""
+        device_id = origin.device_id
         session = self.device_sessions.get(device_id)
-        if not session:
+        if session is not origin or not origin.is_current_poll(generation):
             return
 
         if event_type == "device_unreachable":
             # 轮询线程已判定设备失联：释放会话，前端才不会停在「正在投屏」
             self.device_sessions.pop(device_id, None)
+            self.screencast.release_session(session)
             if self.cast_state.device_id == device_id:
                 self.cast_state.status = "idle"
                 self.cast_state.device_id = None
@@ -446,10 +480,14 @@ class CommandHandler:
 
         protocol_io.emit_event("cast_state_changed", event_data)
 
+    @_cast_serialized
     def _start_cast(self, params: dict) -> None:
         device_id = params["device_id"]
         media_uri = params["media_uri"]
         mime_type = params.get("mime_type", "")  # 可选，前端传入
+        # Replacing this TV's screen stream also releases FFmpeg/HLS. A browser
+        # screen share or another TV's stream is independent and stays running.
+        self.screencast.stop_for_device(device_id)
 
         # 如果是本地文件，通过媒体服务器提供 HTTP 访问
         if not media_uri.startswith("http"):
@@ -480,7 +518,9 @@ class CommandHandler:
         self.cast_state.status = "playing"
         self.cast_state.device_id = device_id
 
-    def _stop_cast(self, params: dict) -> dict:
+    @_cast_serialized
+    def _stop_cast(self, params: dict,
+                   expected_session: Optional[DeviceCastSession] = None) -> dict:
         """停止投屏（幂等）。
 
         先摘会话再发 SOAP Stop：设备关机/切源/掉线时 Stop 必然抛错，若让它
@@ -493,10 +533,17 @@ class CommandHandler:
         targets = [device_id] if device_id else list(self.device_sessions.keys())
         failed = []
         reasons = {}
+        stopped = []
         for did in targets:
-            session = self.device_sessions.pop(did, None)
-            if session is None:
+            session = self.device_sessions.get(did)
+            if session is None or (expected_session is not None and
+                                   session is not expected_session):
                 continue
+            self.device_sessions.pop(did)
+            stopped.append(did)
+            # Detach only the capture owned by this exact instance. This hook
+            # never sends SOAP Stop, so screen.stop -> stop_cast cannot recurse.
+            self.screencast.release_session(session)
             if not session.stop():
                 failed.append(did)
                 reasons[did] = session.stop_error or "停止指令未送达"
@@ -505,10 +552,10 @@ class CommandHandler:
                     f"{reasons[did]}")
             self._emit_session_state(did, session.cast_state)
 
-        if not self.device_sessions or device_id == self.cast_state.device_id:
+        if not self.device_sessions or self.cast_state.device_id in stopped:
             self.cast_state.status = "idle"
             self.cast_state.device_id = None
-        return {"ok": True, "stopped": targets, "control_failed": failed,
+        return {"ok": True, "stopped": stopped, "control_failed": failed,
                 "reasons": reasons}
 
     def _emit_session_state(self, device_id: str, state) -> None:
@@ -524,6 +571,7 @@ class CommandHandler:
             event_data["media"] = state.media.to_dict()
         protocol_io.emit_event("cast_state_changed", event_data)
 
+    @_cast_serialized
     def _pause_cast(self, params: dict) -> None:
         device_id = params.get("device_id")
         if device_id and device_id in self.device_sessions:
@@ -532,6 +580,7 @@ class CommandHandler:
             self.protocol.pause()
             self.cast_state.status = "paused"
 
+    @_cast_serialized
     def _resume_cast(self, params: dict) -> None:
         device_id = params.get("device_id")
         if device_id and device_id in self.device_sessions:
@@ -540,6 +589,7 @@ class CommandHandler:
             self.protocol.play()
             self.cast_state.status = "playing"
 
+    @_cast_serialized
     def _seek_cast(self, params: dict) -> None:
         position = params["position"]  # HH:MM:SS 格式
         device_id = params.get("device_id")
@@ -548,6 +598,7 @@ class CommandHandler:
         else:
             self.protocol.seek(position)
 
+    @_cast_serialized
     def _get_cast_state(self, params: dict) -> dict:
         device_id = params.get("device_id")
         if device_id and device_id in self.device_sessions:
@@ -558,6 +609,7 @@ class CommandHandler:
             "current": self.cast_state.to_dict(),
         }
 
+    @_cast_serialized
     def _get_cast_url(self, params: dict) -> dict:
         """获取当前投屏元素的 URL 信息"""
         device_id = params.get("device_id")
@@ -576,6 +628,7 @@ class CommandHandler:
             "status": transport or "STOPPED",
         }
 
+    @_cast_serialized
     def _set_volume(self, params: dict) -> int:
         volume = params["volume"]
         device_id = params.get("device_id")
@@ -585,6 +638,7 @@ class CommandHandler:
         self.cast_state.volume = volume
         return volume
 
+    @_cast_serialized
     def _set_mute(self, params: dict) -> None:
         muted = params["muted"]
         device_id = params.get("device_id")
@@ -682,46 +736,70 @@ class CommandHandler:
         return {"removed": failures.clear(), **failures.snapshot()}
 
     def _plugin_check_updates(self, params: dict) -> dict:
-        """对照官方索引看哪些包有新版本，顺带列出索引里还没装的包"""
-        mgr = self.share_resolver.plugin_mgr
-        mgr.refresh()
-        return mgr.check_updates(str(params.get("index_url") or ""))
+        """对照官方索引看哪些包有新版本，顺带列出索引里还没装的包
+
+        GUI 走 plugin_task_start（后台任务）；这条同步入口留给直接喂
+        stdin 的验收脚本，与任务共用同一份准入，不会和安装交叉。
+        """
+        with self._plugin_tasks.synchronous():
+            mgr = self.share_resolver.plugin_mgr
+            mgr.refresh()
+            return mgr.check_updates(str(params.get("index_url") or ""))
 
     def _plugin_pull(self, params: dict) -> dict:
         """按索引（或包自带 update_url）下载安装一个包，sha256 校验不过不落盘
 
         回 {"plugins": 全量清单}，与 import/remove 一致——前端拿它直接刷新列表。
         """
-        mgr = self.share_resolver.plugin_mgr
-        name = str(params.get("name") or "")
-        if not name:
-            raise ValueError("缺少包名")
-        mgr.pull(name, str(params.get("url") or ""))
-        return {"plugins": mgr.list_info()}
+        with self._plugin_tasks.synchronous():
+            mgr = self.share_resolver.plugin_mgr
+            name = str(params.get("name") or "")
+            if not name:
+                raise ValueError("缺少包名")
+            mgr.pull(name, str(params.get("url") or ""))
+            return {"plugins": mgr.list_info()}
 
     def _plugin_import(self, params: dict) -> dict:
         """导入插件包。来源三选一：path（本机 zip）/ data_base64（拖拽）/ url"""
-        mgr = self.share_resolver.plugin_mgr
-        if params.get("path"):
-            with open(params["path"], "rb") as f:
-                data = f.read()
-            mgr.import_zip_bytes(data)
-        elif params.get("data_base64"):
-            mgr.import_zip_bytes(base64.b64decode(params["data_base64"]))
-        elif params.get("url"):
-            mgr.import_url(params["url"])
-        else:
-            raise ValueError("需要 path / data_base64 / url 之一")
-        return {"plugins": mgr.list_info()}
+        with self._plugin_tasks.synchronous():
+            mgr = self.share_resolver.plugin_mgr
+            if params.get("path"):
+                with open(params["path"], "rb") as f:
+                    data = f.read()
+                mgr.import_zip_bytes(data)
+            elif params.get("data_base64"):
+                mgr.import_zip_bytes(base64.b64decode(params["data_base64"]))
+            elif params.get("url"):
+                mgr.import_url(params["url"])
+            else:
+                raise ValueError("需要 path / data_base64 / url 之一")
+            return {"plugins": mgr.list_info()}
+
+    # ── 规则包慢操作的任务化入口 ────────────────────────────────
+    # 索引/下载在串行命令通道里能把停止投屏、投屏确认一起卡住，而壳层 60s
+    # 超时只是「不再等这条响应」，后端照样会装完——用户看到失败、包却悄悄换了。
+    # 这三条把执行挪到后台，壳层改成轮询，响应窗口与执行时长就此解耦。
+
+    def _plugin_task_start(self, params: dict) -> dict:
+        return self._plugin_tasks.start(
+            str(params.get("operation") or ""), params.get("params") or {})
+
+    def _plugin_task_result(self, params: dict) -> dict:
+        return self._plugin_tasks.result(str(params.get("task_id") or ""))
+
+    def _plugin_task_cancel(self, params: dict) -> dict:
+        return self._plugin_tasks.cancel(str(params.get("task_id") or ""))
 
     def _plugin_remove(self, params: dict) -> dict:
-        self.share_resolver.plugin_mgr.remove(params["name"])
-        return {"plugins": self.share_resolver.plugin_mgr.list_info()}
+        with self._plugin_tasks.synchronous():
+            self.share_resolver.plugin_mgr.remove(params["name"])
+            return {"plugins": self.share_resolver.plugin_mgr.list_info()}
 
     def _plugin_set_rule_enabled(self, params: dict) -> dict:
-        self.share_resolver.plugin_mgr.set_rule_enabled(
-            params["plugin"], params["rule"], bool(params.get("enabled")))
-        return {"plugins": self.share_resolver.plugin_mgr.list_info()}
+        with self._plugin_tasks.synchronous():
+            self.share_resolver.plugin_mgr.set_rule_enabled(
+                params["plugin"], params["rule"], bool(params.get("enabled")))
+            return {"plugins": self.share_resolver.plugin_mgr.list_info()}
 
     def _plugin_test(self, params: dict) -> dict:
         """用真实解析管线试跑一段粘贴内容（结果经 get_resolve_result 轮询）"""

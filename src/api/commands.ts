@@ -179,7 +179,7 @@ const MOCK_DEVICES: Device[] = [
 const MOCK_SETTINGS: AppSettings = {
   usn: 'hancast-uuid-001',
   friendly_name: 'HanCast',
-  version: '2.3.19',
+  version: '2.3.20',
   media_port: 8080,
   default_device: null,
   network_interface: '',
@@ -615,8 +615,8 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
     case 'check_update':
       return {
         has_update: false,
-        current: '2.3.19',
-        latest: '2.3.19',
+        current: '2.3.20',
+        latest: '2.3.20',
         url: '',
         body: '',
         source: 'github',

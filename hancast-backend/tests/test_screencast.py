@@ -832,6 +832,13 @@ def _manager(pull_stats=None, running=True):
     mgr._session_id = "abc"
     mgr._state.update({"running": running, "target": "dlna",
                        "device_id": "tv1", "url": "http://x/live.m3u8"})
+    if running:
+        # 生产里 DLNA 目标在跑时，屏幕通道持有「自己那份」会话实例；
+        # 停止/让位都按实例认，不再按 device_id 误停媒体投屏
+        session = MagicMock()
+        session.device_id = "tv1"
+        session.owner = "screen"
+        mgr._dlna_session = session
     mgr._emit = MagicMock()
     return mgr
 
@@ -1015,8 +1022,10 @@ class TestManagerContract(unittest.TestCase):
         """捕获中途死掉必须连电视一起放开，否则电视一直拉死流"""
         mgr = _manager()
         mgr.handler._stop_cast = MagicMock()
+        session = mgr._dlna_session
         mgr._on_capture_error("屏幕捕获进程已退出（退出码 1）")
-        mgr.handler._stop_cast.assert_called_once_with({"device_id": "tv1"})
+        mgr.handler._stop_cast.assert_called_once_with(
+            {"device_id": "tv1"}, expected_session=session)
         self.assertFalse(mgr._state["running"])
         self.assertEqual(mgr._state["error"], "屏幕捕获进程已退出（退出码 1）")
 

@@ -1,32 +1,29 @@
-import { ref, computed } from 'vue'
+import { ref, computed, onScopeDispose } from 'vue'
 import { defineStore } from 'pinia'
 
 export type ThemeMode = 'system' | 'light' | 'dark'
 
 const STORAGE_KEY = 'hancast-theme'
 
-function getSystemTheme(): 'light' | 'dark' {
-  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
-}
-
-function resolve(mode: ThemeMode): 'light' | 'dark' {
-  return mode === 'system' ? getSystemTheme() : mode
-}
-
-function persist(mode: ThemeMode) {
-  document.documentElement.setAttribute('data-theme', resolve(mode))
-  localStorage.setItem(STORAGE_KEY, mode)
-}
-
 export const useThemeStore = defineStore('theme', () => {
-  const mode = ref<ThemeMode>((localStorage.getItem(STORAGE_KEY) as ThemeMode) || 'system')
+  const savedMode = localStorage.getItem(STORAGE_KEY)
+  const mode = ref<ThemeMode>(
+    savedMode === 'light' || savedMode === 'dark' || savedMode === 'system' ? savedMode : 'system',
+  )
+  const mq = window.matchMedia('(prefers-color-scheme: dark)')
+  const systemDark = ref(mq.matches)
 
   /** Actual visual theme (resolves 'system' to light/dark) */
-  const applied = computed(() => resolve(mode.value))
+  const applied = computed(() => mode.value === 'system' ? (systemDark.value ? 'dark' : 'light') : mode.value)
+
+  function persist() {
+    document.documentElement.setAttribute('data-theme', applied.value)
+    localStorage.setItem(STORAGE_KEY, mode.value)
+  }
 
   function apply(m: ThemeMode) {
     mode.value = m
-    persist(m)
+    persist()
   }
 
   /** Title bar: flip current visual, set mode to explicit light/dark */
@@ -35,15 +32,17 @@ export const useThemeStore = defineStore('theme', () => {
   }
 
   // Apply on init
-  persist(mode.value)
+  persist()
 
-  // Listen for system theme changes when in 'system' mode
-  const mq = window.matchMedia('(prefers-color-scheme: dark)')
-  mq.addEventListener('change', () => {
+  // Keep tracking the system even in explicit mode, so switching back is current.
+  function onSystemChange(event: MediaQueryListEvent) {
+    systemDark.value = event.matches
     if (mode.value === 'system') {
-      document.documentElement.setAttribute('data-theme', getSystemTheme())
+      document.documentElement.setAttribute('data-theme', applied.value)
     }
-  })
+  }
+  mq.addEventListener('change', onSystemChange)
+  onScopeDispose(() => mq.removeEventListener('change', onSystemChange))
 
   return { mode, applied, apply, toggle }
 })

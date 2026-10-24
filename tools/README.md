@@ -1,10 +1,12 @@
 # HanCast — `tools/` 验收与探针脚本索引
 
 > 这份文档回答：`tools/` 下这些脚本各自验什么、怎么跑、需要什么环境，以及新增脚本要守哪些约定。
+>
+> 最后校对：2026-10-24，对应版本 v2.3.20。
 
 `tools/` 里放的是**可重复运行的验收 / 探针脚本**，不是一次性的 `/tmp` 手搓脚本。它们必须自适应当前机器——设备名、网卡、产物路径、参数条数都从现场现读，不写死。用法上的两条铁律：**修 bug 之前先跑它复现，修完之后再用它证明**。「证明」的对象是判据（退出码 / PASS-FAIL 行），不是截图，也不是「我点了一下看起来对」。
 
-当前分类表收录 **50 个顶层脚本 + 1 个目录型验收包**（`browser-channel-livecheck/`，4 个文件合写成 §1.7 的一行）。核对计数用 `git ls-files tools/`：现在是 56 项 = 51 个顶层脚本文件 + 验收包 4 个 + 本 README；51 与 50 的差是那一个 `audit-doc-refs.py`——它是全仓文档体检工具，用法记在 `AGENTS.md:605` 与 [docs/README.md](../docs/README.md) §4，不进本索引的分类表。`ls tools/` 还多一个不入库的 `__pycache__/`。
+当前分类表收录 **53 个顶层脚本 + 1 个目录型验收包**（`browser-channel-livecheck/`，4 个文件合写成 §1.7 的一行）。口径为当前工作区（包括本轮新加的 3 个前端回归脚本）：顶层 `.py/.sh/.cmd/.ps1/.mjs/.cjs` 共 54 个，扣除不入分类表的 `audit-doc-refs.py` 为 53；文档体检用法见 [docs/README.md](../docs/README.md) §4。历史 v2.3.19 已提交快照为 50 个分类脚本，`git ls-files` 在新增脚本提交前不会包含它们；目录和 `__pycache__/` 不计入脚本数。
 
 ---
 
@@ -105,6 +107,9 @@ ssh administrator@192.168.1.68 "schtasks /delete /tn <TASK> /f"      # 收尾
 
 | 脚本 | 一句话用途 | 运行方式 | 前置环境 |
 |------|-----------|---------|---------|
+| `verify-media-theme.cjs` | 真实 Vue/Pinia 验解析代次（清空、编辑、文件/URL 交错与失败）、直链兜底、安全解码及系统主题切换 | `node tools/verify-media-theme.cjs` | 已安装前端依赖；API/DOM/定时器使用内存桩，无网络及用户配置写入 |
+| `verify-cast-ui.cjs` | 编译生产 store 与控制器 SFC，验证错误反馈、单飞轮询、操作代次、进度解锁/清理和封面回退 | `node tools/verify-cast-ui.cjs`；可附测试名子串只跑匹配项，例如 `node tools/verify-cast-ui.cjs "preview never"` | 同上；真实 Vue renderer/Pinia，假设备/API，无真实投屏；CSS 编译不等于跨平台渲染验收 |
+| `verify-app-lifecycle.cjs` | 编译真实 App/Home，验证首页→设置→首页监听仍各一份、事件可达、App 卸载及迟到 listen 句柄清理 | `node tools/verify-app-lifecycle.cjs` | 同上；设置路由和叶子控件用桩，根组件及首页脚本/模板实际编译，不复制产品初始化代码冒充验证 |
 | `verify-params-ui.mjs` | 设置页「后台参数」区块的浏览器验收：用真实 Chromium（headless shell + CDP）渲染，不靠快照推断布局。走 vite dev 的 mock 通道，只验 UI 行为（展开 / 四类控件 / 待保存计数 / 保存回落 / 恢复默认）。分组标题是**逐串比对**的（v2.3.12 起期望值含「GitHub 加速」），所以新增 section 忘了补 i18n 时它会红 | `node tools/verify-params-ui.mjs [base-url]`（默认 `http://localhost:5199`） | 先起 vite：`node node_modules/vite/bin/vite.js --port 5199`；`~/.cache/puppeteer/chrome-headless-shell` 下有 `mac_arm-*` 构建；CDP 端口 9337；截图落 `.tmp-win/hancast-params-ui.png`；退出码 0 = 全部断言通过。**后端契约不由它负责**——那是 `hancast-backend/tests/test_params*.py` 与 `tools/accept-macos-artifact.sh` 的活 |
 | `verify-error-wrap-ui.mjs` | 「解析失败原因」整行可见的浏览器验收（v2.3.12）：走 vite dev 的 mock 通道喂一条非媒体网页地址，mock 后端抛的就是真后端那条长错误，于是文案与样式都是真实形状。判据用**几何**不用文本——`textContent` 永远完整，截断只发生在渲染上，所以量「换了几行」「有没有一行的右边界超出元素盒子」，并在 **420px 窄窗**里测（宽窗会把老的 `nowrap` 样式也放过）<br>| `node tools/verify-error-wrap-ui.mjs [base-url]`（默认 `http://localhost:5199`） | 先起 vite：`node node_modules/vite/bin/vite.js --port 5199`；Chrome 同 §1.6 上一行；截图落 `.tmp-win/hancast-error-wrap.png`；退出码 0 = 全部断言通过 |
 | `verify-sidecar-utf8-protocol.py` | 验证 sidecar 的 stdin/stdout 协议在「父进程没有 locale」时仍走得通。登记表/错误文案全是中文，而 stdout 就是与 Rust 的通信通道；父进程没给 `LANG`/`LC_*` 时 Python 的 stdout 会退回 ASCII，`emit_response(..., ensure_ascii=False)` 直接抛 `UnicodeEncodeError`，表现为「命令永远失败」而不是「编码不对」 | `python3 tools/verify-sidecar-utf8-protocol.py [python 二进制]`（缺省用 `sys.executable`；可指向打包版 sidecar） | 后端源码可 import；无需外网、无需真机。判据：hostile env（`LC_ALL=C` 等）下 `get_params` 必须成功、条数不少于 18、中文标签原样回来；`stop_screen_cast`（空载）这种带中文提示的响应也必须回来。v2.2.18 用打包版实测撞到过 `{"id":2,"success":false,"error":"'ascii' codec can't encode characters …"}` |

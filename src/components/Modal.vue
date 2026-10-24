@@ -1,4 +1,9 @@
 <script setup lang="ts">
+import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
+
+const box = ref<HTMLElement | null>(null)
+let previousFocus: HTMLElement | null = null
+
 const props = withDefaults(defineProps<{
   visible: boolean
   title?: string
@@ -19,13 +24,58 @@ function onOverlay(e: MouseEvent) {
     emit('close')
   }
 }
+
+function onKeydown(e: KeyboardEvent) {
+  const overlays = document.querySelectorAll('.modal-overlay')
+  if (box.value?.parentElement !== overlays[overlays.length - 1]) return
+  if (e.key === 'Escape') {
+    e.preventDefault()
+    e.stopPropagation()
+    emit('close')
+  } else if (e.key === 'Tab') {
+    const targets = Array.from(box.value.querySelectorAll<HTMLElement>(
+      'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], [tabindex="0"]',
+    )).filter(el => el.getClientRects().length > 0)
+    const first = targets[0]
+    const last = targets[targets.length - 1]
+    if (!first) {
+      e.preventDefault()
+      box.value.focus()
+    } else if (e.shiftKey && (document.activeElement === first || !targets.includes(document.activeElement as HTMLElement))) {
+      e.preventDefault()
+      last.focus()
+    } else if (!e.shiftKey && (document.activeElement === last || !targets.includes(document.activeElement as HTMLElement))) {
+      e.preventDefault()
+      first.focus()
+    }
+  }
+}
+
+function releaseFocus() {
+  document.removeEventListener('keydown', onKeydown)
+  if (previousFocus?.isConnected) previousFocus.focus()
+  previousFocus = null
+}
+
+watch(() => props.visible, async (visible) => {
+  if (!visible) {
+    releaseFocus()
+    return
+  }
+  previousFocus = document.activeElement as HTMLElement
+  document.addEventListener('keydown', onKeydown)
+  await nextTick()
+  if (props.visible) box.value?.focus()
+}, { immediate: true })
+
+onBeforeUnmount(releaseFocus)
 </script>
 
 <template>
   <Teleport to="body">
     <Transition name="modal">
       <div v-if="visible" class="modal-overlay" @click="onOverlay">
-        <div class="modal-box" :class="{ 'modal-box--small': size === 'small', 'modal-box--mini': size === 'mini', 'modal-box--wide': size === 'wide' }">
+        <div ref="box" class="modal-box" role="dialog" aria-modal="true" :aria-label="title" tabindex="-1" :class="{ 'modal-box--small': size === 'small', 'modal-box--mini': size === 'mini', 'modal-box--wide': size === 'wide' }">
 
           <!-- Optional circular icon area -->
           <div v-if="showIcon" class="modal-icon-area">
@@ -62,7 +112,8 @@ function onOverlay(e: MouseEvent) {
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.4);
+  background: rgba(15, 12, 26, 0.48);
+  padding: 16px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -72,17 +123,21 @@ function onOverlay(e: MouseEvent) {
 .modal-box {
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: 20px;
-  padding: var(--sp-xl);
-  min-width: 280px;
-  max-width: 360px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
+  border-radius: var(--r-xl);
+  padding: 20px;
+  width: 360px;
+  min-width: 0;
+  max-width: 100%;
+  max-height: 100%;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  box-shadow: var(--shadow-lg);
+  outline: none;
 }
 
 /* Wide variant: 日志查看这类需要横向空间的内容 */
 .modal-box--wide {
-  min-width: 520px;
-  max-width: 760px;
+  width: 760px;
 }
 
 .modal-box--wide .modal-title {
@@ -94,8 +149,8 @@ function onOverlay(e: MouseEvent) {
 }
 
 /* Small variant */
-.modal-box--small {  min-width: 200px;
-  max-width: 260px;
+.modal-box--small {
+  width: 260px;
   padding: var(--sp-md);
   border-radius: 14px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
@@ -119,10 +174,9 @@ function onOverlay(e: MouseEvent) {
 
 /* Mini variant */
 .modal-box--mini {
-  min-width: 220px;
-  max-width: 280px;
-  padding: 10px 12px;
-  border-radius: 8px;
+  width: 280px;
+  padding: 16px;
+  border-radius: var(--r-lg);
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
 }
 
@@ -254,7 +308,7 @@ function onOverlay(e: MouseEvent) {
 }
 
 .modal-actions :slotted(button.btn-confirm) {
-  color: white;
+  color: var(--on-primary);
   background: var(--primary);
 }
 

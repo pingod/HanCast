@@ -1,6 +1,6 @@
 # Changelog
 
-> 最后校对：2026-10-18，对应版本 v2.3.19（`package.json:4`）
+> 最后校对：2026-10-24，对应版本 v2.3.20（`package.json:4`）
 
 本文件记录 HanCast 的版本历史。口径说明：
 
@@ -8,6 +8,24 @@
 - 版本号唯一来源是 **`package.json` 的 `version`**（`scripts/sync-version.cjs:4,17`），`npm run version:set <x.y.z>` 把它刷进 7 处契约点：`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`（本地包那条，v2.3.8 起收进来——此前每版都靠人肉补）、`hancast-backend/pyproject.toml`、`hancast_sidecar/utils/config.py:39`、`src/api/commands.ts`（mock）、`src/stores/settings.ts`。`scripts/check-version.cjs` 自称以 `tauri.conf.json` 为源（口径相反），但全仓无人调用，是未接线的孤儿脚本——判定以 `sync-version.cjs` 为准。详见 [docs/构建与发布.md](docs/构建与发布.md) §1。
 - 下表「提交」列即 `git tag <版本>` 指向的提交；细节以 `git show <提交>` 为准，本文只留用户可感知的变化。
 - 新加版本时**同一次提交**里补这里，并按 [docs/README.md](docs/README.md) §4 的约定同步对应文档。
+
+---
+
+## v2.3.20 — 2026-10-24（本轮发布提交）
+
+一轮「界面美化 + 并发缺陷清理」，没有新能力，用户可感知面是两件事：**界面换成克制精致的原生工具风**（亮暗两套统一紫色强调色、实色表面、窄窗不再挤掉内容），以及**一批原本会「静默出错」的场景现在要么正确、要么说清楚**。改动分两层，前端 24 个文件、后端 6 个文件。
+
+- **视觉系统重做（不换框架、不引组件库）**：`src/styles/variables.css` 整套重定——亮色主色 `#7056d8`、暗色 `#a58af5`，背景从「半透明 rgba 配系统毛玻璃」改为**实色表面**（亮 `#f6f6f9` / 卡片 `#ffffff`，暗 `#19181f` / 卡片 `#23222b`），文字与状态色按对比度重排，新增 `--danger`、`--on-primary`、`--primary-rgb`。标题栏 32 → **44px**（`--titlebar-height`），圆角/阴影统一到三档。首页加标题区与设备计数徽标，设备卡片改为「图标 + 状态灯角标 + 细边卡」，设置页按分区做细边卡片并在 ≤480/≤380px 改纵排，`Modal` 去掉 `min-width: 520px` 那条超过默认窗宽的下限（历史上 wide 档在 434px 窗口里会横向溢出）。**Linux 仍走不透明窗口**（v2.3.18 的 damage 漏提交结论未动），实色表面反而与它一致。
+- **顺手补的可访问性**：`Modal` 打开聚焦对话框、`Esc` 关闭、`Tab/Shift+Tab` 在栈顶弹窗内循环、关闭还焦点（`src/components/Modal.vue:28-78`）；`CustomSelect` 从「只能鼠标点」补上方向键/Home/End/Esc 与 listbox 语义；标题栏四个按钮、设备菜单、媒体输入框补 `aria-label`；全局 `prefers-reduced-motion` 兜底。
+- **删掉一件假功能**：音箱卡片上那个勾选框写着「多房同步」但**没有任何后端能力**（纯装饰、`disabled`），v2.3.20 起移除。多设备各自独立播放不等于时钟同步的多房间。
+- **前端四个真缺陷**（都是隔离并发用例复现后修的，不是看着像）：① **切到设置页再回来，投屏监听就永久没了**——Pinia setup store 只跑一次，`onMounted/onUnmounted` 绑在**首个调用它的组件**上，首页卸载即 unlisten、返回首页不重跑 setup；现在 device/cast/screencast 三个常驻 store 由根组件持有（`src/App.vue:19-24`），并补了「App 卸载时迟到的 `listen()` 句柄也要立刻 unlisten」这条竞态。② **旧解析结果覆盖新输入**：`media` store 加请求代次，清空/编辑/新解析都会让在途请求失效，慢 A 快 B 不再把 B 盖掉，`reset()` 也不再被迟到的成功包复活；顺带修了降级分支里 `decodeURIComponent` 遇畸形百分号**二次抛错卡在「解析中」**。③ **投屏失败只写 console**：`startCast/pause/resume/seek/切画质/音量/静音` 的失败统一落到 `lastError`，首页与控制器各有一处 `role="alert"` 显示原始原因。④ **进度条拖完就锁死**：解锁逻辑原本写在一个**没人消费的 computed** 里（惰性 getter 根本不执行），改成主动 `watch` + 请求代次 + 5s 兜底；轮询从「async setInterval 可重叠 + `Math.max` 只前进」改成**单飞扫描 + 逐设备操作代次**，向后 seek 不再被旧样本顶回去。另修：系统主题切换后 `applied` 仍缓存旧值导致首次点击主题按钮无反应（`matchMedia.matches` 改响应式 ref）。
+- **后端四项并发/阻塞缺陷**（上一轮复查列出、本轮全部落地）：① **慢操作卡住整条命令通道**——规则包索引/下载在 `main.py` 的串行循环里同步跑，Rust 60s 超时只是「不再等这条响应」，后端照样会把包装完，用户看到失败、包却悄悄换了；现在三条慢操作走后台任务（新增 `media/rules/tasks.py`，280 行：单执行零队列、整任务 monotonic 总预算、取消与提交互斥、终态 TTL 600s/上限 16 条），壳层 `run_plugin_task` 轮询（`lib.rs:331-383`），**Tauri 命令名与前端封装一个都没改**；Sidecar 注册表 **59 → 62**（`commands.py:131-222`）。② **旧轮询误删新会话**——每代轮询一个独立取消令牌兼作代次，回调签名改 `callback(session, event_type, generation)`，处理器在共享注册表锁 `_cast_lock` 下同时校验「映射对象 is 该会话」与「代次仍有效」，自行终止（STOPPED / 连续失败）仍允许递送最后一个事件。③ **媒体与屏幕互相误停**——会话带 `owner`，屏幕通道只登记也只释放自己那份实例；媒体投屏开播前调 `stop_for_device` 让屏幕通道让位并回收 FFmpeg/HLS（不发 SOAP Stop，紧接着的 Play 会替换内容），反向由 `release_session` 回调收尾。④ **启动期间采集失败被吞**——错误回调原本在 `running=False` 时直接 return，首片就绪后、Play 未返回期间 FFmpeg 退出就会「返回成功却没画面」；现在记进 `_pending_error` 由启动路径统一判失败并回滚，回调按会话 id 认人，旧看门狗迟到的报错拆不到新会话。
+- **顺手补严的两处数据完整性**：规则包安装改为**暂存目录 → rename 换代**，失败退回旧包（旧实现先 `rmtree` 目标目录再逐个写文件，中途报错就把用户原来能用的包删成半包）；`refresh()` 不再先清空 `_plugins` 再逐个装——那段时间并发解析会看到「一个包都没有」，把正在投的链接判成「没有规则」。指纹与列表读取都忽略 `_` 前缀的内部目录（暂存/备份/缓存）。
+- **测试**：新增 `hancast-backend/tests/test_plugin_tasks.py`（10 条：准入互斥、取消在提交前旧包不变、预算跨镜像+直连、close 后不许迟到提交、换代失败回滚、提交后取消不得谎报撤销、重建期间读侧看不到空快照）与 `test_session_poll_generation.py`（代次/取消/终止事件递送）；`test_stop_cast_delivery.py` 补 12 条归属与让位契约；前端新增 `tools/verify-media-theme.cjs`（73）、`tools/verify-cast-ui.cjs`（21）、`tools/verify-app-lifecycle.cjs`（2，编译真实 App/Home 而非用测试自建根组件冒充）。本轮裁剪跑：后端受影响 7 个文件 **234 passed**、前端三脚本 **96 用例**、`vue-tsc` + `vite build` 通过、`cargo check` 通过（未跑全量，按既定口径）。
+- **验收判据（打 tag 之前做完的）**：真实浏览器（Vite dev + 项目内建 mock 设备）逐档量过 **346×472 / 434×634 / 800×900** 无横向溢出，中英文设置页与后台参数展开态、下拉键盘选择、日志弹窗边界与焦点回收、屏幕投屏面板、解析 → 投屏控制 → 暂停 → 停止 → 清空全链路；亮暗两张截图入库 `docs/images/ui-native-{light,dark}.png`。装端验收在 tag 之后的落账提交里补。**浏览器验证用的是 mock，不是真机投屏。**
+- **文档同轮修订**：AGENTS.md（Sidecar 注册表 59 → 62 与行号重锚、三处数字口径）；`hancast-backend/README.md`（命令数、长任务铁律补规则包任务出口）；docs/架构总览.md（进程图与模块表计数、`commands.py`/`jsplugins.py`/`screencast/*` 行数按现读更正、新增 **§11** 记四项修复状态与验证边界、并更正第 10 条不变量里「版本真源是 `tauri.conf.json`」这句与实现相反的历史描述）；docs/HanCast-Frontend-API.md（三条慢操作改走任务轮询、新增 `plugin_task_start/result/cancel` 三行、错误串与行号重锚）；docs/HanCast-Frontend-Spec.md（生命周期归属、设备卡无装饰勾选、Modal 视口与焦点、主题响应式、样式变量全清单、§10.5/10.6/10.8 重写、i18n 计数 278 → 321）；docs/README.md、docs/开发指南.md、tools/README.md（计数与索引）。本轮又踩到并当场纠正的一件事：新写的文档引用里有 **16 处行号是凭印象写的**，`audit-doc-refs.py` 只验「文件存在 + 行号在范围内」，这类引用会**静默通过**——已用脚本逐条比对「窗口内是否含所述符号」，30/30 指向正确后才提交。
+- **版本与契约点**：`npm run version:set -- 2.3.20` 刷 7 处（`package.json` / `tauri.conf.json` / `Cargo.toml` / `Cargo.lock` / `pyproject.toml` / `config.py` / `commands.ts` / `settings.ts`）。
+- **没闭合的口子（别当成已验）**：① **真机投屏未复现这些失败**——四项后端修复的证据全是离线并发用例（假设备/假网络/临时插件目录），电视、手机、真实路由器都没碰过；`_cast_lock` 串行化播控后，慢 SOAP 调用会占住这条锁，理论上仍可能让「同一台电视的另一次操作」排队，只是不再拖垮整个命令通道。② **Rust 轮询链路本轮只有编译期证据**，装机后点一次「检查规则包更新」才算实跑。③ **取消是协作式的**：`requests` 的 socket timeout 不是总计时器，DNS 等待与 QuickJS 执行中打不断，名额要等它自己结束。④ **三平台真实 WebView 观感未测**——浏览器验证跑在 Chromium 内核的 headless shell 上，WebView2 / WKWebView / WebKitGTK 的字体与滚动条表现可能有差；`-webkit-scrollbar` 与 `aspect-ratio` 这类只按既有约定写，未逐平台实测。⑤ 纯 ALSA（无 `pactl`）机器仍拿不到音频设备列表。⑥ 随包 mpv 在 Arch/CachyOS 上仍靠 v2.3.17 的运行时让位，打包策略未决策。
 
 ---
 

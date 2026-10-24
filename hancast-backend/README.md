@@ -20,7 +20,7 @@ Python `>= 3.11`（`pyproject.toml:13`）。
 hancast-backend/
 ├── hancast_sidecar/
 │   ├── main.py          # 入口：UTF-8 stdio 包裹 → ready 事件 → 命令主循环
-│   ├── commands.py      # 命令路由与 Sidecar 侧服务装配（注册 59 条命令）
+│   ├── commands.py      # 命令路由与 Sidecar 侧服务装配（注册 62 条命令）
 │   ├── params.py        # 后台参数登记表 PARAM_SPECS（32 项）
 │   ├── ssdp.py          # SSDP 发现（M-SEARCH / NOTIFY alive+byebye / 陈旧摘除；准入=描述声明 AVTransport）
 │   ├── protocol/        # dlna.py（SOAP 控制与描述）、server.py（UPnP HTTP 服务）
@@ -83,7 +83,9 @@ mpv 随包（开发时从 `src-tauri/mpv/` 取，见 [../docs/开发指南.md](.
 1. **stdout 只能有一个写者**。响应与事件都必须走 `hancast_sidecar/utils/protocol_io.py`，
    直接 `print` 会和响应交错，Rust 侧解析出半行 JSON。
 2. **每个请求必须有响应**。命令抛异常时主循环仍回 `success:false`（`main.py:138-140`）；
-   长任务改成「立即返回 `task_id` + 轮询出口」（`resolve_share` / `get_resolve_result`）。
+   长任务改成「立即返回 `task_id` + 轮询出口」（`resolve_share` / `get_resolve_result`，
+   规则包慢操作走 `plugin_task_start` / `plugin_task_result` / `plugin_task_cancel`，
+   见 `media/rules/tasks.py`）。
 3. **stdio 一律 UTF-8**，且包裹点在 logger 初始化之前（`main.py:21-28`）。
    少了这一层，父进程没给 locale 时中文响应全部变 `success:false`（v2.2.19 实测）。
 

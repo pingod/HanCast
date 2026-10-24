@@ -54,7 +54,7 @@ function cancelClose() {
 
     <div class="title-bar__right">
       <!-- Theme toggle: light ↔ dark -->
-      <button class="title-bar__btn" @click="themeStore.toggle()" :title="themeStore.applied === 'dark' ? t('theme.light') : t('theme.dark')">
+      <button class="title-bar__btn" @click="themeStore.toggle()" :title="themeStore.applied === 'dark' ? t('theme.light') : t('theme.dark')" :aria-label="themeStore.applied === 'dark' ? t('theme.light') : t('theme.dark')">
         <!-- Sun (currently light → click to go dark) -->
         <svg v-if="themeStore.applied === 'light'" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="4" />
@@ -65,18 +65,18 @@ function cancelClose() {
           <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z" />
         </svg>
       </button>
-      <button class="title-bar__btn" @click="goToSettings" :title="t('settings.title')">
+      <button class="title-bar__btn" @click="goToSettings" :title="t('settings.title')" :aria-label="t('settings.title')">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
           <path d="M12.22 2h-.44a2 2 0 00-2 2v.18a2 2 0 01-1 1.73l-.43.25a2 2 0 01-2 0l-.15-.08a2 2 0 00-2.73.73l-.22.38a2 2 0 00.73 2.73l.15.1a2 2 0 011 1.72v.51a2 2 0 01-1 1.74l-.15.09a2 2 0 00-.73 2.73l.22.38a2 2 0 002.73.73l.15-.08a2 2 0 012 0l.43.25a2 2 0 011 1.73V20a2 2 0 002 2h.44a2 2 0 002-2v-.18a2 2 0 011-1.73l.43-.25a2 2 0 012 0l.15.08a2 2 0 002.73-.73l.22-.39a2 2 0 00-.73-2.73l-.15-.08a2 2 0 01-1-1.74v-.5a2 2 0 011-1.74l.15-.09a2 2 0 00.73-2.73l-.22-.38a2 2 0 00-2.73-.73l-.15.08a2 2 0 01-2 0l-.43-.25a2 2 0 01-1-1.73V4a2 2 0 00-2-2z" />
           <circle cx="12" cy="12" r="3" />
         </svg>
       </button>
-      <button class="title-bar__btn" @click="minimizeWindow" :title="t('controller.minimize')">
+      <button class="title-bar__btn" @click="minimizeWindow" :title="t('controller.minimize')" :aria-label="t('controller.minimize')">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M5 12h14" />
         </svg>
       </button>
-      <button class="title-bar__btn title-bar__btn--close" @click="handleCloseClick" :title="t('controller.close')">
+      <button class="title-bar__btn title-bar__btn--close" @click="handleCloseClick" :title="t('controller.close')" :aria-label="t('controller.close')">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M18 6L6 18M6 6l12 12" />
         </svg>
@@ -106,7 +106,8 @@ function cancelClose() {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 var(--sp-md);
+  padding: 0 var(--sp-lg);
+  border-bottom: 1px solid var(--border);
   -webkit-app-region: drag;
   user-select: none;
   flex-shrink: 0;
@@ -138,8 +139,8 @@ function cancelClose() {
 }
 
 .title-bar__btn {
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   display: flex;
   align-items: center;
   justify-content: center;

@@ -236,7 +236,7 @@ async function copyText(text: string) {
           :class="{ 'sc-target--active': target === 'browser' }"
           @click="target = 'browser'"
         >
-          <span class="sc-target-icon">🌐</span>
+          <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="9" /><ellipse cx="12" cy="12" rx="4" ry="9" /><path d="M3 12h18" /></svg>
           <span>{{ t('screencast.targetBrowser') }}</span>
         </button>
         <button
@@ -244,7 +244,7 @@ async function copyText(text: string) {
           :class="{ 'sc-target--active': target === 'dlna' }"
           @click="target = 'dlna'"
         >
-          <span class="sc-target-icon">📺</span>
+          <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="20" height="14" rx="2" /><path d="M8 21h8M12 17v4" /></svg>
           <span>{{ t('screencast.targetDlna') }}</span>
         </button>
       </div>
@@ -506,7 +506,7 @@ async function copyText(text: string) {
 }
 
 .sc-target--active {
-  color: white;
+  color: var(--on-primary);
   background: var(--primary);
   border-color: var(--primary);
 }
@@ -533,7 +533,7 @@ async function copyText(text: string) {
 
 .sc-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -545,7 +545,8 @@ async function copyText(text: string) {
 
 .sc-audio-row {
   display: flex;
-  gap: 16px;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .sc-check {
@@ -613,14 +614,15 @@ async function copyText(text: string) {
 
 .sc-error-title {
   font-size: 12px;
-  color: #DC2626;
+  color: var(--danger);
+  overflow-wrap: anywhere;
   margin-bottom: 6px;
 }
 
 .btn-mini {
   padding: 6px 12px;
   font-size: 12px;
-  color: white;
+  color: var(--on-primary);
   background: var(--primary);
   border: none;
   border-radius: var(--r-md);

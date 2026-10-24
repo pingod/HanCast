@@ -321,18 +321,77 @@ async fn failure_clear(sidecar: State<'_, SidecarManager>) -> Result<serde_json:
     sidecar.send_command("failure_clear", serde_json::json!({})).await
 }
 
+/// 规则包的慢操作改走后台任务 + 轮询。
+///
+/// 之前 `plugin_check_updates` / `plugin_pull` / `plugin_import` 直接在 Sidecar
+/// 的串行命令通道里跑网络下载：一次慢索引能把停止投屏、投屏确认一起卡住，
+/// 而壳层 60s 超时只是「不再等这条响应」，后端照样会把包装完——用户看到失败，
+/// 包却悄悄换了。轮询把响应窗口和执行时长解耦；总预算由后端任务持有（90s），
+/// 这里 150s 只是兜底，超时先请求取消再报错，不自动重提同一个安装。
+async fn run_plugin_task(
+    sidecar: &SidecarManager,
+    operation: &str,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let started = sidecar
+        .send_command(
+            "plugin_task_start",
+            serde_json::json!({"operation": operation, "params": params}),
+        )
+        .await?;
+    let task_id = started
+        .get("task_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "规则包任务未返回 task_id".to_string())?;
+
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(150);
+    loop {
+        let entry = sidecar
+            .send_command(
+                "plugin_task_result",
+                serde_json::json!({"task_id": task_id}),
+            )
+            .await?;
+        match entry.get("status").and_then(|v| v.as_str()).unwrap_or("") {
+            "done" => {
+                return Ok(entry
+                    .get("result")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null))
+            }
+            "error" => {
+                return Err(entry
+                    .get("error")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("规则包操作失败")
+                    .to_string())
+            }
+            "cancelled" => return Err("规则包操作已取消".to_string()),
+            "pending" => {}
+            other => return Err(format!("规则包任务状态未知: {other}")),
+        }
+        if tokio::time::Instant::now() >= deadline {
+            let _ = sidecar
+                .send_command("plugin_task_cancel", serde_json::json!({"task_id": task_id}))
+                .await;
+            return Err("规则包操作超时，已请求取消".to_string());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    }
+}
+
 /// 对照官方索引看有哪些包可更新 / 可安装
 #[tauri::command]
 async fn plugin_check_updates(
     sidecar: State<'_, SidecarManager>,
     index_url: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    sidecar
-        .send_command(
-            "plugin_check_updates",
-            serde_json::json!({"index_url": index_url.unwrap_or_default()}),
-        )
-        .await
+    run_plugin_task(
+        &sidecar,
+        "plugin_check_updates",
+        serde_json::json!({"index_url": index_url.unwrap_or_default()}),
+    )
+    .await
 }
 
 /// 按索引装/更新一个包（sha256 校验不过不落盘）
@@ -342,12 +401,12 @@ async fn plugin_pull(
     name: String,
     index_url: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    sidecar
-        .send_command(
-            "plugin_pull",
-            serde_json::json!({"name": name, "url": index_url.unwrap_or_default()}),
-        )
-        .await
+    run_plugin_task(
+        &sidecar,
+        "plugin_pull",
+        serde_json::json!({"name": name, "url": index_url.unwrap_or_default()}),
+    )
+    .await
 }
 
 /// 导入插件 ZIP：file_path 本地路径 / data_base64 原始字节 / url 远程地址，三选一
@@ -358,16 +417,16 @@ async fn plugin_import(
     data_base64: Option<String>,
     url: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    sidecar
-        .send_command(
-            "plugin_import",
-            serde_json::json!({
-                "path": file_path,
-                "data_base64": data_base64,
-                "url": url,
-            }),
-        )
-        .await
+    run_plugin_task(
+        &sidecar,
+        "plugin_import",
+        serde_json::json!({
+            "path": file_path,
+            "data_base64": data_base64,
+            "url": url,
+        }),
+    )
+    .await
 }
 
 #[tauri::command]

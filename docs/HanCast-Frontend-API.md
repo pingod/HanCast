@@ -17,7 +17,7 @@
 | 前端封装函数 | 65 | `src/api/commands.ts` 中 `export async function` 计数 |
 | ├─ 无独立封装的命令 | 3 | `get_resolve_result`（内联在 `resolveShare` / `pluginTest` 轮询里）、`check_mpv`、`set_mpv_path`（`src/` 下无任何调用点） |
 | └─ 一对多封装 | 1 | `plugin_import` → `pluginImportFile` / `pluginImportData` / `pluginImportUrl`（`commands.ts:797-813`） |
-| Sidecar 命令注册表条目 | 59 | `hancast-backend/hancast_sidecar/commands.py:110-197` |
+| Sidecar 命令注册表条目 | 62 | `hancast-backend/hancast_sidecar/commands.py:131-222` |
 | 后台参数（`params.py`）条目 | 32 | `hancast-backend/hancast_sidecar/params.py:41-265` |
 
 **66 与 59 为什么对不上**：57 条转发里，`parse_media_file` 与 `parse_media_url` 在壳层是两条命令、到 Sidecar 归并成一条 `parse_media`（`lib.rs:229-253`），57 − 1 = 56 个不同的 Sidecar 命令名；Sidecar 另有三条**没有对应壳层命令**——`unhide_device`、`get_hidden_devices`（`commands.py:120-121`，前端调不到）与 `browser_result`（`commands.py:166`，只由壳层的浏览器通道反向 RPC 下发）。56 + 3 = 59。此外 `exit` 不走注册表，是主循环直接拦下的特殊命令（`main.py:126-128`）。
@@ -45,7 +45,7 @@ src-tauri/src/sidecar.rs   SidecarManager：stdin 写一行 JSON，oneshot 等�
 hancast_sidecar/main.py    for line in sys.stdin → handler.execute(cmd, params)
         │
         ▼
-hancast_sidecar/commands.py  CommandHandler._commands 注册表（59 条）
+hancast_sidecar/commands.py  CommandHandler._commands 注册表（62 条）
 ```
 
 Sidecar 的启动方式：开发态 `uv run python -m hancast_sidecar.main`（`sidecar.rs:155-172`），打包态用 Nuitka 产物 `hancast-sidecar*`（`sidecar.rs:173-213`，macOS 在 `Contents/MacOS/` 下找，Windows/Linux 在 `resource_dir` 下找，`sidecar.rs:44-129`）。找不到二进制时 `setup()` 直接中止启动（`lib.rs:1147-1151`）。
@@ -257,12 +257,15 @@ Device Guard 管的是**接收投屏**方向：外部设备往本机推流时，
 | `failure_list` | `failureList()` `commands.ts:849` | 无 | `{ enabled, path, hosts: FailureHost[], total }`（`failures.py:167-190`） | Sidecar | 通用 |
 | `failure_delete` | `failureDelete(host?, url?)` `commands.ts:855` | `host?: string`、`url?: string`（前端把空串转成 `null`，`commands.ts:858`） | `{ removed: number, enabled, path, hosts, total }`（`commands.py:674-678`） | Sidecar | 通用 |
 | `failure_clear` | `failureClear()` `commands.ts:862` | 无 | `{ removed: number, enabled, path, hosts, total }`（`commands.py:680-682`） | Sidecar | 通用 |
-| `plugin_check_updates` | `pluginCheckUpdates(indexUrl?)` `commands.ts:877` | `indexUrl?: string`（空 → 走后台参数 `rules.index_url`） | `{ index_url, updates: PackUpdateEntry[], available: PackIndexEntry[], installed: number }`（`jsplugins.py:371-386`） | Sidecar | `索引地址必须是 http(s)（当前：…）`、`索引拉取失败（HTTP <code>）`、`索引拉取失败: <异常>`、`索引不是合法 JSON: …`（`jsplugins.py:343-355`）；通用 |
-| `plugin_pull` | `pluginPull(name, indexUrl?)` `commands.ts:894` | `name: string`、`indexUrl?: string` | `{ plugins: PluginInfo[] }`（`commands.py:699`） | Sidecar | `缺少包名`（`commands.py:698`）；`官方索引不可用，「<name>」也没声明更新地址：…`、`「<name>」既不在官方索引里，也没声明 update_url`（`jsplugins.py:399-402`）；`包校验失败（sha256 不匹配，可能是镜像过期）: <前12位>…`（`jsplugins.py:549-553`）；下载类错误见下 |
-| `plugin_import` | `pluginImportFile(filePath)` `:797` / `pluginImportData(dataBase64)` `:803` / `pluginImportUrl(url)` `:809` | 三选一：`filePath` / `dataBase64` / `url`（壳层合成一个对象下传，`lib.rs:353-371`） | `{ plugins: PluginInfo[] }`（`commands.py:702-715`） | Sidecar | `需要 path / data_base64 / url 之一`（`commands.py:714`）；`插件包超过 2MB 上限`、`不是合法的 zip 包: …`、`插件包文件数超过 128 上限`、`插件包解压后超过 8MB 上限`、`zip 内路径不合法: …`、`zip 内不允许的文件（只收 manifest.json 和 .js）: …`、`单文件超过 2MB: …`、`zip 内不允许软链接: …`、`插件包必须恰好含一个 manifest.json`、`manifest.json 不是合法 JSON: …`、`manifest scripts 条目必须是 .js 文件名: …`、`manifest scripts 引用了不存在的文件: …`（`jsplugins.py:475-518`）；`只支持 http(s) 下载地址`、`下载失败（HTTP <code>）`（`jsplugins.py:536-542`） |
+| `plugin_check_updates` | `pluginCheckUpdates(indexUrl?)` `commands.ts:877` | `indexUrl?: string`（空 → 走后台参数 `rules.index_url`） | `{ index_url, updates: PackUpdateEntry[], available: PackIndexEntry[], installed: number }`（`jsplugins.py:448-470`） | Sidecar（**经 `plugin_task_start` 轮询**，`lib.rs:331-383`） | `索引地址必须是 http(s)（当前：…）`、`索引拉取失败: 镜像 HTTP <code>；直连 <异常>`（`jsplugins.py:392-432`）；`规则包操作忙，请稍后重试`、`规则包操作超时，已请求取消`；通用 |
+| `plugin_pull` | `pluginPull(name, indexUrl?)` `commands.ts:894` | `name: string`、`indexUrl?: string` | `{ plugins: PluginInfo[] }`（`commands.py:749-760`） | Sidecar（**经 `plugin_task_start` 轮询**） | `缺少包名`（`commands.py:758`）；`官方索引不可用，「<name>」也没声明更新地址：…`、`「<name>」既不在官方索引里，也没声明 update_url`（`jsplugins.py:468-492`）；`包校验失败（sha256 不匹配，可能是镜像过期）: <前12位>…`（`jsplugins.py:687`）；下载类错误见下 |
+| `plugin_import` | `pluginImportFile(filePath)` `:797` / `pluginImportData(dataBase64)` `:803` / `pluginImportUrl(url)` `:809` | 三选一：`filePath` / `dataBase64` / `url`（壳层合成一个对象下传，`lib.rs:414-433`） | `{ plugins: PluginInfo[] }`（`commands.py:762-777`） | Sidecar（**经 `plugin_task_start` 轮询**） | `需要 path / data_base64 / url 之一`；`插件包超过 2MB 上限`、`不是合法的 zip 包: …`、`插件包文件数超过 128 上限`、`插件包解压后超过 8MB 上限`、`zip 内路径不合法: …`、`zip 内不允许的文件（只收 manifest.json 和 .js）: …`、`单文件超过 2MB: …`、`zip 内不允许软链接: …`、`插件包必须恰好含一个 manifest.json`、`manifest.json 不是合法 JSON: …`、`manifest scripts 条目必须是 .js 文件名: …`、`manifest scripts 引用了不存在的文件: …`（`jsplugins.py:580-641`）；`只支持 http(s) 下载地址`、`HTTP <code>`（`jsplugins.py:64-89`） |
 | `plugin_remove` | `pluginRemove(name)` `commands.ts:815` | `name: string` | `{ plugins: PluginInfo[] }`（`commands.py:717-719`） | Sidecar | `插件不存在: <name>`（`jsplugins.py:465`）；通用 |
 | `plugin_set_rule_enabled` | `pluginSetRuleEnabled(plugin, rule, enabled)` `commands.ts:821` | `plugin: string`、`rule: string`、`enabled: boolean` | `{ plugins: PluginInfo[] }`（`commands.py:721-724`） | Sidecar | 通用 |
 | `plugin_test` | `pluginTest(plugin, text)` `commands.ts:906` | `plugin: string`、`text: string` | `{ task_id, status: "pending" }`，之后走 `get_resolve_result` 轮询（与 `resolveShare` 完全同一套，`commands.ts:916-925`） | Sidecar | `插件不存在: <name>`（`jsplugins.py:465`）；`粘贴内容为空`（`commands.py:731`）、`已有 3 个解析任务进行中，请稍后再试`（`commands.py:629`） |
+| `plugin_task_start` | 无前端封装（壳层 `run_plugin_task` 内部调用，`lib.rs:331-383`） | `operation: "plugin_check_updates" \| "plugin_pull" \| "plugin_import"`、`params: object` | `{ task_id, status: "pending" }`（`tasks.py:165-190`） | Sidecar | `不支持的规则包任务: <op>`、`规则包操作忙，请稍后重试`（单执行零队列）、`规则包任务服务已关闭`（`tasks.py:146-150`） |
+| `plugin_task_result` | 同上（轮询） | `task_id: string` | `{ status: "pending" \| "done" \| "error" \| "cancelled", result?, error? }`（`tasks.py:251-253`） | Sidecar | `规则包任务不存在或已过期`（终态保留 600s、上限 16 条）；通用 |
+| `plugin_task_cancel` | 同上（壳层超时兜底） | `task_id: string` | 取消后的当前状态（`tasks.py:255-260`） | Sidecar | 提交已赢的任务取消不掉：返回 `pending`/`done` 而非 `cancelled`（`tasks.py:72-95`） |
 
 壳层定义：`lib.rs:282-407`。Sidecar 处理函数：`commands.py:659-734`。
 

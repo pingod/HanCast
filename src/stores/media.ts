@@ -39,11 +39,14 @@ export const useMediaStore = defineStore('media', () => {
   const error = ref<string | null>(null)
   /** 后端拿到过真实地址却解不出画面 —— 提示他台账在哪，别让他自己翻设置 */
   const ledgerHint = ref(false)
+  // 只允许最新一次解析写回；清空或编辑输入也会使在途请求失效。
+  let parseGeneration = 0
 
   const isReady = computed(() => state.value === 'ready' && mediaInfo.value !== null)
   const isParsing = computed(() => state.value === 'parsing')
 
   function reset() {
+    ++parseGeneration
     state.value = 'idle'
     mediaInfo.value = null
     urlInput.value = ''
@@ -65,26 +68,31 @@ export const useMediaStore = defineStore('media', () => {
   }
 
   function setInputChange(value: string) {
+    ++parseGeneration
     urlInput.value = value
-    if (value.trim()) {
-      state.value = 'input'
-    } else if (state.value === 'input') {
-      state.value = 'idle'
-    }
+    mediaInfo.value = null
+    localFile.value = null
+    error.value = null
+    ledgerHint.value = false
+    state.value = value.trim() ? 'input' : 'idle'
   }
 
   /** Store the browser File object so the component can create preview URLs */
   const localFile = ref<File | null>(null)
 
   async function parseFile(filePathOrFile: string | File) {
+    const generation = ++parseGeneration
     state.value = 'parsing'
+    mediaInfo.value = null
+    localFile.value = null
     error.value = null
     ledgerHint.value = false
     try {
       if (typeof filePathOrFile === 'string') {
         // Tauri mode: send path to backend
-        mediaInfo.value = await parseMediaFile(filePathOrFile)
-        localFile.value = null
+        const info = await parseMediaFile(filePathOrFile)
+        if (generation !== parseGeneration) return
+        mediaInfo.value = info
       } else {
         // Browser mode: extract info from File object directly
         const file = filePathOrFile
@@ -101,6 +109,7 @@ export const useMediaStore = defineStore('media', () => {
       }
       state.value = 'ready'
     } catch (err) {
+      if (generation !== parseGeneration) return
       error.value = String(err)
       state.value = 'idle'
     }
@@ -114,13 +123,20 @@ export const useMediaStore = defineStore('media', () => {
    */
   async function parseUrl(input?: string, quality = '') {
     const raw = (input ?? urlInput.value).trim()
-    if (!raw) return
+    if (!raw) {
+      reset()
+      return
+    }
+    const generation = ++parseGeneration
 
     state.value = 'parsing'
+    mediaInfo.value = null
+    localFile.value = null
     error.value = null
     ledgerHint.value = false
     try {
       const info = await resolveShare(raw, quality)
+      if (generation !== parseGeneration) return
       if (!info.uri) throw new Error('解析结果为空')
       mediaInfo.value = {
         media_type: 'url',
@@ -140,6 +156,7 @@ export const useMediaStore = defineStore('media', () => {
       state.value = 'ready'
       return
     } catch (err) {
+      if (generation !== parseGeneration) return
       const fallbackUrl = extractFirstUrl(raw)
       if (!fallbackUrl) {
         error.value = String(err)
@@ -154,8 +171,13 @@ export const useMediaStore = defineStore('media', () => {
         return
       }
       // 后端解析失败（站点防抓取/无流媒体/无后端）：地址本身就是媒体文件才透传
-      const pathParts = fallbackUrl.split('?')[0].split('/')
-      const title = decodeURIComponent(pathParts[pathParts.length - 1] || '') || fallbackUrl
+      const pathParts = fallbackUrl.split('?')[0].split('#')[0].split('/')
+      let title = pathParts[pathParts.length - 1] || fallbackUrl
+      try {
+        title = decodeURIComponent(title)
+      } catch {
+        // 畸形百分号保留原文件名，不能让降级分支再次抛错而卡在 parsing。
+      }
       const ext = title.split('.').pop()?.toLowerCase() ?? ''
       const mimeMap: Record<string, string> = {
         mp4: 'video/mp4', mkv: 'video/x-matroska', avi: 'video/x-msvideo',
