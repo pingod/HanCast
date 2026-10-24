@@ -67,9 +67,18 @@ if pgrep -x hancast-sidecar >/dev/null 2>&1; then
 fi
 off=$(wc -c <"$LOG" 2>/dev/null | tr -d ' '); off=${off:-0}
 open -a HanCast; sleep 30
-chan=$(tail -c +"$((off + 1))" "$LOG" 2>/dev/null | grep -o "通道 [a-z]*" | tail -1)
-[ -z "$chan" ] && chan="(偏移 $off 之后没有『通道』行)"
-chk "SSDP 心跳通道" "$chan" "通道 multicast"
+chan_lines=$(tail -c +"$((off + 1))" "$LOG" 2>/dev/null | grep -o "通道 [a-z]*" | sort | uniq -c)
+multi=$(printf '%s\n' "$chan_lines" | awk '/通道 multicast/{print $1+0}')
+bcast=$(printf '%s\n' "$chan_lines" | awk '/通道 broadcast/{print $1+0}')
+# 判据问的是「组播这条路活着没有」，不是「最后一行恰好是组播」：本机 5 块网卡（Tailscale、
+# 虚拟机网桥）上 NOTIFY 每轮按网卡轮换，只取 tail -1 等于抛硬币——2.3.23 就这样假失败过一次。
+say "INFO 通道分布: multicast=${multi:-0} broadcast=${bcast:-0}"
+if [ "${multi:-0}" -gt 0 ]; then
+  say "PASS SSDP 心跳通道（窗口内出现 multicast ${multi} 次，另有 broadcast ${bcast:-0} 次回退）"
+else
+  say "FAIL SSDP 心跳通道: 窗口内一次 multicast 都没有（$(printf '%s' "$chan_lines" | tr '\n' ' ')）"
+  fails=$((fails+1))
+fi
 
 chk "入站 description.xml" "$(curl -s --noproxy '*' -m 6 -o /dev/null -w '%{http_code}' "http://$ME:8080/description.xml")" "200"
 

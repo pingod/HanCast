@@ -23,7 +23,16 @@
 - **验证**：`cargo check` 通过（objc2 绑定的真实签名一并确认：`getNotificationSettingsWithCompletionHandler` 收 `NonNull<UNNotificationSettings>`，`UNNotificationSettings` **没有** `allowsNotifications`，要用 `alertSetting()`/`notificationCenterSetting()`）；`vue-tsc` + `vite build` 通过；`tools/verify-cast-ui.cjs` 23 条全绿。**本轮改动全是壳层 macOS 分支，前端与 Sidecar 一行没动**；真机是否弹横幅要等装完复验。
 - **顺带记下的两个真问题**：① **手动添加的设备在界面上没有移除入口**——`removeDevice` 只挂在投屏确认名单（`guard.ts`），「手动添加设备」弹窗只列「已记住的地址」不给删除，设备卡片的「管理」菜单只有 设为默认/重命名/隐藏；② 上一版漏判的原因是 harness 把 `notify()` 整个 stub 掉，它证明得了「五条失败出口都会调用」，**证明不了 OS 呈现**——这条写进 AGENTS.md 的判据口径。
 - **版本**：`npm run version:set -- 2.3.23` 刷 7 处；`generate_handler!` 因命令体变长移到 `lib.rs:1457-1525`，AGENTS.md 三处计数引用同步重锚。
-- **没闭合的口子**：① **本轮仍是「未证明能弹」的一版**——如果装完 `presented` 还是 0，日志会给出授权状态与 add 的错误原文，那时再决定是走签名身份（自签证书）还是把 macOS 侧定为「以窗口前置为准、系统通知只服务 Linux/Windows」；② Linux/Windows 两条路径仍未实测；③ 上面那个「手动设备无法从界面移除」本轮只记录未修。
+- **没闭合的口子**：① ~~本轮仍是「未证明能弹」的一版~~ → **装端复验已通过，见下面「装端落账」**；② Linux/Windows 两条路径仍未实测；③ 上面那个「手动设备无法从界面移除」本轮只记录未修。
+
+### v2.3.23 装端落账（2026-10-24 真机，macOS）
+
+- **产物与安装**：`HanCast_2.3.23_aarch64.dmg` 85,189,747 字节、sha256 `6248090a8d888a9e7295e8816985cbb15802c780dc1acfbe89cedccf189a2304`（tag run `40097544475` 的 macOS 产物，`hdiutil verify` 通过）；`tools/install-macos-artifact.sh` 从 **2.3.22 → 2.3.23**（旧包移到 `/tmp/HanCast_pre_2322_213833.app`，`Identifier=com.han.hancast`）。
+- **通知真的弹出来了——主线程那一改就是关键**。触发方式：本机起假渲染端（`127.0.0.1:18080`，描述文件给最小 UPnP + AVTransport，`POST /control` 一律 500 且 `sleep 3`），手动添加后点「投屏」，同时把焦点交给 Finder 让 HanCast 处于非前台。连拍 8 帧（每 0.7s 一张）里**第 3 帧（22:06:28）右上角横幅**标题「投屏失败」、正文 `HC-FakeTV-probe：HC-FakeTV-probe 的 DLNA 控制服务返回 HTTP 500：电视端的投屏服务可能已退出，请在电视上打开「多屏互动/无线投屏/DLNA」应用或重启电视后重试`。日志三行同时给出原因链：`requestAuthorization granted=true err=无错误对象` → `通知设置 authorizationStatus=authorized alert=开启 通知中心=开启` → `addNotificationRequest 已接受（id=hancast-cast-…）`。**identifier 唯一化也生效**（每轮 id 不同，不再互相顶掉）。
+- **判据更正（重要）**：`usernoted` 的 `record.presented` **不能当判据**——横幅明明弹了，那一列 7 条记录仍全是 0，而对照用的 `osascript display notification` 压根不在 `record` 表里。以后这条一律以**截图连拍**为准，别拿 sqlite 那列说事。
+- **窗口前置兜底单独验过**：22:02 那轮先点「关闭」把窗口收进托盘、再触发失败，5 秒后截图里窗口带着红条回到前台。两条路（通知横幅 / 窗口带回前台）各自独立可用；同时发生时（窗口收起 → 我们主动 `setFocus`）macOS 会因 App 变前台而不弹横幅，但用户照样看见原因。
+- **装端验收**：`tools/accept-macos-artifact.sh 2.3.23` → **86 PASS / 1 FAIL / 1 SKIP**。那条 FAIL 是**判据自身的问题**不是产品：它取窗口内 `tail -1` 的「通道 X」行并要求是 multicast，而本机 5 块网卡（Tailscale、虚拟机网桥）上 NOTIFY 每轮按网卡轮换，等于抛硬币——已改成「窗口内出现过 multicast 即通过，并打印 multicast/broadcast 分布」。SKIP 是 FFmpeg 下载源 900s 没跑完（线路太慢，非产品问题，需代理时导出 `HC_FFMPEG_PROXY`）。
+- **客厅那台电视**中途回到设备列表（之前是睡了，ICMP 也不通），本轮没有拿它做触发，用假设备保证确定性。取证用的假服务、探针设备（`manual_devices` 里那一条，已确认只动这一个键）与临时截图全部清理完毕。
 
 ---
 

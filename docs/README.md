@@ -23,7 +23,7 @@
 | 版本号从哪来、三平台打包（含 Arch 后处理与 Wayland 抓屏 helper）、产物验收（含 Linux 装端真机取证与装机验收）、发布顺序 | [构建与发布.md](构建与发布.md) | 975 |
 | `tools/` 里那堆脚本各验什么 | [../tools/README.md](../tools/README.md) | 236 |
 | 反爬为什么这么判、浏览器通道怎么取证 | [反爬实现取证与浏览器通道.md](反爬实现取证与浏览器通道.md) | 396 |
-| 每个版本改了什么 | [../CHANGELOG.md](../CHANGELOG.md) | 477 |
+| 每个版本改了什么 | [../CHANGELOG.md](../CHANGELOG.md) | 486 |
 
 ## 2. 推荐阅读路径
 
