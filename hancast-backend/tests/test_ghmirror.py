@@ -139,7 +139,12 @@ class FakeNet:
         if isinstance(doc, FakeResp):       # FFmpeg 那条路要的是流式响应，用例直接给对象
             return doc
         if isinstance(doc, dict):
-            return FakeResp(doc=doc)
+            # 两条路都得喂：`doc=` 给 `resp.json()`（更新检查走那条，commands.py:1012），
+            # body 给流式读（规则包索引 v2.3.20 起经 `_download` 逐块取字节再
+            # json.loads，jsplugins.py:63-92）。只塞 json() 的话流式侧拿到空字节，
+            # ValueError 会被当成「这条镜像路走不通」而多退一次直连——
+            # 桩坏了却看起来像被测代码坏了。
+            return FakeResp(doc=doc, body=json.dumps(doc).encode("utf-8"))
         return FakeResp(body=doc)
 
     def close(self):

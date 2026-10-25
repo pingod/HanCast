@@ -2,7 +2,7 @@
 
 > 本文档回答：HanCast 桌面端（Tauri 2 + Vue 3）的界面层是怎么搭起来的——窗口壳层、路由视图、组件与 Store 全量清单、真实数据流时序、样式与国际化机制、浏览器 mock 模式，以及写代码前必须知道的约束与坑。
 >
-> 最后校对：2026-10-24，对应版本 v2.3.23（`package.json:4`。引用行号与硬数字由 `tools/check-doc-freshness.py` 机械核对；本轮：MSIX/FFmpeg 弹窗相关引用重锚）
+> 最后校对：2026-10-25，对应版本 v2.3.24（`package.json:4`。引用行号与硬数字由 `tools/check-doc-freshness.py` 机械核对；本轮：MSIX/FFmpeg 弹窗相关引用重锚）
 
 术语约定：**Sidecar** = Python 后台进程（`hancast-backend/`，打包为 `hancast-sidecar`）；**壳层** = Rust/Tauri 层（`src-tauri/`）；**规则包** = JS 解析插件 zip；**声明式规则** = JSON 站点规则；**屏幕投屏** = screencast（把电脑屏幕投出去）；**接收投屏** = 本机作为 DLNA 渲染端被别的设备投；**投屏确认** = Device Guard；**后台参数** = `params.py` 可调项。
 

@@ -33,6 +33,40 @@ _NO_PROXY = {"http": "", "https": ""}
 _TRUE_TOKENS = {'1', 'true', 'yes', 'on'}
 _FALSE_TOKENS = {'0', 'false', 'no', 'off', ''}
 
+# ── 入站 SOAP 信封的容错 ──
+# 见 docs/故障排查.md §5.4：部分控制点（2026-10-25 现场抓到一例）会把
+# `<?xml version="1.0"?>` 前面垫一堆空格再发过来。XML 规范确实规定声明必须在
+# 文档最开头，libxml 也就严格地报 `XML declaration allowed only at the start of
+# the document`——但**前导空白与 BOM 不影响根元素解析**，为了它把整次投屏判成
+# HTTP 500（控制端只看到「投不上」）是我们自己的事：动作分发根本没走到，
+# Device Guard 的确认弹窗也就永远不会出现。
+# 所以这里只剔除**字节级前导垃圾**（空白 + UTF-8 BOM），正文一字节不动。
+_LEADING_JUNK = b" \t\r\n\x0b\x0c"
+_UTF8_BOM = b"\xef\xbb\xbf"
+
+
+def strip_soap_leading_junk(raw):
+    """剔除 SOAP 请求体的前导空白 / UTF-8 BOM，返回 (干净字节, 被剔掉的字节数)
+
+    开头的清理做成循环：`BOM → 空白 → BOM` 交替出现也能清干净（各家写法不一）。
+    只动开头，正文一字节不改。
+    """
+    if isinstance(raw, str):
+        original = raw.encode('utf-8', 'replace')
+    elif isinstance(raw, (bytes, bytearray)):
+        original = bytes(raw)
+    else:
+        original = b''
+    body = original
+    while True:
+        cleaned = body.lstrip(_LEADING_JUNK)
+        if cleaned.startswith(_UTF8_BOM):
+            cleaned = cleaned[len(_UTF8_BOM):]
+        if cleaned == body:
+            break
+        body = cleaned
+    return body, len(original) - len(body)
+
 
 class SoapFault(Exception):
     """按 UPnP 规范回 SOAP Fault，而不是让异常冒泡成 HTTP 500"""
@@ -587,7 +621,24 @@ class DLNAProtocol:
     def call(self, rawbody, caller_ip: str = None):
         """Processing requests from DLNA clients"""
         self._caller_ip = caller_ip
-        root = etree.fromstring(rawbody)[0][0]
+        # ── 入站信封容错（docs/故障排查.md §5.4）──
+        # 先剔前导空白/BOM，再把解析失败收成 SOAP Fault。此前 `etree.fromstring`
+        # 直接把 libxml 异常抛给 server.py 的 catch，用户侧只得到一次裸 HTTP 500
+        # （控制点显示「投屏失败」，我们日志里连是哪个设备发的都没有）。
+        body, junk_len = strip_soap_leading_junk(rawbody)
+        if junk_len:
+            logger.warning(
+                f"SOAP body from {caller_ip} 带 {junk_len} 字节前导空白/BOM，"
+                f"已剔除后继续处理（该控制点写法不合 XML 规范）")
+        try:
+            root = etree.fromstring(body)[0][0]
+        except Exception as e:
+            # UPnP 没有为「信封本身不合法」定义错误码。取最贴近的 402（参数无法
+            # 解析），并把解析器原文带进 errorDescription——控制点至少读得到原因。
+            logger.warning(
+                f"Unparseable SOAP envelope from {caller_ip}: {e} "
+                f"body={body[:200]!r}")
+            return self._build_fault(402, f'Unparseable SOAP envelope: {e}')
         param = {}
         for node in root:
             # 提取本地名 (去掉命名空间前缀)，与 XML 定义的 argument name 匹配

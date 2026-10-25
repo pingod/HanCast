@@ -1,6 +1,6 @@
 # Macast-Han 已知问题与解决方案
 
-**最后更新**: 2026-07-05
+**最后更新**: 2026-10-25
 
 ---
 
@@ -45,6 +45,23 @@
 - **平台**: 全平台
 - **问题**: 每个平台的窗口特效 API 不同
 - **解决**: 使用 tauri-plugin-vibrancy 抽象层
+
+### COMP-004: 入站 SOAP 信封带前导空白 → 投屏被回裸 HTTP 500
+- **平台**: 全平台（接收投屏侧）
+- **发现日期**: 2026-10-25
+- **状态**: 🟢 已解决（工作区，未发版）
+- **描述**: 某控制点把 `<?xml version="1.0"?>` 前面垫 16 个空格再 POST。libxml 严格按
+  XML 规范拒绝，`DLNAProtocol.call()` 当时的 `etree.fromstring` 没有 try，异常冒到
+  `server.py` 兜底 catch 回裸 500 —— 动作分发没走到，Device Guard 弹框也就没机会出现，
+  用户只看到「投不上」。
+- **取证要点**: lxml 该错误的**列号能反推报文形态**（列 = 声明真实起始列 + 5，
+  `line 1, column 22` 即前面正好 16 个字符）。当时 SOAP Action/Body 只在 debug 级、
+  面板默认 INFO，日志里既无来源 IP 也无 body，只能靠列号猜。
+- **解决方案**: 前导空白/BOM 剔除后继续处理（`dlna.py:48-68`、`dlna.py:628-632`）；
+  剔完仍不可解析的回 SOAP Fault 402（`dlna.py:633-641`）；兜底 catch 补 IP/Action/path/
+  body 前 200 字符的取证（`protocol/server.py:178-192`）。详见 docs/故障排查.md §5.4。
+- **验证方法**: `tests/test_dlna_soap_envelope_leniency.py`（12 项）+ 真起 DLNA server
+  喂现场报文，断言 `CurrentURI` 落到动作处理器。
 
 ---
 

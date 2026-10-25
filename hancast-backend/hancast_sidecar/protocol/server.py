@@ -137,6 +137,12 @@ class DLNAHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         """处理 POST 请求 (SOAP) — 委托给 DLNAProtocol.call() 处理"""
+        # 先在 try 外置好取证用的三个变量：异常分支的日志要点名「谁发的、
+        # 发的什么动作」，而它们在 try 内部才逐个赋值，不预置就得写 `'x' in dir()`
+        # 这种判存逻辑，读起来更费劲。
+        caller_ip = getattr(self, 'client_address', ('',))[0]
+        soap_action = ''
+        body = b''
         try:
             # 读取请求体（限制大小，防止恶意超大 body）
             content_length = int(self.headers.get('Content-Length', 0))
@@ -155,7 +161,6 @@ class DLNAHandler(BaseHTTPRequestHandler):
 
             # 委托给 command_handler 的 protocol 处理 SOAP
             if self.command_handler and hasattr(self.command_handler, 'protocol'):
-                caller_ip = self.client_address[0]
                 response = self.command_handler.protocol.call(body, caller_ip=caller_ip)
             else:
                 logger.warning("No protocol handler available for SOAP")
@@ -171,7 +176,19 @@ class DLNAHandler(BaseHTTPRequestHandler):
             self.wfile.write(response)
 
         except Exception as e:
-            logger.error(f"SOAP error: {e}")
+            # 兜底。畸形信封已在 DLNAProtocol.call() 里收成 SOAP Fault（§5.4），
+            # 走到这里说明是信封之外的意外：读流失败、协议层没就绪、响应写不出去。
+            #
+            # 这条日志必须自带取证：2026-10-25 现场出现过「投不上」，日志里只有
+            # 一句 `SOAP error: <lxml 原文>`——Action 和 Body 当时只落在 debug，
+            # 而面板默认 INFO（logs.tail_mb 那段），事后既不知道是哪个控制点发的、
+            # 也不知道它发了什么，只能拿报错的列号反推报文形态。
+            # 正文只截前 200 字符，不整段落盘（DIDL 里可能带 URL 与标题）。
+            preview = body[:200].decode('utf-8', errors='replace')
+            logger.error(
+                f"SOAP request failed from {caller_ip}: {e} "
+                f"[action={soap_action!r} path={self.path!r} "
+                f"bytes={len(body)} body_prefix={preview!r}]")
             self.send_error(500, str(e))
 
     def _handle_description(self):

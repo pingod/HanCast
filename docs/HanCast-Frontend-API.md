@@ -2,7 +2,7 @@
 
 > 回答一个问题：前端 `invoke()` 出去的每一条命令，究竟由壳层（Rust/Tauri）就地执行、还是转发给 Sidecar（Python 后台进程）；它的入参、返回结构、可能错误，以及 Sidecar 主动推给前端的事件分别是什么。
 >
-> 最后校对：2026-10-24，对应版本 v2.3.23（`package.json:4`。引用行号与硬数字由 `tools/check-doc-freshness.py` 机械核对；本轮：§6.7 补 macOS 通知日志落进同一份 hancast.log 的例外）
+> 最后校对：2026-10-25，对应版本 v2.3.24（`package.json:4`。引用行号与硬数字由 `tools/check-doc-freshness.py` 机械核对；本轮：`protocol/dlna.py:77-84` 因入站 SOAP 容错下移到 :111-118；上一轮：§6.7 补 macOS 通知日志落进同一份 hancast.log 的例外）
 
 ---
 
@@ -176,7 +176,7 @@ Sidecar 侧还有两条**前端调不到**的命令：`unhide_device`（`command
 
 | 命令名 | 前端封装 | 入参 | 返回 | 执行层 | 可能的错误 |
 | --- | --- | --- | --- | --- | --- |
-| `start_cast` | `startCast(deviceId, mediaUri, mimeType?)` `commands.ts:956` | `deviceId: string`、`mediaUri: string`、`mimeType?: string` | `void`；成功后 Sidecar 立即补发一条 `cast_state_changed`（`commands.py:500`、`:515`） | Sidecar | `Device not found: <device_id>`（`commands.py:442`）；`session.play()` 抛出的控制点异常原文（`ControlUrlUnavailable` / `RendererUnresponsive`，`protocol/dlna.py:77-84`）。本地文件路径会被 Sidecar 换成媒体服务器 HTTP 地址（`commands.py:446-448`） |
+| `start_cast` | `startCast(deviceId, mediaUri, mimeType?)` `commands.ts:956` | `deviceId: string`、`mediaUri: string`、`mimeType?: string` | `void`；成功后 Sidecar 立即补发一条 `cast_state_changed`（`commands.py:500`、`:515`） | Sidecar | `Device not found: <device_id>`（`commands.py:442`）；`session.play()` 抛出的控制点异常原文（`ControlUrlUnavailable` / `RendererUnresponsive`，`protocol/dlna.py:111-118`）。本地文件路径会被 Sidecar 换成媒体服务器 HTTP 地址（`commands.py:446-448`） |
 | `stop_cast` | `stopCast(deviceId?)` `commands.ts:977` | `deviceId?: string`（省略 = 停全部会话） | `{ ok: true, stopped: string[], control_failed: string[], reasons: Record<string,string> }`（`commands.py:503-504`） | Sidecar | 命令本身**不抛错**（幂等，先摘会话再发 SOAP Stop，`commands.py:475-504`）；「电视没收到 Stop」体现在 `control_failed` / `reasons` 里，不是异常 |
 | `pause_cast` | `pauseCast(deviceId?)` `commands.ts:982` | `deviceId?: string` | `void` | Sidecar | 通用；无会话时回落到主渲染器 `self.protocol.pause()`（`commands.py:519-525`） |
 | `resume_cast` | `resumeCast(deviceId?)` `commands.ts:987` | `deviceId?: string` | `void` | Sidecar | 通用；同上回落逻辑（`commands.py:527-533`） |
