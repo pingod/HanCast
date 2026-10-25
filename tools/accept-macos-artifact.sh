@@ -55,7 +55,7 @@ for gone in media/rules/bili.py media/rules/douyin.py media/bili_resolver.py rul
     say "PASS 产物里无 $gone"
   fi
   if git cat-file -e "$TAG:hancast-backend/hancast_sidecar/$gone" 2>/dev/null; then
-    say "FAIL $TAG 的 git 树里还有 $gone（提交漏了删除）"; fails=$((fails+1))
+    say "FAIL $TAG 的 git 树里还有 ${gone}（提交漏了删除）"; fails=$((fails+1))
   fi
 done
 
@@ -201,7 +201,7 @@ for cmd in plugin_check_updates plugin_pull; do
   if grep -q "\"$cmd\":" "$RES/commands.py"; then
     say "PASS $cmd 已注册"
   else
-    say "FAIL 命令表缺 $cmd（设置页的「检查规则包更新」必挂）"; fails=$((fails+1))
+    say "FAIL 命令表缺 ${cmd}（设置页的「检查规则包更新」必挂）"; fails=$((fails+1))
   fi
 done
 open -a HanCast
@@ -436,7 +436,7 @@ for cmd in ffmpeg_status ffmpeg_download_start ffmpeg_download_status; do
   if grep -q "\"$cmd\":" "$RES/commands.py"; then
     say "PASS $cmd 已注册"
   else
-    say "FAIL 命令表缺 $cmd（依赖弹窗在打包版里必挂）"; fails=$((fails+1))
+    say "FAIL 命令表缺 ${cmd}（依赖弹窗在打包版里必挂）"; fails=$((fails+1))
   fi
 done
 if grep -q 'def _get_base_path\|def _find_in_program_dir' "$RES/screencast/ffmpeg_manager.py"; then

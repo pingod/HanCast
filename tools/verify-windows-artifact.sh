@@ -74,7 +74,7 @@ REMOTE_OUT=$(ssh -o ConnectTimeout=10 "$WIN" \
 for rel in "${RELS[@]}"; do
   want=$(git show "$TAG:hancast-backend/hancast_sidecar/$rel" 2>/dev/null \
          | tr -d '\r' | shasum -a 256 | cut -d' ' -f1)
-  if [ -z "$want" ]; then say "SKIP $rel（$TAG 的 git 树里没有这个文件）"; continue; fi
+  if [ -z "$want" ]; then say "SKIP ${rel}（$TAG 的 git 树里没有这个文件）"; continue; fi
   got=$(printf '%s\n' "$REMOTE_OUT" | awk -v r="$rel" '$1==r{print $2; exit}')
   if [ "$got" = "$want" ]; then say "PASS $rel (${want:0:12})"
   else say "FAIL $rel: got '${got:-无输出}' want '${want:0:12}…'"; fails=$((fails+1)); fi
@@ -115,11 +115,11 @@ PRES=$(ssh -o ConnectTimeout=20 "$WIN" \
   "powershell -NoProfile -ExecutionPolicy Bypass -File $PS2_REMOTE" 2>&1 | tr -d '\r')
 check() {  # check <git树该有?> <label> <说明>
   local want="$1" label="$2" why="$3"
-  if [ "$want" != "1" ]; then say "SKIP $label（$TAG 还没有这项）"; return; fi
+  if [ "$want" != "1" ]; then say "SKIP ${label}（$TAG 还没有这项）"; return; fi
   if printf '%s\n' "$PRES" | grep -q "^FOUND $label\$"; then
     say "PASS 产物含 $label"
   else
-    say "FAIL 产物缺 $label（$why）"; fails=$((fails+1))
+    say "FAIL 产物缺 ${label}（${why}）"; fails=$((fails+1))
   fi
 }
 check "$NEED_JA3" 'curl_cffi' '指纹伪造在打包版里静默降级'

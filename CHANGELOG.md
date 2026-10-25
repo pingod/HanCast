@@ -24,7 +24,9 @@
 - **验证**：`pytest` 全量 **522 passed / 0 failed**（新增 `tests/test_dlna_soap_envelope_leniency.py` 12 项，含现场那一例；**tag 之后又补 2 项**——空 Body／非信封的 `IndexError` 路径、以及 Fault 自身必须可解析（`errorDescription` 带 lxml 原文的 `<` `&` `"`），见 `14 项` 的当前状态与本节末尾的「发布后补测」）；真起一台 DLNA server 端到端——现场报文 → HTTP 200 且 `CurrentURI` 落到动作处理器，废文 → 200 + Fault `402`，信封外意外 → 500 且日志带完整取证；`npx vue-tsc --noEmit` 与 `npm run build` 通过；`tools/verify-cast-ui.cjs` **23/23**；`tools/verify-params-ui.mjs`（先起 vite:5199）**ALL PASS**；`tools/build-rule-packs.py --check` 4 个包同步；`tools/audit-doc-refs.py` 3649 处引用可疑 0；`tools/check-doc-freshness.py` FAIL 0 / WARN 0。
 - **行号与硬数字**：`dlna.py` +51 行、`server.py` +17 行，全仓 **52 处**（44 个不同引用）`dlna.py|server.py:行号` 引用按 diff 映射换算重校（逐条回读内容自证，不是机械加偏移），其中含 3 处 `caller_ip` 因变量上移而手改。文档同轮补齐：[故障排查](docs/故障排查.md) **新增 §5.4** + 症状索引一行 + §11 关键字表三行；[架构总览](docs/架构总览.md) §5.3 补 Fault 出口一句；[投屏确认](docs/投屏确认.md) §2.2 图示与步骤 1。顺带校准此前**就已**过期的数字（非本轮引入）：架构总览模块行数表 6 行（params 338→402、ssdp 1264→1322、parser 159→163、share_resolver 830→805、rules/base 253→272、rules/declarative 281→289）、AGENTS.md 的 test 数 23→29 与 ffmpeg_manager 1156→1243、ffmpeg_deps 524→541、开发指南 `test_jsplugins` 747→746（既有 off-by-one）。
 - **版本**：`npm run version:set -- 2.3.24` 刷 7 处契约点；全仓 19 处校对戳同轮盖到 v2.3.24。
-- **没闭合的口子**：① **真机未复验**——本轮判据全是源码级 + 本机假控制点，客厅那台 TCL 与真实手机客户端没测；装端产物验收（`tools/install-macos-artifact.sh` + `accept-macos-artifact.sh` + 真投一次）要等 CI 产物到手，publish 前必须做完。② 现场那个控制点**是谁**仍未确认：Action/Body 的取证是这版才有的，旧日志里没有，所以只能确认「16 个前导空格」这一形态、不能点名设备。③ `tools/verify-params-ui.mjs` 的启动参数里没有 `--disable-gpu`/`--no-sandbox`，在受限环境（macOS 沙箱、CI 无显示）里 Chrome 会 `GPU process isn't usable. Goodbye.` 直接崩——本轮是用临时副本补这两个参数才跑通的，**没有改脚本本体**（改验收工具的启动条件属于放宽判据，该由人定）。④ 上一版遗留的「手动添加的设备在界面上没有移除入口」仍未修。
+- **装端验收（CI 产物本身，已做）**：`dmg` 从 draft Release 取回后先比对 **sha256 与 GitHub 声明的 `ca192f85…` 逐字节一致**、`hdiutil verify` CRC VALID（85,272,728 字节），再 `tools/install-macos-artifact.sh 2.3.24` 装进 `/Applications`（旧 2.3.23 自动移到 `/tmp/HanCast_pre_2323_*.app` 作回滚），最后 `tools/accept-macos-artifact.sh 2.3.24`：**85 PASS / 0 真 FAIL**。其中产物内 20 份 sidecar 源码的 sha256 逐个与仓库比对全中，含本轮两份——`protocol/dlna.py` `dfcd668ab262…`、`protocol/server.py` `6d3869cdadfe…`。
+- **入站容错在装好的产物上真验过**（不是只跑单测）：对 `127.0.0.1:8080` 发那条现场报文（**16 个前导空格** + `<?xml version="1.0"?>` + `GetTransportInfo`），回 **HTTP 200 且是 `GetTransportInfoResponse`、不含 Fault**，动作正常分发；日志同时落 `WARNING SOAP body from 127.0.0.1 带 16 字节前导空白/BOM，已剔除后继续处理`。对照组发纯废文 `not xml at all` → **HTTP 200 + `<s:Fault>` `errorCode=402`**（不再裸 500）+ `WARNING Unparseable SOAP envelope from 127.0.0.1: Start tag expected, '<' not found, line 1, column 1`。
+- **没闭合的口子**：① **真机（客厅电视 / 真实手机客户端）未复验**——上面验的是本机对打包产物打报文，TCL 与手机那端仍需实地投一次。② 现场那个控制点**是谁**仍未确认：Action/Body 的取证是这版才有的，旧日志里没有，所以只能确认「16 个前导空格」这一形态、不能点名设备。③ `tools/verify-params-ui.mjs` 的启动参数里没有 `--disable-gpu`/`--no-sandbox`，在受限环境（macOS 沙箱、CI 无显示）里 Chrome 会 `GPU process isn't usable. Goodbye.` 直接崩——本轮是用临时副本补这两个参数才跑通的，**没有改脚本本体**（改验收工具的启动条件属于放宽判据，该由人定）。④ 上一版遗留的「手动添加的设备在界面上没有移除入口」仍未修。
 
 ### v2.3.24 发布后补测（同一轮，不改产品代码）
 
@@ -39,6 +41,20 @@
 - **跳过没跑的两条判据（不是漏跑）**：`tools/verify-dlna-stop-chain.py` 要求**整体退出 HanCast** 且局域网里有一台在跑的 Windows renderer，
   会在用户使用中抢 8080；`tools/verify-ssdp-cast-gate.py` 会往局域网广播两台假设备、插进正在使用的设备列表。
   本轮没碰停止链路与 SSDP 准入，故不跑；两者都要在用户不在用时做。
+
+### v2.3.24 装端脚本的两处坑（本轮实测，已修）
+
+- **`install-macos-artifact.sh:64` 在 UTF-8 locale 下必崩**：原句 `echo "已安装: $OUT（原 …"` 里 `$OUT` 直接跟全角左括号，
+  bash 在 `zh_CN.UTF-8` / `en_US.UTF-8` 下会把 `（` 的字节吞进变量名，`set -u` 当场报 `OUT�: unbound variable`。
+  实测复现：`LANG=en_US.UTF-8 bash -c 'set -u; OUT=2.3.24; echo "…$OUT（…"'` → 该报错；`LC_ALL=C` 下反而不报（`LANG=""` 时 C locale 把多字节当独立字符）。
+  **危害不在崩本身**——它崩在 `mv`/`ditto` **之后**，包已经装好，只是尾部的 `codesign` 自检没跑到，容易被误读成「安装失败」。
+  修法：`$OUT` → `${OUT}`。同类隐患一并扫了 `tools/*.sh` + `scripts/*.sh`，共 **15 处**（`accept-macos-artifact.sh` 3、
+  `verify-linux-window-opacity.sh` 8、`verify-windows-artifact.sh` 4），全部改成 `${VAR}`。这些恰好都在**报 FAIL 的那一行**
+  上（`say "FAIL … $cmd（…"`），也就是说验收脚本会在最该出声的时候哑掉——与本轮那 15 处相比，`$OUT` 只是第一个被抓到的。
+- **`/Applications/HanCast.app` 的「不可写」是误报**：脚本 `[ ! -w "$APP" ]` 分支打
+  `FAIL … 当前用户不可写（root:wheel 遗留）… sudo chown -R`，但实测归属一直是 `pavia:staff drwxr-xr-x`，系统权限没问题——
+  是 agent 沙箱拦了工作区外写入（连 `sudo` 本身都 `Operation not permitted`）。**别照着那行提示去 `sudo chown`**，那会把归属改坏、
+  且下轮装包会重新变成需要提权。对策是以完整权限重跑脚本，而不是改归属。
 
 ---
 

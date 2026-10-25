@@ -22,7 +22,7 @@ MNT=$(hdiutil attach -nobrowse -readonly "$DMG" | awk '/\/Volumes\//{print $NF}'
 trap 'hdiutil detach "$MNT" -quiet 2>/dev/null || true' EXIT
 
 SRC=$(find "$MNT" -maxdepth 2 -name '*.app' -print -quit)
-[ -n "$SRC" ] || { echo "FAIL dmg 里找不到 .app（$MNT）"; exit 1; }
+[ -n "$SRC" ] || { echo "FAIL dmg 里找不到 .app（${MNT}）"; exit 1; }
 
 SRC_VER=$(plutil -extract CFBundleShortVersionString raw "$SRC/Contents/Info.plist")
 [ "$SRC_VER" = "$VER" ] || { echo "FAIL dmg 内版本 $SRC_VER ≠ 要求的 $VER"; exit 1; }
@@ -61,7 +61,7 @@ ditto "$SRC" "$APP"
 OUT=$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")
 OWNER=$(stat -f '%Su:%Sg' "$APP")
 # $ASIDE 是本次唯一回滚备份，下次装包时会被上面的循环清掉，别把它当长期备份
-echo "已安装: $OUT（原 $OLD_VER 移到 $ASIDE，归属 $OWNER）"
+echo "已安装: ${OUT}（原 $OLD_VER 移到 ${ASIDE}，归属 ${OWNER}）"
 [ "$OUT" = "$VER" ] || { echo "FAIL 安装后版本不符"; exit 1; }
 [ "$OWNER" = "$(id -un):staff" ] || echo "WARN 归属不是 $(id -un):staff，下次装包会要管理员授权"
 codesign -dvvv "$APP" 2>&1 | grep -E '^Identifier=|linker-signed' | head -2

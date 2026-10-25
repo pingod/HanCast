@@ -12,7 +12,7 @@
 # 「只有不透明窗口免疫」，所以判据只有一条：**扫完不该有透明行**。
 #
 # 用法：
-#   tools/verify-linux-window-opacity.sh              # 起 $HC_BIN，扫，量，收尾开回来
+#   tools/verify-linux-window-opacity.sh              # 起 ${HC_BIN}，扫，量，收尾开回来
 #   tools/verify-linux-window-opacity.sh --sweeps 5   # 多扫几轮（默认 3）
 #   tools/verify-linux-window-opacity.sh --max-pct 2  # 放宽阈值（默认 0%）
 #   tools/verify-linux-window-opacity.sh --workspace auto  # 挪到一个空 workspace 再量
@@ -159,13 +159,13 @@ fi
 # 先把**已在跑**的实例关掉：Tauri 带 single-instance 插件，第二个进程只会去聚焦旧窗口
 # 然后自己退出——旧窗口在别的工作区，几何就会读到那儿，判据量的是别人的桌面。
 if pgrep -f "^$HC_BIN\$" >/dev/null 2>&1; then
-  echo "先关掉已在跑的 $HC_BIN（single-instance 会让新进程只聚焦旧窗口）"
+  echo "先关掉已在跑的 ${HC_BIN}（single-instance 会让新进程只聚焦旧窗口）"
   stop_app
 fi
 if [ -n "$TARGET_WS" ]; then
   hyprctl dispatch "hl.dsp.focus({ workspace = $TARGET_WS })" >/dev/null 2>&1
   sleep 1.5
-  echo "切到 workspace $TARGET_WS（原 $ORIG_WS）"
+  echo "切到 workspace ${TARGET_WS}（原 ${ORIG_WS}）"
 fi
 launch first
 if ! read_geom; then
@@ -174,8 +174,8 @@ if ! read_geom; then
   fail_env "class=$HC_CLASS 未映射"
 fi
 [ -z "$TARGET_WS" ] || [ "$WS" = "$TARGET_WS" ] ||
-  fail_env "窗口落在 workspace $WS 而不是 $TARGET_WS，背景不干净（手动把工作区切过去再跑）"
-echo "窗口 $HC_CLASS @ $X,$Y ${W}x${H}（ws $WS，sweeps=$SWEEPS，上限 ${MAX_PCT}%）"
+  fail_env "窗口落在 workspace $WS 而不是 ${TARGET_WS}，背景不干净（手动把工作区切过去再跑）"
+echo "窗口 $HC_CLASS @ $X,$Y ${W}x${H}（ws ${WS}，sweeps=${SWEEPS}，上限 ${MAX_PCT}%）"
 
 worst=0
 for run in $(seq 1 "$SWEEPS"); do
@@ -183,7 +183,7 @@ for run in $(seq 1 "$SWEEPS"); do
   grim -g "$X,$Y ${W}x${H}" "$WORK/fg-$run.png" || fail_env "grim 抓窗口失败"
   stop_app
   if blocked="$(hypr_state overlap "$X" "$Y" "$W" "$H" "$WS" 2>/dev/null)"; then
-    fail_env "workspace $WS 上「$blocked」压着这块矩形，背景不是裸桌面（用 --workspace N 换到空工作区再量）"
+    fail_env "workspace $WS 上「${blocked}」压着这块矩形，背景不是裸桌面（用 --workspace N 换到空工作区再量）"
   fi
   grim -g "$X,$Y ${W}x${H}" "$WORK/bg-$run.png" || fail_env "grim 抓裸桌面失败"
   bad="$(WORK_FG="$WORK/fg-$run.raw" WORK_BG="$WORK/bg-$run.raw" measure "$run")" || fail_env "逐行比对失败"
