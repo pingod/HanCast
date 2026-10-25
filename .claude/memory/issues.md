@@ -49,7 +49,7 @@
 ### COMP-004: 入站 SOAP 信封带前导空白 → 投屏被回裸 HTTP 500
 - **平台**: 全平台（接收投屏侧）
 - **发现日期**: 2026-10-25
-- **状态**: 🟢 已解决（工作区，未发版）
+- **状态**: 🟢 已解决并发布（v2.3.24，2026-10-25）
 - **描述**: 某控制点把 `<?xml version="1.0"?>` 前面垫 16 个空格再 POST。libxml 严格按
   XML 规范拒绝，`DLNAProtocol.call()` 当时的 `etree.fromstring` 没有 try，异常冒到
   `server.py` 兜底 catch 回裸 500 —— 动作分发没走到，Device Guard 弹框也就没机会出现，
@@ -60,8 +60,13 @@
 - **解决方案**: 前导空白/BOM 剔除后继续处理（`dlna.py:48-68`、`dlna.py:628-632`）；
   剔完仍不可解析的回 SOAP Fault 402（`dlna.py:633-641`）；兜底 catch 补 IP/Action/path/
   body 前 200 字符的取证（`protocol/server.py:178-192`）。详见 docs/故障排查.md §5.4。
-- **验证方法**: `tests/test_dlna_soap_envelope_leniency.py`（12 项）+ 真起 DLNA server
-  喂现场报文，断言 `CurrentURI` 落到动作处理器。
+- **验证方法**: `tests/test_dlna_soap_envelope_leniency.py`（**14 项**，tag 后补了 2 项边界：
+  空 Body 的 `IndexError` 路径、Fault 自身必须可解析）+ 真起 DLNA server 喂现场报文，断言
+  `CurrentURI` 落到动作处理器；**发布后又对装好的产物真验一次**——对 `/Applications/HanCast.app`
+  的 2.3.24 打 16 前导空格报文回 200 + `GetTransportInfoResponse`（动作分发正常、日志落剔除告警），
+  纯废文回 200 + Fault `402`。
+- **发布**: tag `v2.3.24`（提交 `1cac337`），Release 已 publish：
+  https://github.com/pingod/HanCast/releases/tag/v2.3.24
 
 ---
 

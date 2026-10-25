@@ -8,7 +8,7 @@
 
 验证：媒体/主题 73 项、播控原 20 项及封面新增 1 项、真实 App 生命周期 2 项；类型检查及 Vite 构建通过。浏览器验 346×472 / 434×634 / 800×900、中英设置、日志/屏幕/控制器弹窗、解析/暂停/停止/清空（项目内置 mock，不是真机投屏）。未跑全量测试、未打三平台包、未提交或发布。界面截图在 `docs/images/ui-native-{light,dark}.png`。
 
-## 2026-10-25 发布轮：v2.3.24（tag 已打，CI 产物与 publish 待验）
+## 2026-10-25 发布轮：v2.3.24（已发布 ✅）
 
 用户授权：「以后你自己来管理这个项目，像版本、打 tag、changelog 等等都由你来定，不用等我授权」
 ——口径与三条边界写进 `decisions.md` **DEC-006**（跨 minor 先问、不许放宽验收判据、
@@ -37,6 +37,44 @@ publish 要装端验收）。
 待办：CI 产物到手后跑 `tools/install-macos-artifact.sh` + `accept-macos-artifact.sh` 并
 **真投一次**入站 SOAP 那条例外路径，才 `gh release edit v2.3.24 --draft=false`。
 本机 /Applications 仍是 2.3.23，装新版前现场仍会复现旧报错。
+
+### 收尾：CI、装端验收与 publish（已完成）
+
+- **CI run 40172640774 全绿**：macos-arm64 12m32s / linux-x64 19m14s / windows-x64 21m28s /
+  Resolve 5s / Upload to draft Release 19s。Linux 那条含 Arch `.pkg.tar.zst` 打包与容器内
+  `pacman -U` 实装冒烟。
+- **dmg 取回的坑**：85,272,728 字节走 GitHub 直连只有 ~22 KB/s；`gh release download` 拿到的是
+  **415 KB 的坏文件**（draft 资产的公开 URL 是 404，回的是错误页），`hdiutil verify` 直接不认。
+  正解：取 asset 签名 URL 后**分 12 段并发** `curl -r`（单连接限速约 22 KB/s，12 路并发约 10 分钟拉完），
+  拼接后 sha256 与 GitHub 声明 `ca192f85…` 逐字节一致、`hdiutil verify` CRC VALID 才算数。
+  教训：`gh release download` 对 **draft** 资产的失败态是「静默给个坏文件」，必须自己校验摘要。
+- **装端验收**：`install-macos-artifact.sh 2.3.24` → `accept-macos-artifact.sh 2.3.24`
+  **85 PASS / 0 真 FAIL**；产物内 20 份 sidecar 源码 sha256 与仓库逐个对齐（含本轮
+  `protocol/dlna.py` `dfcd668ab262…`、`protocol/server.py` `6d3869cdadfe…`）。
+  其中「FFmpeg 依赖实测」那条曾报 FAIL，根因是验收脚本自己 `osascript` 退 GUI 失败（见下），
+  绕开后单独跑探针：**四项全过**（检出系统 ffmpeg 9.0.2 且真能跑、托管目录落在临时 HOME 内不污染本机、
+  ffmpeg+ffprobe 两条齐、缺失时清单/安装命令/下载源齐全）。
+- **在装好的产物上真验容错**（不只有单测）：对 `127.0.0.1:8080` 发现场那条 16 前导空格报文
+  （`GetTransportInfo`）→ HTTP 200 + `GetTransportInfoResponse`、无 Fault、动作正常分发，
+  日志落 `WARNING SOAP body from 127.0.0.1 带 16 字节前导空白/BOM，已剔除后继续处理`；
+  对照组纯废文 `not xml at all` → HTTP 200 + `<s:Fault>` `errorCode=402`，不再是裸 500。
+- **已 publish**：`gh release edit v2.3.24 --draft=false` → https://github.com/pingod/HanCast/releases/tag/v2.3.24
+  （2026-10-25T12:12:33Z），10 项资产齐全，不带 token 的公开 URL 回 200。
+  Release 正文按用户可感知口径重写（修了什么 / 验证 / 已知限制），没照搬提交信息。
+
+### 两个脚本坑（已修，提交 `4eaa35d`）
+
+- **`install-macos-artifact.sh:64` 在 UTF-8 locale 下必崩**：`echo "已安装: $OUT（原 …"` 里变量紧跟
+  全角左括号，bash 把 `（` 的字节吞进变量名 → `set -u` 报 `OUT�: unbound variable`。
+  `LANG=en_US.UTF-8` / `zh_CN.UTF-8` 必现，`LC_ALL=C` 不报（本机 `LANG=""`，所以只在装包链路上现形）。
+  危害：崩在 `mv`/`ditto` **之后**，包其实装好了，只是尾部 `codesign` 自检没跑，容易被误读成「安装失败」。
+  修法 `$VAR` → `${VAR}`；顺带扫出同类隐患 **15 处**（`accept-macos-artifact.sh` 3、
+  `verify-linux-window-opacity.sh` 8、`verify-windows-artifact.sh` 4），全在
+  `say "FAIL … $cmd（…"` 这种**报 FAIL 的行**上——验收脚本会在最该出声时哑掉。
+- **「`/Applications/HanCast.app` 当前用户不可写（root:wheel 遗留）」是误报**：实测归属一直
+  `pavia:staff drwxr-xr-x`，是 agent 沙箱拦工作区外写入（连 `sudo` 都 `Operation not permitted`）。
+  **别照提示 `sudo chown`**，那会把归属改坏。
+
 ## 2026-10-25 续：投屏「投不上」——入站 SOAP 信封容错（未发版）
 
 用户报「客户端投屏投不上」。日志（`~/Library/Application Support/HanCast/logs/hancast.log`）
