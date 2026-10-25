@@ -130,3 +130,36 @@ class TestUnparseableBecomesFault:
         p, _ = protocol
         res = p.call(("junk" + DECL + ENVELOPE).encode(), caller_ip="10.0.0.1")
         assert b"Fault" in res
+
+    def test_合法XML但缺Body子节点_索引错误也收进Fault(self, protocol):
+        # `etree.fromstring(body)[0][0]` 的两个 `[0]` 在同一个 try 里：信封能解析
+        # 但里面没有子节点（空 Body、或压根不是信封）时抛的是 IndexError，
+        # 不是 lxml 语法错。放掉它就会又变回一次裸 HTTP 500。
+        p, _ = protocol
+        for raw in (
+            '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">'
+            '<s:Body/></s:Envelope>'.encode(),
+            b"<r/>",
+        ):
+            res = p.call(raw, caller_ip="192.168.1.99")
+            assert b"Fault" in res, raw
+            assert b"Unparseable SOAP envelope" in res
+
+
+class TestFaultStaysParseable:
+    """errorDescription 里塞的是 libxml 原文，含 `<` `"` `&`——不转义就产出一个
+    解析不了的 Fault，控制端连错误码都读不到，等于把 500 换成另一种哑失败。"""
+
+    def test_报错原文被转义(self, protocol):
+        from lxml import etree
+        p, _ = protocol
+        for raw in (
+            b'<notclosed attr="x>',
+            b"<root><a>&amp;</a><b>&loose</b></root>",
+            b"<?xml version='1.0'?><En\ndef<lope/>",
+        ):
+            res = p.call(raw, caller_ip="192.168.1.99")
+            root = etree.fromstring(res)         # Fault 自己解析不了就当场失败
+            code = root.find(".//{*}errorCode")
+            assert code is not None, res[:120]
+            assert code.text == "402"

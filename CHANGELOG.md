@@ -21,10 +21,24 @@
 - **改动二 · 畸形报文回 SOAP Fault**（`protocol/dlna.py:633-641`）：剔完仍解析不了的回 **Fault 402**（HTTP 仍 200，body 带 `errorCode`/`errorDescription`），控制端至少读得到原因，不再是个裸 500。402 是**最贴近的既有码**——UPnP 没为「信封本身不合法」单独定义错误码。`[0][0]` 也在 try 内，所以「能解析但缺 Body」这类 `IndexError` 一并收进 Fault。
 - **改动三 · 兜底日志自带取证**（`protocol/server.py:143,178-192`）：`caller_ip` 提到 `try` **之前**（原先它在 try 内部赋值，早期抛异常就是未定义）；兜底 ERROR 现在带上 **IP + `SOAPAction` + path + 字节数 + body 前 200 字符**。动机就是这一轮：Action/Body 当时只落在 debug，而面板默认 INFO（`logs.tail_mb`），事后既不知道是哪个控制点发的、也不知道它发了什么，只能拿列号反推。正文只截断打印、不整段落盘——DIDL 里可能带 URL 与标题。
 - **测试桩的一处坏**（`tests/test_ghmirror.py:134-146`）：`test_ghmirror.py` 三条用例（`test_index_taken_from_mirror` / `test_mirror_failure_falls_back_to_direct` / `test_off_means_no_mirror_request_at_all`）**自 v2.3.20 起就一直是红的**，与本轮投屏改动无关（stash 回基线复跑同样三条）。根因在桩不在产品：`FakeNet` 对 dict 路由只喂 `resp.json()`，而规则包索引那条路 v2.3.20 改经 `_download()` 逐块取字节再 `json.loads`（`jsplugins.py:63-92`）——桩给的是**空 body**，`ValueError` 被当成「镜像这条路走不通」而多退一次直连，`net.calls` 遂与预期不符。修法是 dict 路由同时带 `doc=`（更新检查那条路仍用 `.json()`，`commands.py:1012`）与真实 JSON 字节。
-- **验证**：`pytest` 全量 **522 passed / 0 failed**（新增 `tests/test_dlna_soap_envelope_leniency.py` 12 项，含现场那一例）；真起一台 DLNA server 端到端——现场报文 → HTTP 200 且 `CurrentURI` 落到动作处理器，废文 → 200 + Fault `402`，信封外意外 → 500 且日志带完整取证；`npx vue-tsc --noEmit` 与 `npm run build` 通过；`tools/verify-cast-ui.cjs` **23/23**；`tools/verify-params-ui.mjs`（先起 vite:5199）**ALL PASS**；`tools/build-rule-packs.py --check` 4 个包同步；`tools/audit-doc-refs.py` 3649 处引用可疑 0；`tools/check-doc-freshness.py` FAIL 0 / WARN 0。
+- **验证**：`pytest` 全量 **522 passed / 0 failed**（新增 `tests/test_dlna_soap_envelope_leniency.py` 12 项，含现场那一例；**tag 之后又补 2 项**——空 Body／非信封的 `IndexError` 路径、以及 Fault 自身必须可解析（`errorDescription` 带 lxml 原文的 `<` `&` `"`），见 `14 项` 的当前状态与本节末尾的「发布后补测」）；真起一台 DLNA server 端到端——现场报文 → HTTP 200 且 `CurrentURI` 落到动作处理器，废文 → 200 + Fault `402`，信封外意外 → 500 且日志带完整取证；`npx vue-tsc --noEmit` 与 `npm run build` 通过；`tools/verify-cast-ui.cjs` **23/23**；`tools/verify-params-ui.mjs`（先起 vite:5199）**ALL PASS**；`tools/build-rule-packs.py --check` 4 个包同步；`tools/audit-doc-refs.py` 3649 处引用可疑 0；`tools/check-doc-freshness.py` FAIL 0 / WARN 0。
 - **行号与硬数字**：`dlna.py` +51 行、`server.py` +17 行，全仓 **52 处**（44 个不同引用）`dlna.py|server.py:行号` 引用按 diff 映射换算重校（逐条回读内容自证，不是机械加偏移），其中含 3 处 `caller_ip` 因变量上移而手改。文档同轮补齐：[故障排查](docs/故障排查.md) **新增 §5.4** + 症状索引一行 + §11 关键字表三行；[架构总览](docs/架构总览.md) §5.3 补 Fault 出口一句；[投屏确认](docs/投屏确认.md) §2.2 图示与步骤 1。顺带校准此前**就已**过期的数字（非本轮引入）：架构总览模块行数表 6 行（params 338→402、ssdp 1264→1322、parser 159→163、share_resolver 830→805、rules/base 253→272、rules/declarative 281→289）、AGENTS.md 的 test 数 23→29 与 ffmpeg_manager 1156→1243、ffmpeg_deps 524→541、开发指南 `test_jsplugins` 747→746（既有 off-by-one）。
 - **版本**：`npm run version:set -- 2.3.24` 刷 7 处契约点；全仓 19 处校对戳同轮盖到 v2.3.24。
 - **没闭合的口子**：① **真机未复验**——本轮判据全是源码级 + 本机假控制点，客厅那台 TCL 与真实手机客户端没测；装端产物验收（`tools/install-macos-artifact.sh` + `accept-macos-artifact.sh` + 真投一次）要等 CI 产物到手，publish 前必须做完。② 现场那个控制点**是谁**仍未确认：Action/Body 的取证是这版才有的，旧日志里没有，所以只能确认「16 个前导空格」这一形态、不能点名设备。③ `tools/verify-params-ui.mjs` 的启动参数里没有 `--disable-gpu`/`--no-sandbox`，在受限环境（macOS 沙箱、CI 无显示）里 Chrome 会 `GPU process isn't usable. Goodbye.` 直接崩——本轮是用临时副本补这两个参数才跑通的，**没有改脚本本体**（改验收工具的启动条件属于放宽判据，该由人定）。④ 上一版遗留的「手动添加的设备在界面上没有移除入口」仍未修。
+
+### v2.3.24 发布后补测（同一轮，不改产品代码）
+
+- **补了什么**：`tests/test_dlna_soap_envelope_leniency.py` 由 12 项增至 **14 项**、132 行增至 165 行。两条都是对本轮新代码的边界验证：
+  ① `etree.fromstring(body)[0][0]` 的两个 `[0]` 已并入同一个 try——空 Body 或压根不是信封时抛的是 `IndexError` 而非 lxml 语法错，
+  漏掉它就等于把「500」换成另一种哑失败；② `errorDescription` 里塞的是 libxml 原文（含 `<`、`"`、`&`），
+  **不转义就会产出一个解析不了的 Fault**，控制端连 errorCode 都读不到。四种畸形 body 实测 Fault 自身可解析、`errorCode=402`。
+- **重跑全量**：`pytest` **524 passed / 0 failed**（tag 时刻是 522，差的就是新增那 2 项）。两道文档闸门复跑同样绿。
+- **为什么 tag 不动**：这两项只加测试，**产品代码一行未改**，所以 tag `v2.3.24` 的 CI 产物内容一致，无需重打 tag 烧版本号。
+  因此本节的「12 项」指的是 tag 时刻的提交，当前 main 上是 14 项——这个数字差是刻意的，别把它抹平。
+- **同步校准**：开发指南 §5.1 测试表该文件行数 132→165，全目录合计 8893→**8931 行**（32 个文件不变）。
+- **跳过没跑的两条判据（不是漏跑）**：`tools/verify-dlna-stop-chain.py` 要求**整体退出 HanCast** 且局域网里有一台在跑的 Windows renderer，
+  会在用户使用中抢 8080；`tools/verify-ssdp-cast-gate.py` 会往局域网广播两台假设备、插进正在使用的设备列表。
+  本轮没碰停止链路与 SSDP 准入，故不跑；两者都要在用户不在用时做。
 
 ---
 
