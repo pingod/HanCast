@@ -22,7 +22,12 @@
 - **改动**（`media/server.py`、`media/share_resolver.py`、`models/session.py`）：① `player_ext_ok()` 后缀白名单扩为「HLS 分片 + 交付直链」同一把尺子（无后缀算不合格）；② `player_safe_suffix(url, mime="")` 按 MIME 给代理路径补合规后缀（未知类型兜 `.ts`，字节仍上游原样）；③ `_tv_can_fetch()` 末尾加**后缀门**——不合格的改走本机代理（例外：正文是播放列表却没被 `_playlist_mime` 认出的脏 MIME 维持直链，避免把列表骗成视频文件）；④ 顺带修 `models/session.py` 的 `play()` 丢掉 `mime_type` 的老问题（媒体投屏的 `CurrentURIMetaData` 此前恒为空串）。
 - **验证**：新增 `tests/test_tv_url_suffix.py`；`pytest tests/test_tv_url_suffix.py tests/test_share_resolver.py` **81 passed**，后端全量 **543 passed / 0 failed**。真机端到端：真起 `MediaServer` + 真 `ShareResolver` 解析现场文案 → 交付 `http://192.168.1.5:55819/proxy/…mp4`（日志 `直链路径没有播放器可识别的后缀…改走本机代理`）→ 裸 SOAP 投 TCL → `Proxy response: status=206`、`Proxy done: 29646593 bytes forwarded`、电视 `Dur=00:04:55` 且 `AbsTime` 1→13 秒前进 ⇒ **投得动了**。
 - **文档**：[故障排查](docs/故障排查.md) 新增 §5.5（含被证伪假设与判据）+ §11 关键字两行；[分享解析规则](docs/分享解析规则.md) §1 补后缀门一句；[架构总览](docs/架构总览.md) 行数表 3 行 + 全仓 `media/server.py|share_resolver.py|session.py:行号` 引用按 diff 映射重校 15 处；两道文档闸门绿（audit 3735 处可疑 0、freshness FAIL 0/WARN 0）。
-- **待办**：发布轮再做 bump 版本（`npm run version:set`）、打 tag、重建装机（`/Applications` 仍是 2.3.24，未重装）；本次改动仅在工作区。
+- **发布**：`npm run version:set -- 2.4.0` 刷 7 处契约点；提交 `64a815c`；tag `v2.4.0`；CI run **40650382734**（macos-arm64 首次因 GitHub 托管 runner 容量排队超时被取消，重跑 `--job` 后成功；windows-x64 / linux-x64 均绿）。
+- **装端验收（CI 产物本身，已做，三平台）**：
+  - **macOS**：`dmg` 取回后 sha256 与 GitHub 声明 `e5ac4c1d…` 逐字节一致（85,202,584 字节；draft 资产必须走 API + token 取签名 URL，`gh release download` 对 draft 会静默给坏文件）。`tools/install-macos-artifact.sh 2.4.0` 装进 `/Applications`（旧 2.4.0 之外的 2.3.24 移到 `/tmp` 作回滚）。`tools/accept-macos-artifact.sh 2.4.0` → **85 PASS / 0 真 FAIL**；唯一 FAIL 是「旧 sidecar 未退出，跳过 FFmpeg 依赖实测」——沙箱里 `osascript` 被 -10004 拦、退不掉 GUI，属环境限制非产品问题，该缺口用自写临时 HOME 探针手补：`ffmpeg_status{refresh}` 回 `ok=True source=system path=/opt/homebrew/bin/ffmpeg version=ffmpeg 9.0.2`、托管目录落在临时 HOME 内。产物内 `media/server.py` sha256 = `be41bb3c7d9d…` 与仓库逐字节一致，`player_safe_suffix`/`player_ext_ok` 4 处关键字俱在（TCL 后缀门修复确已进包）。
+  - **Linux（CachyOS 192.168.1.68）**：Arch 包 `hancast-2.4.0-1-x86_64.pkg.tar.zst` sha256 `96cafdef…` 两端一致；`sudo pacman -U` 装机后 `pacman -Q hancast` = **2.4.0-1**，`hancast_sidecar/utils/config.py` 的 `self.version = "2.4.0"`。
+  - **功能实测（装好的 macOS 产物）**：`list_folder_media`（后端命令名 `path` 参数）对含 `第1集/第2集/第10集/花絮.mkv/readme.txt` 的目录返回自然序 **第1集→第2集→第10集→花絮.mkv**、跳过 `readme.txt`、mime 分别 `video/mp4`/`video/x-matroska` ⇒ 文件夹投屏 + 队列排序链路通。
+- **未闭合**：Windows（192.168.1.68 之外的 Windows 那台 `Host win`，现 2.3.15）待机器上线再装；现场那个「投不上」的 TCL 仍需用户在电视端真投一次确认可播（本轮只验到代码级 + 后端命令级）。
 
 ---
 
