@@ -2,7 +2,7 @@
 
 > 回答一个问题：前端 `invoke()` 出去的每一条命令，究竟由壳层（Rust/Tauri）就地执行、还是转发给 Sidecar（Python 后台进程）；它的入参、返回结构、可能错误，以及 Sidecar 主动推给前端的事件分别是什么。
 >
-> 最后校对：2026-10-25，对应版本 v2.3.24（`package.json:4`。引用行号与硬数字由 `tools/check-doc-freshness.py` 机械核对；本轮：`protocol/dlna.py:77-84` 因入站 SOAP 容错下移到 :111-118；上一轮：§6.7 补 macOS 通知日志落进同一份 hancast.log 的例外）
+> 最后校对：2026-10-25，对应版本 v2.3.24（`package.json:4`。本轮（2026-10-28）：投 TCL 电视「投不上」——渲染端只认 URL 后缀，交付直链加后缀门改走代理补后缀（docs/故障排查.md §5.5），顺带修 models/session.py 丢 mime_type；media/server.py、media/share_resolver.py、models/session.py 行号按实测重校。 （`package.json:4`。引用行号与硬数字由 `tools/check-doc-freshness.py` 机械核对；上一轮：`protocol/dlna.py:77-84` 因入站 SOAP 容错下移到 :111-118；上一轮：§6.7 补 macOS 通知日志落进同一份 hancast.log 的例外）
 
 ---
 
@@ -182,13 +182,13 @@ Sidecar 侧还有两条**前端调不到**的命令：`unhide_device`（`command
 | `resume_cast` | `resumeCast(deviceId?)` `commands.ts:987` | `deviceId?: string` | `void` | Sidecar | 通用；同上回落逻辑（`commands.py:527-533`） |
 | `seek_cast` | `seekCast(position, deviceId?)` `commands.ts:992` | `position: string`（`HH:MM:SS`）、`deviceId?: string` | `void` | Sidecar | 通用（`Missing field: 'position'`） |
 | `get_cast_state` | `getCastState(deviceId?)` `commands.ts:997` | `deviceId?: string` | **两种形状**：带 `deviceId` → `CastState`；不带 → `{ sessions: Record<deviceId, CastState>, current: CastState }`（`commands.py:543-551`） | Sidecar | 通用 |
-| `get_cast_url` | `getCastUrl(deviceId?)` `commands.ts:1002` | `deviceId?: string` | **两种形状**：带 `deviceId` → `{device_id, device_name, url, title, duration, position, status, cast_state}`（`session.py:128-143`，`status` 小写）；不带 → `{url, title, duration, position, status}`（`commands.py:563-569`，`status` 是 DLNA 大写 `PLAYING`/`STOPPED`） | Sidecar | 通用 |
+| `get_cast_url` | `getCastUrl(deviceId?)` `commands.ts:1002` | `deviceId?: string` | **两种形状**：带 `deviceId` → `{device_id, device_name, url, title, duration, position, status, cast_state}`（`session.py:137-152`，`status` 小写）；不带 → `{url, title, duration, position, status}`（`commands.py:563-569`，`status` 是 DLNA 大写 `PLAYING`/`STOPPED`） | Sidecar | 通用 |
 | `set_volume` | `setVolume(volume, deviceId?)` `commands.ts:1007` | `volume: number`（u32）、`deviceId?: string` | `number`（壳层 `as_u64()` 兜底回入参值，`lib.rs:528-530`） | Sidecar | 通用 |
 | `set_mute` | `setMute(muted, deviceId?)` `commands.ts:1012` | `muted: boolean`、`deviceId?: string` | `void` | Sidecar | 通用 |
 
 壳层定义：`lib.rs:430-549`。Sidecar 处理函数：`commands.py:441-589`。
 
-多设备语义：每个设备一个 `DeviceCastSession`（`models/session.py:14-26`），会话内 1 秒轮询一次进度（`session.py:214-299`）；连续 10 次轮询失败即视为掉线（`session.py:25`，`POLL_FAIL_LIMIT`）。前端 `stores/cast.ts` 另有自己的 1 秒轮询（`cast.ts:193-251`），两条轮询链路并存。
+多设备语义：每个设备一个 `DeviceCastSession`（`models/session.py:14-26`），会话内 1 秒轮询一次进度（`session.py:223-307`）；连续 10 次轮询失败即视为掉线（`session.py:25`，`POLL_FAIL_LIMIT`）。前端 `stores/cast.ts` 另有自己的 1 秒轮询（`cast.ts:193-251`），两条轮询链路并存。
 
 壳层自己也在**每秒调一次 `get_cast_url`**（不带 `deviceId`），只为刷新托盘菜单「复制当前投屏地址」项（`lib.rs:1249-1303`）。这条流量不经过前端封装。
 
@@ -769,7 +769,7 @@ async function toggleAutostart() {
 
 前端封装签名是 `getCastState(deviceId?): Promise<CastState>`（`commands.ts:997`），但省略 `deviceId` 时后端返回 `{sessions, current}`（`commands.py:548-551`）。`stores/cast.ts:193` 只能 `as any` 绕开类型系统再手工解构。
 
-同类问题：`get_cast_url` 的 `status` 大小写随分支变化 —— 带 `deviceId` 走 `session.get_cast_info()` 返回小写（`session.py:141`），不带则返回 DLNA 原生大写（`commands.py:568`）。前端用 `info.status.toUpperCase()` + 映射表统一（`cast.ts:196-208`）。
+同类问题：`get_cast_url` 的 `status` 大小写随分支变化 —— 带 `deviceId` 走 `session.get_cast_info()` 返回小写（`session.py:150`），不带则返回 DLNA 原生大写（`commands.py:568`）。前端用 `info.status.toUpperCase()` + 映射表统一（`cast.ts:196-208`）。
 
 ### 6.5 `ScreenCastState` 缺 `pull`
 

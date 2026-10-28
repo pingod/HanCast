@@ -2,11 +2,21 @@
 
 ## 当前阶段：v2.3.19 工作区前端优化（尚未发布）
 
-**最后更新**: 2026-10-24
+**最后更新**: 2026-10-28
 
 本轮已安全拉取 `origin/feat/js-rule-plugins`，远端无新增，本地比 `origin/main` 多 5 笔既有提交。用户确认“克制精致的原生工具”风格：统一紫色亮暗主题、媒体/设备卡片、设置分组、弹窗边界及键盘操作；保持 Linux 不透明策略。修复解析结果竞态、App 路由切换丢失投屏监听、迟到监听清理、主题缓存、播控错误吞掉、进度锁定/旧轮询回写、视频被当图片加载；去掉无功能的多房同步装饰。
 
 验证：媒体/主题 73 项、播控原 20 项及封面新增 1 项、真实 App 生命周期 2 项；类型检查及 Vite 构建通过。浏览器验 346×472 / 434×634 / 800×900、中英设置、日志/屏幕/控制器弹窗、解析/暂停/停止/清空（项目内置 mock，不是真机投屏）。未跑全量测试、未打三平台包、未提交或发布。界面截图在 `docs/images/ui-native-{light,dark}.png`。
+
+## 2026-10-28 续：投 TCL 电视「投不上」——渲染端只认 URL 后缀（工作区，未发版）
+
+用户反馈：抖音分享文案 `https://v.douyin.com/cAS0o-smMyw/` 解析后投 TCL 电视没反应，投另一台 Linux 的 HanCast 正常。定位到根因不是网络/格式，而是**这台 TCL 85T8G Max 只按 URL 路径末尾扩展名决定要不要发起拉流**——无后缀连一次 GET 都不发。抖音 CDN 直链 `…/tos-cn-ve-15/<hash>/`（斜杠结尾、无后缀）永远不被拉；B 站直链带 `.mp4` 一直正常；mpv 接收端不看后缀所以 Linux 那台也能播。
+
+改动：`media/server.py` 的 `player_ext_ok` / `player_safe_suffix(url, mime="")`、`media/share_resolver.py` 的 `_tv_can_fetch` 末尾后缀门、`models/session.py` `play()` 保留 `mime_type`。新增 `tests/test_tv_url_suffix.py`，相关 81 passed，后端全量 **543 passed / 0 failed**。真机端到端：真起 MediaServer+ShareResolver 解析现场文案 → 交付 `/proxy/…mp4` → 投 TCL → status=206、电视 `Dur=00:04:55` 且 `AbsTime` 前进 ⇒ 修好了。
+
+文档/记忆同轮：故障排查 §5.5 + §11 两行、分享解析规则 §1、架构总览行数表 3 行、全仓 15 处 `media/server.py|share_resolver.py|session.py:行号` 重校；7 份文档校对戳补本轮说明；CHANGELOG 加「未发布 — 2026-10-28」节；issues.md 新增 COMP-005。两道闸门绿（audit 3735 可疑 0、freshness FAIL 0/WARN 0）。
+
+未做：未 bump 版本、未打 tag、未重装 `/Applications`（仍是 2.3.24）→ 发布轮再走。Windows 那台装 2.3.24 的任务（m01252）此前被这个新问题打断，分块下载仍在 `/tmp/chunks_keep`，未完成。
 
 ## 2026-10-25 发布轮：v2.3.24（已发布 ✅）
 

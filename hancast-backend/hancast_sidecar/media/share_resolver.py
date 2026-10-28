@@ -479,7 +479,7 @@ class ShareResolver:
         if extra_headers:
             headers = {**headers, **{str(k): str(v)
                                      for k, v in extra_headers.items()}}
-        suffix = ".m3u8" if _playlist_mime(mime, uri) else player_safe_suffix(uri)
+        suffix = ".m3u8" if _playlist_mime(mime, uri) else player_safe_suffix(uri, mime)
         proxied = self.media_server.register_proxy(uri, headers, suffix)
         logger.info(f"直链需要页面请求头，改走本机代理: {uri[:80]}")
         return proxied, mime, via + "+proxy"
@@ -505,6 +505,15 @@ class ShareResolver:
                     return False
                 h2, c2, s2 = self._peek(seg_url, deadline, use_range=False)
                 return self._media_ok(s2, c2, h2)
+        # 本机拉得到 ≠ 电视肯拉：只按后缀决定要不要发起 GET 的渲染端（TCL 85T8G Max
+        # 实测）对无后缀直链一次连接都不发，DIDL 的 protocolInfo 也劝不动它。
+        # 这类地址一律改走本机代理——代理能给路径补上合规后缀（见 player_safe_suffix）。
+        # 例外：正文是播放列表却没被 _playlist_mime 认出来的（站点报脏 MIME）。走代理
+        # 会被 `_publish` 那侧按非列表补成 .mp4/.ts 后缀，反而把列表骗成视频文件，
+        # 不如维持原样直链交付（这台电视本来也不碰它，不比现状更坏）。
+        if not player_ext_ok(url) and b"#EXTM3U" not in head[:512]:
+            logger.info(f"直链路径没有播放器可识别的后缀（{url[-60:]}），改走本机代理")
+            return False
         return True
 
     def _peek(self, url: str, deadline: float,

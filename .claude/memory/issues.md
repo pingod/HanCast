@@ -1,6 +1,6 @@
 # Macast-Han 已知问题与解决方案
 
-**最后更新**: 2026-10-25
+**最后更新**: 2026-10-28
 
 ---
 
@@ -94,6 +94,32 @@
   - 文档说明
 
 ---
+
+### COMP-005: TCL 电视只按 URL 后缀决定拉不拉流 → 无后缀直链「投不上」
+- **平台**: 全平台（发出投屏侧；接收端 = 只认后缀的渲染器，实测 TCL 85T8G Max）
+- **发现日期**: 2026-10-28
+- **状态**: 🟡 工作区已修，**未发版**（未 bump 版本 / 未打 tag / 未重装 `/Applications`）
+- **描述**: 抖音分享文案解析出直链、`Created cast session` 也打了，但 TCL 电视一次画面都没有；
+  同一时刻投给局域网另一台 Linux HanCast（mpv 接收端）能正常播。全程 0 ERROR/WARNING——
+  因为旧的出站 `_send_action` 成功只打 debug 级，面板默认 INFO 看不到。
+- **根因**: 这台 TCL **完全无视 DIDL 的 `protocolInfo`，只按 URL 路径末尾的扩展名决定要不要发起拉流**；
+  无后缀就连一次 GET 都不发。抖音 CDN 直链是 `…/video/tos/cn/tos-cn-ve-15/<hash>/`（末尾斜杠、无后缀）。
+  B 站直链带 `.mp4` 所以正常；Linux 那台 mpv 不看后缀所以也能播。
+- **取证要点（真机矩阵，判据 = 服务端有没有出现电视的 GET）**: 本机可控信源同字节 MP4 对比——
+  `/ext/test.mp4`、`/ext/test.mp4?vid=1`、`/proxy/a1b2c3.mp4`、MP4 字节挂 `/proxy/a1b2c3.ts` 都能拉；
+  同字节 `/noext/stream?vid=1` 带满 DIDL **零连接**。被证伪并排除：**不是 IPv6**（本机 IPv6-only 服务电视用
+  GUA 正常拉）、**不是空 DIDL**。⚠️ 同一条抖音签名地址反复投喂约 10 次后被 CDN 判废，读数作废——
+  排障必须换可控信源、一次只动一个变量。
+- **解决方案**: `player_ext_ok()` 后缀白名单扩为「分片 + 交付直链」同一把尺（无后缀算不合格）；
+  `player_safe_suffix(url, mime="")` 按 MIME 给代理路径补后缀（未知兜 `.ts`，字节仍上游原样）；
+  `_tv_can_fetch()` 末尾加后缀门，不合格改走本机代理（脏 MIME 的播放列表例外，维持直链）；
+  顺带修 `models/session.py` `play()` 丢 `mime_type`（媒体投屏 `CurrentURIMetaData` 此前恒为空）。
+  详见 docs/故障排查.md §5.5。
+- **验证方法**: `tests/test_tv_url_suffix.py`；`pytest tests/test_tv_url_suffix.py tests/test_share_resolver.py`
+  **81 passed**，后端全量 **543 passed / 0 failed**；真机端到端——真起 MediaServer + 真 ShareResolver 解析
+  现场文案 → 交付 `http://192.168.1.5:<port>/proxy/…mp4` → 裸 SOAP 投 TCL → `Proxy response: status=206`、
+  电视 `Dur=00:04:55` 且 `AbsTime` 1→13 秒前进 ⇒ 投得动了。
+- **待办（发布轮）**: `npm run version:set` bump、打 tag、重建装机，CHANGELOG 已留「未发布 — 2026-10-28」节。
 
 ## 解决方案模板
 

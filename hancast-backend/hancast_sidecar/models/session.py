@@ -5,7 +5,7 @@ import threading
 import logging
 from typing import Optional, Callable, Any
 from .cast import CastState
-from ..protocol.dlna import DLNAProtocol
+from ..protocol.dlna import DLNAProtocol, build_didl_item
 from .device import Device
 
 logger = logging.getLogger("hancast.session")
@@ -66,6 +66,15 @@ class DeviceCastSession:
         # 如果是本地文件，通过媒体服务器提供 HTTP 访问
         if not media_uri.startswith("http"):
             media_uri = self.media_server.serve_file(media_uri)
+
+        # `mime_type` 传进来就断了是 2026-10-28 查出的口子：`_start_cast` 收了前端
+        # 的 mimeType，这里却只把 metadata 透给协议层，而媒体投屏这条路径没人构造
+        # metadata ⇒ 电视收到的 CurrentURIMetaData 恒为空串，只能靠自己猜类型。
+        # 图片保持原样（build_didl_item 写死 object.item.videoItem，别给图片下发错类）。
+        if not metadata and mime_type and not mime_type.startswith("image/"):
+            media = getattr(self.cast_state, "media", None)
+            metadata = build_didl_item(
+                media_uri, mime_type, getattr(media, "title", "") or "HanCast")
 
         self.protocol.play(media_uri, metadata)
         position = self.protocol.get_state_position() or "00:00:00"

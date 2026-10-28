@@ -11,7 +11,18 @@
 
 ---
 
-## v2.3.24 — 2026-10-25（本轮发布提交）
+## 未发布 — 2026-10-28（工作区，尚未 bump 版本 / 打 tag）
+
+**修：本机解析成功、投 TCL 电视「点了没反应」，投另一台 Linux 的 HanCast 正常**（现场：抖音分享文案 `https://v.douyin.com/cAS0o-smMyw/`）。
+
+- **根因**：这台 **TCL 85T8G Max** 完全无视 DIDL 的 `protocolInfo`，**只按 URL 路径末尾的扩展名决定要不要发起拉流**——无后缀就连一次 GET 都不发，界面表现为「投不上」。抖音 CDN 直链正是 `…/video/tos/cn/tos-cn-ve-15/<hash>/`（末尾斜杠、无后缀）。B 站直链带 `.mp4` 所以一直正常，Linux 那台用 mpv 不看后缀所以也能播。
+- **真机矩阵锤定**（判据 = 服务端有没有出现电视的 GET，用本机可控信源同字节 MP4 对比）：`/ext/test.mp4`、`/ext/test.mp4?vid=1`、`/proxy/a1b2c3.mp4`、甚至 MP4 字节挂 `/proxy/a1b2c3.ts` 都能拉；同在 `/noext/stream?vid=1`（带满 DIDL）**零连接**。排错中被证伪并排除：**不是 IPv6**（本机起 IPv6-only 服务，电视用 GUA 正常拉）、**不是空 DIDL**（带/不带都能播）。⚠️ 同一条抖音签名地址反复投喂约 10 次后会被 CDN 判废，之后读数全部作废——排障必须换可控信源、一次只动一个变量。
+- **改动**（`media/server.py`、`media/share_resolver.py`、`models/session.py`）：① `player_ext_ok()` 后缀白名单扩为「HLS 分片 + 交付直链」同一把尺子（无后缀算不合格）；② `player_safe_suffix(url, mime="")` 按 MIME 给代理路径补合规后缀（未知类型兜 `.ts`，字节仍上游原样）；③ `_tv_can_fetch()` 末尾加**后缀门**——不合格的改走本机代理（例外：正文是播放列表却没被 `_playlist_mime` 认出的脏 MIME 维持直链，避免把列表骗成视频文件）；④ 顺带修 `models/session.py` 的 `play()` 丢掉 `mime_type` 的老问题（媒体投屏的 `CurrentURIMetaData` 此前恒为空串）。
+- **验证**：新增 `tests/test_tv_url_suffix.py`；`pytest tests/test_tv_url_suffix.py tests/test_share_resolver.py` **81 passed**，后端全量 **543 passed / 0 failed**。真机端到端：真起 `MediaServer` + 真 `ShareResolver` 解析现场文案 → 交付 `http://192.168.1.5:55819/proxy/…mp4`（日志 `直链路径没有播放器可识别的后缀…改走本机代理`）→ 裸 SOAP 投 TCL → `Proxy response: status=206`、`Proxy done: 29646593 bytes forwarded`、电视 `Dur=00:04:55` 且 `AbsTime` 1→13 秒前进 ⇒ **投得动了**。
+- **文档**：[故障排查](docs/故障排查.md) 新增 §5.5（含被证伪假设与判据）+ §11 关键字两行；[分享解析规则](docs/分享解析规则.md) §1 补后缀门一句；[架构总览](docs/架构总览.md) 行数表 3 行 + 全仓 `media/server.py|share_resolver.py|session.py:行号` 引用按 diff 映射重校 15 处；两道文档闸门绿（audit 3735 处可疑 0、freshness FAIL 0/WARN 0）。
+- **待办**：发布轮再做 bump 版本（`npm run version:set`）、打 tag、重建装机（`/Applications` 仍是 2.3.24，未重装）；本次改动仅在工作区。
+
+---
 
 **别人往本机投屏投不上，日志里只有一句 lxml 报错。** 这版把入站 SOAP 信封的容错补上，并让失败自己交代来源；顺带修好一个坏了三个用例的测试桩。
 

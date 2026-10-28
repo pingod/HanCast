@@ -108,23 +108,44 @@ _SEG_EXT_RE = re.compile(r"\.([A-Za-z0-9]{1,5})(?:[?#]|$)")
 
 
 def player_ext_ok(url: str) -> bool:
-    """分片子列表的后缀是否落在播放器的白名单里（无后缀也算不合格）"""
+    """URL 末段的后缀是否落在播放器的白名单里（无后缀也算不合格）
+
+    同一把尺子量两处：HLS 分片子列表，以及**交付给电视的直链本身**。后者是
+    2026-10-28 加的门判据——TCL 85T8G Max 实测无视 DIDL 的 protocolInfo，
+    只按 URL 后缀决定要不要发起 GET：`/ext/test.mp4`、`/proxy/a1b2c3.ts` 都来拉，
+    同样字节的 `/noext/stream?vid=1` 一次连接都不发（服务端日志为零）。抖音直链
+    的路径正好是 `…/video/tos/cn/tos-cn-ve-15/<hash>/`，无后缀 ⇒ 电视直接不碰。
+    """
     m = _SEG_EXT_RE.search(urlparse(url).path.rsplit("/", 1)[-1])
     return bool(m) and m.group(1).lower() in _PLAYER_SEGMENT_EXTS
 
 
-def player_safe_suffix(url: str) -> str:
-    """代理路径该带的后缀：远端后缀本身合规就用它，否则按类型兜底
+# 无后缀的直链只能靠 MIME 给一个容器名；只列白名单里存在的，避免造出更不合规的后缀
+_MIME_SEGMENT_EXTS = {
+    "video/mp4": "mp4", "video/quicktime": "mov", "video/x-matroska": "mkv",
+    "video/webm": "webm", "video/x-flv": "flv", "video/mpeg": "mp2t",
+    "video/mp2t": "ts", "audio/mpeg": "mp3", "audio/aac": "aac",
+    "audio/flac": "flac", "audio/ogg": "ogg", "audio/x-wav": "wav",
+}
+
+
+def player_safe_suffix(url: str, mime: str = "") -> str:
+    """代理路径该带的后缀：远端后缀合规就用它，否则按 MIME 兜底，最后才是 .ts
 
     只改「看起来的后缀」，字节仍是上游原样 —— 播放器靠魔数判型，实测带
-    61 字节假 PNG 头的 TS 照样能解出 10.5 秒。
+    61 字节假 PNG 头的 TS 照样能解出 10.5 秒。但**判型这条路不能指望**：
+    上面那台 TCL 就是先看后缀、后缀不像媒体就连魔数都不读，所以给一个
+    与容器相符的后缀（MP4 给 `.mp4`）比统一甩 `.ts` 稳，`.ts` 只作未知类型的兜底。
     """
     if _looks_like_playlist("", url):
         return ".m3u8"
     seg = urlparse(url).path.rsplit("/", 1)[-1]
     m = _SEG_EXT_RE.search(seg)
     ext = m.group(1).lower() if m else ""
-    return f".{ext}" if ext in _PLAYER_SEGMENT_EXTS else ".ts"
+    if ext in _PLAYER_SEGMENT_EXTS:
+        return f".{ext}"
+    return "." + _MIME_SEGMENT_EXTS.get(
+        (mime or "").split(";", 1)[0].strip().lower(), "ts")
 
 
 _LEECH_PLACEHOLDER_PREFIXES = (b"\x89png", b"\xff\xd8", b"gif8", b"<html", b"<!doc", b"bm")

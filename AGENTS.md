@@ -730,7 +730,7 @@ alpha 保持 0，Hyprland 直接把后面的桌面（还带模糊）透出来，
 
 1. **文件拖拽**：验证文件类型和大小，防止恶意文件
 2. **URL 解析**：防止 SSRF 攻击，限制可访问范围
-3. **本地服务**：**必须绑定 `0.0.0.0`**（`protocol/server.py:349`、`media/server.py:600`、
+3. **本地服务**：**必须绑定 `0.0.0.0`**（`protocol/server.py:349`、`media/server.py:621`、
    `screencast/httpd.py:65`）——电视和浏览器观看页要能拉流与取描述文件，绑 `127.0.0.1` 等于功能全废。
    代价是本机媒体/观看页端口对局域网可见，因此：端口随机分配、观看链接里带每次会话新生成的
    短随机段（`watch_url = http://<ip>:<port>/r/<session_id>`，`screencast/manager.py:157,328`）、
