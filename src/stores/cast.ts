@@ -21,6 +21,7 @@ import type { StopWarning } from '@/api/commands'
 import { notify } from '@/api/commands'
 import { tt } from '@/i18n'
 import { useDeviceStore } from '@/stores/device'
+import { usePlaylistStore } from '@/stores/playlist'
 
 /** Parse "HH:MM:SS" to total seconds */
 function parseTimeToSeconds(time: string): number {
@@ -37,6 +38,8 @@ export const useCastStore = defineStore('cast', () => {
   const focusedDeviceId = ref<string | null>(null)
   const loading = ref(false)
   const lastError = ref<string | null>(null)
+  /** 正在换集的设备（播放队列自动续播时用，防 STOPPED 抖动造成重复起播） */
+  const queueAdvancing = new Set<string>()
   let pollTimer: ReturnType<typeof setInterval> | null = null
   let pollInFlight = false
   let pollEpoch = 0
@@ -445,7 +448,10 @@ export const useCastStore = defineStore('cast', () => {
       ...[...deviceOperations].filter(([, op]) => op.pending).map(([id]) => id),
     ])]
     const operations = new Map(ids.map(id => [id, beginOperation(id)]))
-    ids.forEach(stopSim)
+    // 停止会让在途的自动续播 startCast 失效，别让它把会话又拉起来
+    ids.forEach((id) => { beginCastOp(id); stopSim(id) })
+    // 手动停止队列播放也要把队列的「当前项」清掉，免得下次事件误判仍在队列中
+    usePlaylistStore().playingId = null
     const names = ids.map((id) => sessions.value[id]?.device_name ?? id)
     let failed: string[] = []
     let reasons: string[] = []
@@ -643,6 +649,95 @@ export const useCastStore = defineStore('cast', () => {
     }
   }
 
+  // ── 播放队列（文件夹投屏）──
+  // 起播代次：手动切集/停止会 ++，避免「自动续播的 startCast 还在 await」时被旧结果写回。
+  const castOpSeq = new Map<string, number>()
+  function beginCastOp(deviceId: string): number {
+    const n = (castOpSeq.get(deviceId) ?? 0) + 1
+    castOpSeq.set(deviceId, n)
+    return n
+  }
+  function isCastOpCurrent(deviceId: string, op: number): boolean {
+    return (castOpSeq.get(deviceId) ?? 0) === op
+  }
+
+  /** 把队列里的一项投给设备；用 beginCastOp 判断这次 startCast 是否仍是最新操作 */
+  async function castQueueItem(deviceId: string, item: { id: string; media: any }): Promise<boolean> {
+    const playlist = usePlaylistStore()
+    const media = item.media as {
+      uri: string; title?: string; mime_type?: string; thumbnail?: string | null
+    }
+    const castOp = beginCastOp(deviceId)
+    // 本地文件走 media_server.serve_file（后端按需要），这里照常把 uri 交给 startCast
+    await startCast(deviceId, media.uri, {
+      title: media.title,
+      mime_type: media.mime_type,
+      thumbnail: media.thumbnail ?? null,
+    })
+    // startCast 有内建错误处理：失败会把 lastError 设上、session 标 error。
+    // 用代次判断这次起播有没有被后续操作（手动切集/停止）取代——是则不再改 playingId。
+    if (!isCastOpCurrent(deviceId, castOp)) return false
+    const session = sessions.value[deviceId]
+    if (session && session.status === 'error') return false
+    playlist.playingId = item.id
+    return true
+  }
+
+  /**
+   * 一项播完（设备自报 STOPPED/IDLE）时被事件监听调用：
+   * 若该设备正处在播放队列里，就按播放模式自动投下一集；没有下一项则回 false
+   * 让调用方走常规「清会话」流程。
+   */
+  function advancePlaylistIfActive(deviceId: string): boolean {
+    const playlist = usePlaylistStore()
+    if (!playlist.hasQueue) return false
+    // 该设备当前投的必须是队列里的某一项，否则（普通单文件投屏）不接管
+    const session = sessions.value[deviceId]
+    const currentUri = session?.media?.uri
+    const isQueueItem = !!currentUri && playlist.items.some((it) => it.media.uri === currentUri)
+    if (!isQueueItem) return false
+    // 换集进行中（上一次 advance 起的 castQueueItem 还没落地）时设备会报中途 STOPPED，
+    // 此时不能再触发一次换集，否则两集交叉把队列打乱。
+    if (queueAdvancing.has(deviceId)) return true
+
+    const next = playlist.nextItem()
+    if (!next) {
+      // 队列放完（且不是 repeat-one）→ 交回常规流程清会话
+      return false
+    }
+    // 先占位，防设备连发多条 STOPPED 造成重复起播
+    queueAdvancing.add(deviceId)
+    playlist.playingId = next.id
+    void castQueueItem(deviceId, next)
+      .then((ok) => {
+        if (!ok) playlist.playingId = null
+      })
+      .finally(() => {
+        // 留一个短窗口吞掉换集瞬间的 STOPPED，避免和 setAVTransportURI 的 Stop+Set 打架
+        setTimeout(() => queueAdvancing.delete(deviceId), 1500)
+      })
+    return true
+  }
+
+  /** 手动切下一集/上一集（控制器按钮）。没有队列或没有可播项时返回 false */
+  async function skipToNext(): Promise<boolean> {
+    const playlist = usePlaylistStore()
+    const deviceId = focusedDeviceId.value
+    if (!deviceId || !playlist.hasQueue) return false
+    const next = playlist.manualNext()
+    if (!next) return false
+    return castQueueItem(deviceId, next)
+  }
+
+  async function skipToPrev(): Promise<boolean> {
+    const playlist = usePlaylistStore()
+    const deviceId = focusedDeviceId.value
+    if (!deviceId || !playlist.hasQueue) return false
+    const prev = playlist.manualPrev()
+    if (!prev) return false
+    return castQueueItem(deviceId, prev)
+  }
+
   // ── Event listeners ──
   async function setupListeners() {
     try {
@@ -704,6 +799,12 @@ export const useCastStore = defineStore('cast', () => {
           // (DLNA may send transient NO_MEDIA_PRESENT / STOPPED during playback)
           if (newStatus === 'stopped' || newStatus === 'idle') {
             if (prevStatus === 'connecting' || prevStatus === 'playing' || prevStatus === 'paused') {
+              return
+            }
+            // 播放队列：一项播完（设备自报 STOPPED/IDLE）→ 自动投下一集。
+            // 这条分支意味着「设备是从一次播放里退出来的」（prevStatus 不是 connecting），
+            // 正是我们想要续播的时机；connect 阶段的 transient STOPPED 上面已经 return。
+            if (advancePlaylistIfActive(targetId)) {
               return
             }
             const removeTargetId = targetId
@@ -799,6 +900,9 @@ export const useCastStore = defineStore('cast', () => {
     pauseCast,
     resumeCast,
     switchQuality,
+    skipToNext,
+    skipToPrev,
+    castQueueItem,
     seek,
     setVolume,
     setMute,

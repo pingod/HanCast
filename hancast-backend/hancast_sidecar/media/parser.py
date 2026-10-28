@@ -24,6 +24,57 @@ SUPPORTED_IMAGE = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"}
 
 
 class MediaParser:
+    def list_folder(self, folder: str) -> dict:
+        """列出文件夹里可投屏的媒体文件（不递归子目录），按文件名自然序。
+
+        返回 `{folder, files: [MediaInfo.to_dict(), ...]}`。只做「列清单」，**不探测
+        每个文件的时长**——一个 200 集的剧集目录会串行跑 200 次 ffprobe，界面要等
+        几分钟。时长交给「投到哪一集再探」（`parse_file` 那条路本来就会探）。
+
+        `natural` 排序而不是字典序：`第2集` 要排在 `第10集` 前面，否则用户看到的
+        队列顺序就是 youtube-dl 那种 `1,10,11,2` 的乱序，正是本功能要解决的痛点。
+        """
+        import re
+
+        if not os.path.isdir(folder):
+            raise NotADirectoryError(f"Not a folder: {folder}")
+
+        def natural_key(name: str):
+            # 把连续数字当数字比，其余按小写文本比
+            return [int(t) if t.isdigit() else t.lower()
+                    for t in re.split(r"(\d+)", name)]
+
+        entries = []
+        try:
+            names = os.listdir(folder)
+        except OSError as e:
+            raise OSError(f"无法读取文件夹: {e}")
+        for name in names:
+            path = os.path.join(folder, name)
+            if not os.path.isfile(path):
+                continue
+            # 跳过 macOS 的 ._ 资源叉与隐藏文件
+            if name.startswith("."):
+                continue
+            ext = os.path.splitext(name)[1].lower()
+            if not self._is_supported(ext):
+                continue
+            mime_type, _ = mimetypes.guess_type(path)
+            try:
+                file_size = os.path.getsize(path)
+            except OSError:
+                file_size = None
+            entries.append(MediaInfo(
+                media_type="file",
+                uri=path,
+                title=name,
+                mime_type=mime_type or "application/octet-stream",
+                file_size=file_size,
+                duration=None,
+            ))
+        entries.sort(key=lambda m: natural_key(m.title))
+        return {"folder": folder, "files": [e.to_dict() for e in entries]}
+
     def parse_file(self, path: str) -> MediaInfo:
         """解析本地文件"""
         if not os.path.exists(path):

@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { useMediaStore } from '@/stores/media'
 import { useDeviceStore } from '@/stores/device'
 import { useCastStore } from '@/stores/cast'
+import { usePlaylistStore } from '@/stores/playlist'
 import { readClipboardText } from '@/api/commands'
 import type { Device } from '@/types/device'
 import Modal from './Modal.vue'
@@ -12,9 +13,12 @@ const { t } = useI18n()
 const mediaStore = useMediaStore()
 const deviceStore = useDeviceStore()
 const castStore = useCastStore()
+const playlist = usePlaylistStore()
 
 const isDragOver = ref(false)
 const pickerError = ref<string | null>(null)
+const showQueuePanel = ref(false)
+const queueDragIndex = ref<number | null>(null)
 
 // Device selection modal state
 const showDeviceModal = ref(false)
@@ -390,36 +394,58 @@ const onlineDevices = computed(() => {
 })
 
 async function onCast() {
-  // Find a suitable online device: prefer selected device (if online), then default device (if online), then any online device
-  let targetDevice: Device | null = null
+  // 队列优先：有播放队列时投队列第一项（同时把会话绑到队列）
+  if (playlist.hasQueue) {
+    if (await castQueueToTarget()) return
+  }
+  if (mediaStore.mediaInfo) {
+    const target = pickTargetDevice()
+    if (!target) return
+    await castStore.startCast(target.id, mediaStore.mediaInfo.uri, mediaStore.mediaInfo)
+  }
+}
 
-  // 1. Check if selected device is online
+/** 挑一个可投的在线设备；没有就弹选择框（返回 null） */
+function pickTargetDevice(): Device | null {
+  let targetDevice: Device | null = null
   if (deviceStore.selectedDevice && deviceStore.selectedDevice.status === 'online') {
     targetDevice = deviceStore.selectedDevice
   }
-
-  // 2. If no selected device or it's offline, check default device
   if (!targetDevice) {
-    const defaultDevice = deviceStore.devices.find(d => d.is_default && d.status === 'online')
-    if (defaultDevice) {
-      targetDevice = defaultDevice
-    }
+    targetDevice = deviceStore.devices.find(d => d.is_default && d.status === 'online') ?? null
   }
-
-  // 3. If still no device, show selection modal
   if (!targetDevice) {
     showDeviceModal.value = true
-    return
+    return null
   }
+  return targetDevice
+}
 
-  // Has suitable device → cast directly
-  if (mediaStore.mediaInfo) {
-    await castStore.startCast(targetDevice.id, mediaStore.mediaInfo.uri, mediaStore.mediaInfo)
+/** 把队列按当前顺序投给目标设备（跳过未勾选） */
+async function castQueueToTarget() {
+  const target = pickTargetDevice()
+  if (!target) return false
+  return castQueueFirstTo(target.id)
+}
+
+/** 投队列第一项并记住设备（供 onSelectDevice 复用） */
+async function castQueueFirstTo(deviceId: string) {
+  const first = playlist.playableItems[0]
+  if (!first) {
+    pickerError.value = t('media.queueEmpty')
+    return false
   }
+  const ok = await castStore.castQueueItem(deviceId, first)
+  if (ok) showQueuePanel.value = false
+  return ok
 }
 
 async function onSelectDevice(deviceId: string) {
   showDeviceModal.value = false
+  if (playlist.hasQueue) {
+    await castQueueFirstTo(deviceId)
+    return
+  }
   if (mediaStore.mediaInfo) {
     await castStore.startCast(deviceId, mediaStore.mediaInfo.uri, mediaStore.mediaInfo)
   }
@@ -458,6 +484,60 @@ function onFileSelected(e: Event) {
   if (file) {
     mediaStore.parseFile(file)
   }
+}
+
+// ── 文件夹投屏 / 播放队列 ──
+async function openFolderPicker() {
+  pickerError.value = null
+  try {
+    const { open } = await import('@tauri-apps/plugin-dialog')
+    const dir = await open({ directory: true, multiple: false })
+    if (dir && typeof dir === 'string') {
+      await playlist.loadFolder(dir)
+      showQueuePanel.value = true
+      if (playlist.error === 'empty') pickerError.value = t('media.queueEmpty')
+    }
+  } catch (err: any) {
+    pickerError.value = String(err?.message ?? err)
+  }
+}
+
+// 队列拖拽排序
+function onQueueDragStart(index: number) {
+  queueDragIndex.value = index
+}
+function onQueueDrop(index: number) {
+  if (queueDragIndex.value !== null) {
+    playlist.moveItem(queueDragIndex.value, index)
+    queueDragIndex.value = null
+  }
+}
+function onQueueDragEnd() {
+  queueDragIndex.value = null
+}
+
+function closeQueue() {
+  showQueuePanel.value = false
+}
+
+/** 切下一集/上一集：只在有活跃投屏且有队列时可用 */
+async function onQueueNext() {
+  await castStore.skipToNext()
+}
+async function onQueuePrev() {
+  await castStore.skipToPrev()
+}
+
+const modeLabel = computed(() => {
+  const m = playlist.playMode
+  if (m === 'shuffle') return t('media.modeShuffle')
+  if (m === 'repeat-one') return t('media.modeRepeatOne')
+  return t('media.modeSequential')
+})
+function cycleMode() {
+  const order = ['sequential', 'shuffle', 'repeat-one'] as const
+  const i = order.indexOf(playlist.playMode)
+  playlist.setPlayMode(order[(i + 1) % order.length])
 }
 </script>
 
@@ -515,6 +595,14 @@ function onFileSelected(e: Event) {
         <p v-if="pickerError" class="media-input__error">⚠ {{ pickerError }}</p>
         <p v-if="translatedError" class="media-input__error">⚠ {{ translatedError }}</p>
         <p v-if="mediaStore.ledgerHint" class="media-input__ledger-hint">{{ t('media.resolveLedgerHint') }}</p>
+        <button
+          v-if="!mediaStore.isParsing"
+          class="media-input__folder-btn"
+          type="button"
+          @click.stop="openFolderPicker"
+        >
+          📁 {{ t('media.pickFolder') }}
+        </button>
       </template>
     </div>
 
@@ -623,6 +711,95 @@ function onFileSelected(e: Event) {
       </div>
       <template #actions>
         <button class="btn-cancel" @click="showDeviceModal = false">{{ t('common.cancel') }}</button>
+      </template>
+    </Modal>
+
+    <!-- ═══ Playlist Queue Panel（文件夹投屏队列）═══ -->
+    <Modal
+      :visible="showQueuePanel"
+      :title="t('media.queueTitle')"
+      :show-icon="false"
+      @close="closeQueue"
+    >
+      <div class="queue-panel">
+        <div class="queue-panel__head">
+          <span class="queue-panel__folder" :title="playlist.folder">
+            📁 {{ playlist.folder || t('media.queueNoFolder') }}
+          </span>
+          <span class="queue-panel__count">
+            {{ t('media.queueCount', { n: playlist.items.length, sel: playlist.total }) }}
+          </span>
+        </div>
+
+        <div class="queue-panel__toolbar">
+          <button class="queue-panel__chip" type="button" @click="playlist.selectAll()">
+            {{ t('media.queueSelectAll') }}
+          </button>
+          <button class="queue-panel__chip" type="button" @click="playlist.selectNone()">
+            {{ t('media.queueSelectNone') }}
+          </button>
+          <button
+            class="queue-panel__chip queue-panel__chip--mode"
+            type="button"
+            :title="t('media.modeHint')"
+            @click="cycleMode"
+          >
+            🔁 {{ modeLabel }}
+          </button>
+          <span v-if="playlist.playingIndex" class="queue-panel__nowplaying">
+            {{ t('media.queueNowPlaying', { n: playlist.playingIndex, total: playlist.total }) }}
+          </span>
+        </div>
+
+        <p v-if="playlist.loading" class="queue-panel__hint">{{ t('media.parsing') }}</p>
+        <p v-else-if="playlist.items.length === 0" class="queue-panel__hint">
+          {{ t('media.queueEmpty') }}
+        </p>
+
+        <ul v-else class="queue-panel__list" role="list">
+          <li
+            v-for="(item, index) in playlist.items"
+            :key="item.id"
+            class="queue-panel__item"
+            :class="{
+              'queue-panel__item--playing': playlist.playingId === item.id,
+              'queue-panel__item--unselected': !playlist.isSelected(item.id),
+              'queue-panel__item--dragging': queueDragIndex === index,
+            }"
+            draggable="true"
+            @dragstart="onQueueDragStart(index)"
+            @dragover.prevent
+            @drop.prevent="onQueueDrop(index)"
+            @dragend="onQueueDragEnd"
+          >
+            <input
+              class="queue-panel__check"
+              type="checkbox"
+              :checked="playlist.isSelected(item.id)"
+              @change="playlist.toggleSelected(item.id)"
+            />
+            <span class="queue-panel__index">{{ index + 1 }}</span>
+            <span class="queue-panel__grip" :title="t('media.queueDragHint')">⠿</span>
+            <span class="queue-panel__name" :title="item.media.title || item.media.uri">
+              {{ item.media.title || item.media.uri }}
+            </span>
+            <span class="queue-panel__ops">
+              <button type="button" :disabled="index === 0" :title="t('media.queueUp')" @click="playlist.moveUp(item.id)">↑</button>
+              <button type="button" :disabled="index === playlist.items.length - 1" :title="t('media.queueDown')" @click="playlist.moveDown(item.id)">↓</button>
+              <button type="button" :title="t('media.queueRemove')" @click="playlist.removeItem(item.id)">✕</button>
+            </span>
+          </li>
+        </ul>
+      </div>
+      <template #actions>
+        <button class="btn-cancel" @click="closeQueue">{{ t('common.cancel') }}</button>
+        <button
+          class="btn-confirm"
+          :disabled="playlist.total === 0"
+          @click="onCast"
+        >
+          {{ t('media.castQueue') }}
+        </button>
       </template>
     </Modal>
 
@@ -1111,5 +1288,150 @@ function onFileSelected(e: Event) {
   50% {
     transform: translateY(-8px);
   }
+}
+
+/* ── 文件夹投屏按钮 ── */
+.media-input__folder-btn {
+  margin-top: 10px;
+  padding: 6px 14px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--bg-surface);
+  border: 1px dashed var(--border-color);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.media-input__folder-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* ── 播放队列面板 ── */
+.queue-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 52vh;
+}
+.queue-panel__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.queue-panel__folder {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 60%;
+}
+.queue-panel__toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.queue-panel__chip {
+  padding: 3px 8px;
+  font-size: 11px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.queue-panel__chip:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.queue-panel__nowplaying {
+  font-size: 11px;
+  color: var(--accent);
+  margin-left: auto;
+}
+.queue-panel__hint {
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-align: center;
+  padding: 16px 0;
+}
+.queue-panel__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+}
+.queue-panel__item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border-color);
+  cursor: grab;
+}
+.queue-panel__item:last-child {
+  border-bottom: none;
+}
+.queue-panel__item--playing {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.queue-panel__item--unselected {
+  opacity: 0.45;
+}
+.queue-panel__item--dragging {
+  opacity: 0.3;
+}
+.queue-panel__check {
+  flex: none;
+  cursor: pointer;
+}
+.queue-panel__index {
+  flex: none;
+  width: 20px;
+  text-align: right;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.queue-panel__grip {
+  flex: none;
+  color: var(--text-secondary);
+  cursor: grab;
+}
+.queue-panel__name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.queue-panel__ops {
+  flex: none;
+  display: flex;
+  gap: 2px;
+}
+.queue-panel__ops button {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1;
+  border: 1px solid var(--border-color);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  border-radius: 5px;
+  cursor: pointer;
+}
+.queue-panel__ops button:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.queue-panel__ops button:disabled {
+  opacity: 0.35;
+  cursor: default;
 }
 </style>

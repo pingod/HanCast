@@ -154,6 +154,7 @@ class CommandHandler:
 
             # 媒体解析
             "parse_media": self._parse_media,
+            "list_folder_media": self._list_folder_media,
             "resolve_share": self._resolve_share,
             "get_resolve_result": self._get_resolve_result,
 
@@ -657,6 +658,17 @@ class CommandHandler:
         else:
             info = self.media_parser.parse_url(params["url"])
         return info.to_dict()
+
+    def _list_folder_media(self, params: dict) -> dict:
+        """列出文件夹里的媒体文件（投文件夹 / 播放队列的后端）。
+
+        只返回清单不探时长，避免上百集的目录串行 ffprobe 把界面卡死；
+        正文里的自然排序（第2集 在 第10集 前）见 `MediaParser.list_folder`。
+        """
+        folder = str(params.get("path") or "").strip()
+        if not folder:
+            raise ValueError("文件夹路径为空")
+        return self.media_parser.list_folder(folder)
 
     def _resolve_share(self, params: dict) -> dict:
         """从任意粘贴文本（分享口令/短链/网页/直链）解析可播放媒体。

@@ -179,7 +179,7 @@ const MOCK_DEVICES: Device[] = [
 const MOCK_SETTINGS: AppSettings = {
   usn: 'hancast-uuid-001',
   friendly_name: 'HanCast',
-  version: '2.3.24',
+  version: '2.4.0',
   media_port: 8080,
   default_device: null,
   network_interface: '',
@@ -414,6 +414,28 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
         duration: null,
         thumbnail: null,
       } as T
+    case 'list_folder_media': {
+      // 浏览器 dev 模式：无文件系统访问，编几个媒体文件让队列 UI 可试
+      const folder = String(args?.folderPath ?? '')
+      const base = folder.split(/[/\\]/).pop() || 'folder'
+      const exts = ['mp4', 'mp4', 'mkv', 'mp3']
+      const files = exts.map((ext, i) => {
+        const name = `第${i + 1}集.${ext}`
+        const mimeMap: Record<string, string> = {
+          mp4: 'video/mp4', mkv: 'video/x-matroska', mp3: 'audio/mpeg',
+        }
+        return {
+          media_type: 'file' as const,
+          uri: `${folder}/${name}`,
+          title: name,
+          mime_type: mimeMap[ext] ?? 'application/octet-stream',
+          file_size: 1024 * 1024 * 40,
+          duration: null,
+          thumbnail: null,
+        }
+      })
+      return { folder: folder || base, files } as T
+    }
     case 'read_clipboard':
       // 浏览器 dev 模式：交回 navigator.clipboard 处理
       return '' as T
@@ -615,8 +637,8 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
     case 'check_update':
       return {
         has_update: false,
-        current: '2.3.24',
-        latest: '2.3.24',
+        current: '2.4.0',
+        latest: '2.4.0',
         url: '',
         body: '',
         source: 'github',
@@ -810,6 +832,17 @@ export async function parseMediaFile(filePath: string): Promise<MediaInfo> {
 export async function parseMediaUrl(url: string): Promise<MediaInfo> {
   const invoke = await initInvoke()
   return invoke<MediaInfo>('parse_media_url', { url })
+}
+
+/** 文件夹投屏：列出目录下可投屏的媒体文件（后端按文件名自然序返回） */
+export interface FolderListing {
+  folder: string
+  files: MediaInfo[]
+}
+
+export async function listFolderMedia(folderPath: string): Promise<FolderListing> {
+  const invoke = await initInvoke()
+  return invoke<FolderListing>('list_folder_media', { folderPath })
 }
 
 /** 分享文本解析结果：MediaInfo + 提取出的原始地址与解析通道 */

@@ -3,10 +3,12 @@ import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useCastStore } from '@/stores/cast'
 import { useDeviceStore } from '@/stores/device'
+import { usePlaylistStore } from '@/stores/playlist'
 
 const { t } = useI18n()
 const castStore = useCastStore()
 const deviceStore = useDeviceStore()
+const playlist = usePlaylistStore()
 
 // ── Device ──
 const currentDevice = computed(() => {
@@ -292,6 +294,17 @@ onMounted(async () => {
             <!-- Filename -->
             <div class="ctrl__name">{{ mediaTitle }}</div>
 
+            <!-- 播放队列：上一集 / 位置 / 下一集（仅队列投屏时出现） -->
+            <div v-if="playlist.hasQueue" class="ctrl__queue">
+              <button type="button" class="ctrl__queue-btn" :title="t('media.prev')" @click="castStore.skipToPrev()">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M6 6h2v12H6zM20 6v12l-9-6z"/></svg>
+              </button>
+              <span class="ctrl__queue-pos">{{ t('media.playingOf', { i: playlist.playingIndex, n: playlist.total }) }}</span>
+              <button type="button" class="ctrl__queue-btn" :title="t('media.next')" @click="castStore.skipToNext()">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M16 6h2v12h-2zM4 6v12l9-6z"/></svg>
+              </button>
+            </div>
+
             <!-- Quality (shown only when the rule pack offers 2+ tiers) -->
             <div v-if="qualityOptions" class="ctrl__quality">
               <span class="ctrl__quality-label">{{ t('cast.quality') }}</span>
@@ -518,10 +531,42 @@ onMounted(async () => {
   width: 100%;
 }
 
-/* ── Quality (rule-pack supplied tiers) ── */
-.ctrl__quality {
+/* ── 播放队列控制（上一集/下一集） ── */
+.ctrl__queue {
   display: flex;
   align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 2px 12px 4px;
+}
+.ctrl__queue-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border-color);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.ctrl__queue-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.ctrl__queue-pos {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  min-width: 56px;
+  text-align: center;
+}
+
+/* ── Quality (rule-pack supplied tiers) ── */
+.ctrl__quality {
+  display: flex;  align-items: center;
   justify-content: space-between;
   gap: 8px;
   padding: 2px 12px;

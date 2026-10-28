@@ -241,6 +241,21 @@ async fn parse_media_file(
         .await
 }
 
+/// 列出文件夹里的媒体文件（投文件夹 / 播放队列）：`{folder, files: [...]}`
+/// JS 侧传 `folderPath`（camelCase），Tauri 默认按 snake_case 映射到 `folder_path`。
+#[tauri::command]
+async fn list_folder_media(
+    sidecar: State<'_, SidecarManager>,
+    folder_path: String,
+) -> Result<serde_json::Value, String> {
+    sidecar
+        .send_command(
+            "list_folder_media",
+            serde_json::json!({"path": folder_path}),
+        )
+        .await
+}
+
 #[tauri::command]
 async fn parse_media_url(
     sidecar: State<'_, SidecarManager>,
@@ -1467,6 +1482,7 @@ pub fn run() {
             get_manual_devices,
             parse_media_file,
             parse_media_url,
+            list_folder_media,
             resolve_share,
             get_resolve_result,
             plugin_list,

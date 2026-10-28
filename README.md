@@ -1,4 +1,4 @@
-<!-- 最后校对：2026-10-25，对应版本 v2.3.24（package.json:4）。数字与 文件:行号 引用由 tools/check-doc-freshness.py 机械核对 -->
+<!-- 最后校对：2026-10-28，对应版本 v2.4.0（package.json:4）。数字与 文件:行号 引用由 tools/check-doc-freshness.py 机械核对 -->
 
 <p align="center">
   <a href="README.md"><img src="https://img.shields.io/badge/README-CN-blue?style=flat-square&logo=github" alt="中文"></a>
@@ -326,7 +326,7 @@ HanCast/
 |------|------|
 | [docs/架构总览.md](docs/架构总览.md) | 三进程分层、端口/线程/落盘状态、架构不变量 |
 | [docs/开发指南.md](docs/开发指南.md) | 环境、跑法、测试口径、调试、提交与发版规矩 |
-| [docs/HanCast-Frontend-API.md](docs/HanCast-Frontend-API.md) | 67 条 invoke 命令与 8 个事件的全量契约 |
+| [docs/HanCast-Frontend-API.md](docs/HanCast-Frontend-API.md) | 68 条 invoke 命令与 8 个事件的全量契约 |
 | [docs/HanCast-Frontend-Spec.md](docs/HanCast-Frontend-Spec.md) | 组件 / store / 视图、样式与 i18n 约定 |
 | [docs/故障排查.md](docs/故障排查.md) | 按症状索引：发现不了、推不上去、停不下来、没声音…… |
 | [docs/屏幕投屏.md](docs/屏幕投屏.md) · [docs/投屏确认.md](docs/投屏确认.md) | 两个子系统的行为契约 |

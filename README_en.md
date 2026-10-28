@@ -1,4 +1,4 @@
-<!-- 最后校对：2026-10-25，对应版本 v2.3.24（package.json:4）。数字与 文件:行号 引用由 tools/check-doc-freshness.py 机械核对 -->
+<!-- 最后校对：2026-10-28，对应版本 v2.4.0（package.json:4）。数字与 文件:行号 引用由 tools/check-doc-freshness.py 机械核对 -->
 
 <p align="center">
   <a href="README.md"><img src="https://img.shields.io/badge/README-CN-blue?style=flat-square&logo=github" alt="中文"></a>

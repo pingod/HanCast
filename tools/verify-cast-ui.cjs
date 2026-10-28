@@ -179,6 +179,11 @@ async function fixture(locale = 'en-US') {
   imports['@/types/cast'] = evaluate(fs.readFileSync(path.join(root, 'src/types/cast.ts'), 'utf8'),
     path.join(root, 'src/types/cast.ts'), imports, clock, logs)
   imports['@/stores/device'] = { useDeviceStore: pinia.defineStore('device', () => ({ devices: deviceList })) }
+  // cast.ts 现在会反查播放队列（自动续播/切集），测试隔离环境给个空队列桩
+  imports['@/stores/playlist'] = { usePlaylistStore: pinia.defineStore('playlist', () => ({
+    hasQueue: false, items: [], playingId: null, playingIndex: 0, total: 0,
+    nextItem: () => null, manualNext: () => null, manualPrev: () => null,
+  })) }
   const storeModule = evaluate(storeSource, storeFile, imports, clock, logs)
   imports['@/stores/cast'] = storeModule
   const screenModule = evaluate(screenStoreSource, screenStoreFile, imports, clock, logs)
