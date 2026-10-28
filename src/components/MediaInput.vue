@@ -19,6 +19,8 @@ const isDragOver = ref(false)
 const pickerError = ref<string | null>(null)
 const showQueuePanel = ref(false)
 const queueDragIndex = ref<number | null>(null)
+// 点了队列的「投屏」、正在等用户选设备：选定后要走「投队列」而不是「投单个文件」
+const pendingQueueCast = ref(false)
 
 // Device selection modal state
 const showDeviceModal = ref(false)
@@ -394,9 +396,10 @@ const onlineDevices = computed(() => {
 })
 
 async function onCast() {
-  // 队列优先：有播放队列时投队列第一项（同时把会话绑到队列）
+  // 队列优先：有播放队列时走「投队列」，由 castQueueToTarget 弹出设备选择框
   if (playlist.hasQueue) {
-    if (await castQueueToTarget()) return
+    await castQueueToTarget()
+    return
   }
   if (mediaStore.mediaInfo) {
     const target = pickTargetDevice()
@@ -423,9 +426,13 @@ function pickTargetDevice(): Device | null {
 
 /** 把队列按当前顺序投给目标设备（跳过未勾选） */
 async function castQueueToTarget() {
-  const target = pickTargetDevice()
-  if (!target) return false
-  return castQueueFirstTo(target.id)
+  // 文件夹/队列投屏是多设备场景：总是让用户挑目标设备，别默默用默认设备。
+  // 注意队列面板这时还开着，且与设备选择弹窗同为 z-index:100（后渲染的队列面板会盖住选择弹窗），
+  // 所以先把队列面板关掉再弹选择框，否则用户根本看不到可选设备。
+  showQueuePanel.value = false
+  pendingQueueCast.value = true
+  showDeviceModal.value = true
+  return false
 }
 
 /** 投队列第一项并记住设备（供 onSelectDevice 复用） */
@@ -442,12 +449,24 @@ async function castQueueFirstTo(deviceId: string) {
 
 async function onSelectDevice(deviceId: string) {
   showDeviceModal.value = false
-  if (playlist.hasQueue) {
+  // 从队列的「投屏」进来的：选定设备后投队列；否则投单个文件
+  const castQueue = pendingQueueCast.value
+  pendingQueueCast.value = false
+  if (castQueue) {
     await castQueueFirstTo(deviceId)
     return
   }
   if (mediaStore.mediaInfo) {
     await castStore.startCast(deviceId, mediaStore.mediaInfo.uri, mediaStore.mediaInfo)
+  }
+}
+
+/** 关掉设备选择框（取消 / 点遮罩）：若是为投队列而弹的，把队列面板还回去，别让用户丢掉列表 */
+function onCloseDeviceModal() {
+  showDeviceModal.value = false
+  if (pendingQueueCast.value) {
+    pendingQueueCast.value = false
+    if (playlist.hasQueue) showQueuePanel.value = true
   }
 }
 
@@ -690,7 +709,7 @@ function cycleMode() {
       :visible="showDeviceModal"
       :title="t('devices.selectDevice')"
       :show-icon="true"
-      @close="showDeviceModal = false"
+      @close="onCloseDeviceModal"
     >
       <p class="device-modal__hint">{{ t('devices.selectDeviceHint') }}</p>
       <div class="device-modal__list">
@@ -710,7 +729,7 @@ function cycleMode() {
         </button>
       </div>
       <template #actions>
-        <button class="btn-cancel" @click="showDeviceModal = false">{{ t('common.cancel') }}</button>
+        <button class="btn-cancel" @click="onCloseDeviceModal">{{ t('common.cancel') }}</button>
       </template>
     </Modal>
 

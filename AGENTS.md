@@ -3,7 +3,7 @@
 > 旧名 `CLAUDE.md`（Claude Code 私有约定），2026-10-15 改名为跨工具的 `AGENTS.md`；
 > `CLAUDE.md` 现在只留三行指针指向本文件。
 
-> 最后校对：2026-10-28，对应版本 v2.4.0（`package.json:4`）。本轮（v2.4.0）：文件夹投屏 + 播放队列（新 store `playlist.ts`、命令 `list_folder_media`，命令数 68/Sidecar 63/store 10），并含 TCL 后缀门修复（`media/server.py`）；相关行号与硬数字按实测重校。
+> 最后校对：2026-10-28，对应版本 v2.4.1（`package.json:4`）。本轮（v2.4.1）：文件夹投屏两处 bug 修复（队列投屏不弹设备选择 / 播完一集不按模式续投），仅改前端 `MediaInput.vue`、`cast.ts`，无后端与行号变化；上一轮（v2.4.0）：文件夹投屏 + 播放队列（新 store `playlist.ts`、命令 `list_folder_media`，命令数 68/Sidecar 63/store 10），并含 TCL 后缀门修复（`media/server.py`）。
 > 本文件是速览与硬约束；逐模块的深度内容在 **docs/README.md** 的索引里，别在这里找细节。
 
 ## 项目概述
@@ -12,7 +12,7 @@
 
 - **项目名**: HanCast
 - **作者**: lanzeweie@foxmail.com
-- **版本**: 2.4.0（版本 SSOT 是 `package.json` 的 `version`，`scripts/sync-version.cjs:4`；改版本只走 `npm run version:set`，见「版本管理」）
+- **版本**: 2.4.1（版本 SSOT 是 `package.json` 的 `version`，`scripts/sync-version.cjs:4`；改版本只走 `npm run version:set`，见「版本管理」）
 - **性质**: 二次开发（非原项目官方更新）
 - **原始代码**: [xfangfang/Macast](https://github.com/xfangfang/Macast)（原作者 xfangfang，最后更新 2022-01）。仓库里**不含** `Macast-main/`、`Macast-plugins-main/` 这些本地目录，1.x 源码只作为移植参考，见「原始代码复用情况」
 - **目标架构**: Tauri 2.0 前端 + Rust 桥接 + Python Sidecar（+ MPV 接收端播放、FFmpeg 屏幕抓取）
@@ -158,7 +158,7 @@ HanCast/
 │   ├── Cargo.toml / Cargo.lock  # --locked 构建；不依赖 GTK
 │   └── src/main.rs              # 886 行：list / capture --output --fps，帧按紧凑 BGRA 写 stdout
 ├── scripts/                     # 壳层脚本：sync-version / check-version / sync-sidecar / check-resources / build-arch-pkg（均为 .cjs）
-├── tools/                       # 55 个顶层脚本 + 1 个目录型验收包（browser-channel-livecheck/），索引与计数口径见 tools/README.md
+├── tools/                       # 56 个顶层脚本 + 1 个目录型验收包（browser-channel-livecheck/），索引与计数口径见 tools/README.md
 ├── mpv/                         # 本地放置的 MPV（`.gitignore:86-87` 只留 portable_config/）
 │   └── portable_config/mpv.conf # 入库：弹幕/OSD 脚本、着色器、字体
 ├── docs/                        # 设计文档，**入口是 docs/README.md**
@@ -673,7 +673,7 @@ python3 tools/audit-doc-refs.py        # 文档引用的 文件:行号 是否还
 python3 tools/check-doc-freshness.py   # 引用**内容**对不对 + 校对戳 + 硬数字（v2.3.23 起，见「文档维护约定」）
 ```
 
-`tools/` 下 55 个顶层脚本（+ `browser-channel-livecheck/` 目录型验收包）按用途分类见 tools/README.md（计数口径同那里，且由闸门逐行点名核对）；端到端验收脚本的判据写在
+`tools/` 下 56 个顶层脚本（+ `browser-channel-livecheck/` 目录型验收包）按用途分类见 tools/README.md（计数口径同那里，且由闸门逐行点名核对）；端到端验收脚本的判据写在
 docs/构建与发布.md §6 与各专题文档，不要凭脚本退出码 0 就当作功能可用。
 
 ## 窗口配置

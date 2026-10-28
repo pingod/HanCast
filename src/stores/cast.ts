@@ -798,13 +798,16 @@ export const useCastStore = defineStore('cast', () => {
           // Never remove sessions that are connecting, playing, or paused
           // (DLNA may send transient NO_MEDIA_PRESENT / STOPPED during playback)
           if (newStatus === 'stopped' || newStatus === 'idle') {
-            if (prevStatus === 'connecting' || prevStatus === 'playing' || prevStatus === 'paused') {
+            // 播放队列：一项播完（设备从 playing/paused 退到 STOPPED/IDLE）→ 自动投下一集。
+            // 关键：自然播完时 prevStatus 正是 'playing'，必须在下面那条「播过就 return」的
+            // 保护之前先尝试续播，否则自动续播永远走不到（v2.4.0 的 bug）。
+            // connect 阶段（prevStatus === 'connecting'）的 transient STOPPED 不接管，
+            // 交给下面的保护逻辑忽略，避免刚起播就被打断。
+            if (prevStatus !== 'connecting' && advancePlaylistIfActive(targetId)) {
               return
             }
-            // 播放队列：一项播完（设备自报 STOPPED/IDLE）→ 自动投下一集。
-            // 这条分支意味着「设备是从一次播放里退出来的」（prevStatus 不是 connecting），
-            // 正是我们想要续播的时机；connect 阶段的 transient STOPPED 上面已经 return。
-            if (advancePlaylistIfActive(targetId)) {
+            // 真正在播（connecting/playing/paused）时的 STOPPED/IDLE 是抖动/换集瞬态，不拆会话
+            if (prevStatus === 'connecting' || prevStatus === 'playing' || prevStatus === 'paused') {
               return
             }
             const removeTargetId = targetId

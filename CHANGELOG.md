@@ -1,6 +1,6 @@
 # Changelog
 
-> 最后校对：2026-10-28，对应版本 v2.4.0（`package.json:4`）
+> 最后校对：2026-10-28，对应版本 v2.4.1（`package.json:4`）
 
 本文件记录 HanCast 的版本历史。口径说明：
 
@@ -10,6 +10,24 @@
 - 新加版本时**同一次提交**里补这里，并按 [docs/README.md](docs/README.md) §4 的约定同步对应文档。
 
 ---
+
+## v2.4.1 — 2026-10-28（发布提交，文件夹投屏两处 bug 修复）
+
+**范围**：修 v2.4.0 文件夹投屏 / 播放队列的两处用户可见 bug，产品逻辑改动仅前端（`src/components/MediaInput.vue`、`src/stores/cast.ts`）。版本 2.4.0 → **2.4.1**（patch）。
+
+**修 1：选了文件夹点「投屏」，不弹「选哪个设备」**（用户原话：「选择文件夹投屏后，点投屏，并不会出现选择要投放到那个设备选项」）
+
+- **根因两个叠加**：① 队列投屏走了 `pickTargetDevice()`——只要存在选中设备或默认在线设备就**静默用默认设备**，不弹选择框；② 就算弹了，队列面板与设备选择弹窗**同为 `z-index:100`**（`Modal.vue:120`，都 Teleport 到 body），DOM 里队列面板渲染在后 → 盖住设备选择弹窗，用户根本看不见可选设备。
+- **改动**：`castQueueToTarget()` 改成文件夹/队列投屏**总是弹设备选择框**（多设备场景本就该让用户挑），并在弹框前先 `showQueuePanel=false`，绕开同层 z-index 遮挡；新增 `pendingQueueCast` 标记，`onSelectDevice` 据此决定「选定后投队列还是投单个文件」；取消/点遮罩（`onCloseDeviceModal`）把队列面板还回去，别让用户丢掉已排好的列表。单文件投屏路径不变。
+
+**修 2：播完一集就停，不按设定的模式（顺序/随机/单曲循环）自动续投下一集**（用户原话：「播放一集后就自动停止了，不会按照之前设置的模式…继续自动投屏」）
+
+- **根因**：`cast.ts` 的 `cast_state_changed` 监听里，`stopped/idle` 分支**先**有一条「`prevStatus` 是 connecting/playing/paused 就直接 return」的保护（本意是忽略 DLNA 起播时的瞬态 STOPPED），而自动续播 `advancePlaylistIfActive()` 被放在了这条 return **之后**——自然播完时 `prevStatus` 恰恰是 `playing`，于是永远走不到续播逻辑，队列第一集放完即止。
+- **改动**：把「队列续播」判定提到那条保护**之前**——`prevStatus !== 'connecting'` 时先 `advancePlaylistIfActive()`；`nextItem()` 按 `playMode` 返回下一项（sequential 顺序 / shuffle 随机非当前 / repeat-one 重播当前），到队列尾返回 null 交回常规清会话。**connect 阶段的瞬态 STOPPED 仍不接管**（`prevStatus === 'connecting'` 时不续播），避免刚起播就被打断。
+
+**验证**：新增 `tools/verify-playlist-advance.cjs`（把真实 `playlist.ts` + `cast.ts` 转译进隔离 vm、挂组件实例让 `onMounted` 真注册事件监听，断言真实队列推进逻辑，无浏览器无真机）。**6 项全 PASS**；并已用「回退到旧写法」的反证跑过——旧代码该项 **FAIL**（`startCast 次数 1→1`，不续播），新代码 PASS，证明判据确实抓得住这个 bug。`npx vue-tsc --noEmit` 0 错、`npm run build` 通过、`tools/verify-cast-ui.cjs` **23/23**。真机（TCL）投文件夹续播待用户确认。
+
+**未闭合**：真机端到端（选设备弹窗 + TCL 连续续播）需用户在电视端实投确认；本版未改后端，Sidecar 命令与 v2.4.0 一致。
 
 ## v2.4.0 — 2026-10-28（发布提交，文件夹投屏 + 播放队列 / TCL 后缀门）
 
