@@ -8,7 +8,18 @@
 
 验证：媒体/主题 73 项、播控原 20 项及封面新增 1 项、真实 App 生命周期 2 项；类型检查及 Vite 构建通过。浏览器验 346×472 / 434×634 / 800×900、中英设置、日志/屏幕/控制器弹窗、解析/暂停/停止/清空（项目内置 mock，不是真机投屏）。未跑全量测试、未打三平台包、未提交或发布。界面截图在 `docs/images/ui-native-{light,dark}.png`。
 
-## 2026-10-28 三续：本地文件投「整个文件夹」+ 播放队列（工作区，未发版）
+## 2026-10-28 发布轮：v2.4.0（已发布 + 已装 macOS/Linux ✅）
+
+v2.3.24 → **2.4.0**（minor，用户选）。合并两笔未发布改动：投 TCL「投不上」的后缀门修复 + 本地文件「整个文件夹」投屏 / 播放队列。`npm run version:set -- 2.4.0`；提交 `64a815c`；tag `v2.4.0`；Release 已 publish（draft=false，2026-10-28T11:21:19Z，body 已写）。收尾 CHANGELOG 验收证据提交 `a5eb00f`。
+
+- **CI run 40650382734**：macos-arm64 首次因 GitHub 托管 runner 容量排队超时被**取消**（不是构建失败，`--job` 重跑后成功）；windows-x64、linux-x64 一次过；"Upload to draft Release" 需三平台全绿才跑。
+- **macOS**：dmg（`e5ac4c1d…` 逐字节一致）装入 `/Applications`，`accept-macos-artifact.sh 2.4.0` → **85 PASS / 0 真 FAIL**（唯一 FAIL = 沙箱 osascript 退不掉 GUI，环境限制；FFmpeg 依赖用临时 HOME 探针手补：`ffmpeg_status` ok=True source=system ffmpeg 9.0.2）。产物内 `media/server.py` sha256 `be41bb3c…` 与仓库一致，后缀门代码在包内。已 `open -a` 拉起 2.4.0，sidecar 在 :8080 监听。
+- **Linux（CachyOS 192.168.1.68，ssh 端口 10086 用户 pavia，sudo 免密）**：Arch 包 `96cafdef…` 两端一致，`sudo pacman -U` → `pacman -Q hancast = 2.4.0-1`，sidecar `self.version="2.4.0"`。装前用 `kill -TERM` 优雅退出 GUI+sidecar（沙箱 osascript 不可用）。
+- **功能实测（装好的 macOS 产物）**：`list_folder_media`（参数名是 `path`）对 `第1集/第2集/第10集/花絮.mkv/readme.txt` 返回自然序 **第1集→第2集→第10集→花絮**、跳过 txt、mime 正确。
+- **踩坑**：draft 资产 `gh release download` 会静默给 415KB 坏文件 ⇒ 必须 API + token 取签名 URL；GitHub 单连接 ~7-22KB/s、部分字节区间反复 stall ⇒ 12 段并发 `curl -r` + 分段 resume；分段拼接后必须逐段 sha 校验，本轮 part.4 曾因重复追加多 4096 字节导致整包 sha 不符，定位后单段重下修复。
+- **未闭合**：Windows 那台（ssh `Host win`，`~/.ssh/config` → 192.168.1.68:22，但那是 Linux 的 IP 冲突/历史记录待核；用户此前描述为 `%OS%=Windows_NT` / `administrator`，现 2.3.15）待机器上线核实后再装；TCL 现场需用户在电视端真投一次确认可播。
+
+## 2026-10-28 三续：本地文件投「整个文件夹」+ 播放队列（工作区，未发版 → 已由 v2.4.0 发布轮发布）
 
 用户反馈："能否对投屏本地文件时候再丰富下场景…可以投屏整个文件夹，而且可以调整文件夹中文件的列队顺序"。四项全选（文件夹队列+排序+上下一集 / 顺序记忆 / 勾选子集 / 随机+单曲循环）。
 
