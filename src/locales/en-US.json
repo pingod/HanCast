@@ -344,4 +344,12 @@
   "devices.addOk": "Added \"{name}\"",
   "screencast.noDeviceHint": "No TV / big screen found? Add it by IP manually, and check both firewalls allow HanCast.",
   "screencast.dlnaNoPull": "The TV never fetched the playlist",
-  "screencast.dlnaLowBitrate": "The TV is pulling the stream but can not keep up"}
+  "screencast.dlnaLowBitrate": "The TV is pulling the stream but can not keep up",
+  "media.historyOpen": "History",
+  "media.historyTitle": "Cast history",
+  "media.historyEmpty": "No cast history yet",
+  "media.historyOffline": "offline",
+  "media.historyClear": "Clear",
+  "media.historyRemove": "Remove this record",
+  "media.historyCount": "{n} items"
+}

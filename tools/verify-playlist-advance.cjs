@@ -2,6 +2,9 @@
 // 文件夹投屏 / 播放队列的两处回归判据（v2.4.1）：
 //   ① 队列投屏必须弹出「选设备」而不是默默用默认设备（且队列面板不能盖住它）
 //   ② 一集自然播完（设备从 playing 退到 STOPPED）必须按 playMode 续投下一集
+//   ③ 用户手动点「停止投屏」后，设备那条 STOPPED 不能被当成「播完」再续投
+//   ④ 投单个文件时必须把上一个文件夹队列作废（否则点投屏还在投旧列表）
+//   ⑤ 投屏历史按设备记账：队列只记一条、单文件另记一条
 //
 // 做法：把真实的 src/stores/playlist.ts 与 src/stores/cast.ts 用 TypeScript 转译后
 // 在隔离 vm 里加载（@/api/commands、事件、pinia 都打桩），直接驱动 store 的公开函数，
@@ -58,6 +61,7 @@ function loadModules(api, clock, listeners) {
     '@/i18n': { tt: (k) => `«${k}»` },
     '@/stores/playlist': playlistExports, // 让 cast.ts import 到同一个 playlist 实例
     '@/stores/device': { useDeviceStore: () => ({ devices: [], selectedDevice: null }) },
+    '@/stores/history': historyExports, // 同上：用真实实现，判据⑤才有意义
     '@tauri-apps/api/event': {
       listen: async (name, fn) => { listeners.set(name, fn); return () => listeners.delete(name) },
     },
@@ -87,6 +91,8 @@ function loadModules(api, clock, listeners) {
     vm.runInNewContext(code, ctx, { filename: file })
     return mod.exports
   }
+  const historyMod = evaluate(path.join(root, 'src/stores/history.ts'))
+  Object.assign(historyExports, historyMod)
   const playlistMod = evaluate(path.join(root, 'src/stores/playlist.ts'))
   Object.assign(playlistExports, playlistMod)
   const castMod = evaluate(path.join(root, 'src/stores/cast.ts'))
@@ -94,6 +100,7 @@ function loadModules(api, clock, listeners) {
 }
 
 let playlistExports = {}
+let historyExports = {}
 let passed = 0
 let failed = 0
 function ok(name, fn) {
@@ -138,11 +145,12 @@ async function run() {
     insert() {}, remove() {},
   })
   const piniaInst = pinia.createPinia()
-  let playlist, cast
+  let playlist, cast, history
   const app = renderer.createApp({
     setup() {
       playlist = playlistMod.usePlaylistStore()
       cast = castMod.useCastStore()
+      history = historyExports.useHistoryStore()
       return () => vue.h('empty')
     },
   })
@@ -190,7 +198,7 @@ async function run() {
 
   // 先投第一集（建立会话，startCast 会把 session.media.uri 设成 /f/1.mp4，状态 playing）
   playlist.playMode = 'sequential'
-  await cast.castQueueItem('dev-1', playlist.items[0])
+  await cast.castQueueItem('dev-1', playlist.items[0], { startsQueue: true })
   assert.equal(playlist.playingId, 'id0', '投第一项后 playingId 应为 id0')
   const session = cast.sessions['dev-1']
   assert.ok(session && session.media && session.media.uri === '/f/1.mp4', '会话应绑定第一集 uri')
@@ -223,6 +231,50 @@ async function run() {
     onCastState({ payload: { device_id: 'dev-2', status: 'STOPPED' } })
     const startAfter2 = api._calls.filter((c) => c.fn === 'startCast').length
     assert.equal(startAfter2, startBefore2, 'connect 阶段 STOPPED 不应触发续播')
+  })
+
+  // ── 判据 D：手动停止后，设备那条 STOPPED 不许再触发续投 ──
+  // 真实时序：用户点停止 → stopCast 发出 Stop → 设备自报 STOPPED。
+  // 那条 STOPPED 与「一集播完」完全同形，修之前会立刻续投下一集，
+  // 用户看到的就是「点了停止又自己投起来，得点好几次」。
+  await cast.stopCast('dev-1')
+  // 停止后会话可能已被清掉；把会话摆回来模拟「STOPPED 晚到、此刻会话还在」
+  cast.sessions['dev-1'] = {
+    device_id: 'dev-1', device_name: 'dev-1', status: 'playing',
+    media: { uri: '/f/2.mp4' }, position: 0, duration: 0, volume: 80, is_muted: false,
+    positionTime: '00:00:00', durationTime: '00:00:00',
+  }
+  const startBeforeStop = api._calls.filter((c) => c.fn === 'startCast').length
+  onCastState({ payload: { device_id: 'dev-1', status: 'STOPPED' } })
+  await setTimeout_(0)
+  ok('手动停止后 STOPPED 不再自动续投（点一次就停得住）', () => {
+    const startAfterStop = api._calls.filter((c) => c.fn === 'startCast').length
+    assert.equal(startAfterStop, startBeforeStop,
+      `手动停止后不应再 startCast，实际 ${startBeforeStop} → ${startAfterStop}`)
+  })
+
+  // ── 判据 E：投单个文件要把上一个文件夹队列作废 ──
+  assert.ok(playlist.items.length > 0, '前置：此刻队列应还有内容')
+  await cast.startCast('dev-1', 'file:///g/other.mp4', { title: 'other.mp4' })
+  ok('投单个文件后旧文件夹队列被清空（不会又投回旧列表）', () => {
+    assert.equal(playlist.items.length, 0, `队列应被清空，实际还有 ${playlist.items.length} 项`)
+    assert.equal(playlist.playingId, null)
+    const lastStart = api._calls.filter((c) => c.fn === 'startCast').pop()
+    assert.equal(lastStart.args[1], 'file:///g/other.mp4')
+  })
+
+  // ── 判据 F：投屏历史按设备记账，队列只记一条 ──
+  ok('队列投屏只记一条历史（自动续集不重复记账）', () => {
+    const queueEntries = history.forDevice('dev-1').filter((e) => e.kind === 'queue')
+    assert.equal(queueEntries.length, 1, `队列历史应为 1 条，实际 ${queueEntries.length}`)
+    assert.equal(queueEntries[0].folder, '/f')
+    assert.equal(queueEntries[0].count, 3)
+  })
+  ok('单文件投屏另记一条历史，且能按设备查回', () => {
+    const fileEntries = history.forDevice('dev-1').filter((e) => e.kind === 'file')
+    assert.equal(fileEntries.length, 1, `单文件历史应为 1 条，实际 ${fileEntries.length}`)
+    assert.equal(fileEntries[0].uri, 'file:///g/other.mp4')
+    assert.ok(history.deviceIdsByRecency().includes('dev-1'))
   })
 
   console.log(`\n${passed} passed, ${failed} failed`)

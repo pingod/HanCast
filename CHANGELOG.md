@@ -1,6 +1,6 @@
 # Changelog
 
-> 最后校对：2026-10-28，对应版本 v2.4.1（`package.json:4`）
+> 最后校对：2026-10-29，对应版本 v2.4.2（`package.json:4`）
 
 本文件记录 HanCast 的版本历史。口径说明：
 
@@ -8,6 +8,33 @@
 - 版本号唯一来源是 **`package.json` 的 `version`**（`scripts/sync-version.cjs:4,17`），`npm run version:set <x.y.z>` 把它刷进 7 处契约点：`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`（本地包那条，v2.3.8 起收进来——此前每版都靠人肉补）、`hancast-backend/pyproject.toml`、`hancast_sidecar/utils/config.py:39`、`src/api/commands.ts`（mock）、`src/stores/settings.ts`。`scripts/check-version.cjs` 自称以 `tauri.conf.json` 为源（口径相反），但全仓无人调用，是未接线的孤儿脚本——判定以 `sync-version.cjs` 为准。详见 [docs/构建与发布.md](docs/构建与发布.md) §1。
 - 下表「提交」列即 `git tag <版本>` 指向的提交；细节以 `git show <提交>` 为准，本文只留用户可感知的变化。
 - 新加版本时**同一次提交**里补这里，并按 [docs/README.md](docs/README.md) §4 的约定同步对应文档。
+
+---
+
+## v2.4.2 — 2026-10-29（发布提交，队列停止语义修正 + 投屏历史）
+
+**范围**：修 v2.4.1 引入的两个「停止投屏」缺陷，并新增按设备的投屏历史。纯前端改动（`src/stores/cast.ts`、`src/components/MediaInput.vue`、新增 `src/stores/history.ts`、两份 locale），后端与 Sidecar 命令不变。版本 2.4.1 → **2.4.2**（patch）。用户原话：「投屏文件夹后,手动点击停止投屏后又会自动投屏,需要点多次停止投屏才能结束,结束后再选择本地其他文件或者文件夹进行投屏,此时投屏还是之前的投屏文件夹列表.另外,需要添加一个对应设备的投屏历史.」
+
+**修 1：点一次「停止投屏」停不掉，下一集又被投上来**
+
+- **根因**：DLNA 事件流里「一集播完了」和「用户按了停止」都是设备自报 `STOPPED`，`advancePlaylistIfActive()` 一律当成自然播完 → 立刻续投下一集。更糟的是设备回 `STOPPED` 常常**早于** `stop_cast` 的响应，那时本地会话还在，事件照常进续播分支。用户看到的就是「点了停止，电视又自己放起来」，得连点好几次。
+- **改动**：`stopCast` 在**发 Stop 之前**给所有目标设备打 `userStoppedDevices` 标记（同时清 `queueAdvancing` 与 `playlist.playingId`）；`advancePlaylistIfActive()` 与 `castQueueItem()` 进来先看标记，命中即放弃；标记在**下一次成功起播**时撤掉（`cast.ts:380`），所以停完再投不受影响。续播前还会再核一遍「设备当前 URI 仍是本队列某一项」，陈旧事件拉不起已停的会话。
+
+**修 2：停止后投别的东西，投的还是上一个文件夹的队列**
+
+- **根因**：`playlist` 是全局单例，停止只清会话不清队列——界面还挂着上个文件夹的列表，再点投屏就照着旧队列又投一遍。
+- **改动**：`startCast` 里只要这次起播**不是队列自己发起的**（`opts.fromQueue` 为假）而 `playlist.hasQueue` 为真，先 `playlist.reset()`（`cast.ts:384`）清掉旧队列。
+
+**新功能：投屏历史（按设备记账）**
+
+- 媒体输入区新增「🕘 投屏历史」入口，列出**当前选中设备**投过的条目：本地文件、分享链接/直链、文件夹队列三类（`kind: file / url / queue`）；同一 `device + uri` 再投只提前并刷新时间，不产生重复行；每设备上限 20 条。
+- 存 `localStorage 'hancast.cast.history'`（不落 AppData、不经壳层），读回时逐条校验结构，坏数据直接丢弃；只在**投屏成功之后**入账，失败不记账（否则历史里会堆一堆点不动的死条目）。
+- 点历史条目即重投：`file` 用存档路径重新解析，`url` 直接投，`queue` 先 `playlist.loadFolder()` 复原队列再投第一项。
+- store 数 10 → 11（`history.ts`），两语言各 **353** 个 key（新增 7 个 `media.history*`）。
+
+**验证**：`tools/verify-cast-ui.cjs` **25/25**（新增两条回归用例：`manual stop suppresses the queue auto-advance`、`casting a new item drops the stale folder queue`）。两条都做过**变异验证**——把守卫/清理代码去掉后它们立刻红，说明钉的是真缺陷；第一条按真实时序构造，让设备在 `stop_cast` 响应回来之前发出 `STOPPED`。`npx vue-tsc --noEmit` 0 错、`npm run build` 通过、后端全量 `pytest` 见下。
+
+**未闭合**：真机端到端仍需用户在 TCL 上实投确认（点一次停止即停、停止后改投新媒体、历史面板点击重投）；Windows 那台（`Host win`）当时离线，仍停在 2.3.15。
 
 ---
 
@@ -98,7 +125,7 @@
 
 - **入口**：媒体输入区拖放区多一个「📁 选文件夹」按钮（`src/components/MediaInput.vue`）。选中目录 → 弹出队列编辑面板。
 - **后端**：新增命令 `list_folder_media`（壳层 `src-tauri/src/lib.rs:247`，Sidecar `hancast_sidecar/commands.py:662`，实现 `hancast_sidecar/media/parser.py:27` 的 `MediaParser.list_folder`）。**自然序**（`第2集` 在 `第10集` 前）、只列当前层、跳过子目录/隐藏文件/`._` 资源叉/不支持扩展名、**不探时长**（避免上百集串行 ffprobe 卡死界面）。命令总数 67→68（壳层）/ 62→63（Sidecar 注册表）。
-- **前端**：新增 `src/stores/playlist.ts`（Pinia 第 10 个 store），管队列状态、勾选子集、拖拽/上下移排序、顺序记忆（localStorage `hancast.playlist.order`，同一文件夹下次复原）、播放模式（顺序/随机/单曲循环）。
+- **前端**：新增 `src/stores/playlist.ts`（Pinia store 第 10 个成员，v2.4.2 起共 11 个 store），管队列状态、勾选子集、拖拽/上下移排序、顺序记忆（localStorage `hancast.playlist.order`，同一文件夹下次复原）、播放模式（顺序/随机/单曲循环）。
 - **续播**：`cast.ts` 监听 `cast_state_changed`，设备报 STOPPED 且当前 URI 是本队列项时 `advancePlaylistIfActive` 自动投下一项；换集期间用 `queueAdvancing` Set + 1.5s 窗口吞掉 `Stop` 造成的 STOPPED 抖动，防重复起播。控制器（`CastController.vue`）在队列投屏时显示上一集/第 i/n 集/下一集按钮。
 - **i18n**：中英各加一组 `media.*` 队列文案，清掉几个脚手架期写下的未引用 key，两语言各 346 键（原 324）。
 - **测试**：新增 `hancast-backend/tests/test_folder_playlist.py` 6 项（自然序/跳过规则/不探时长/空目录/非目录抛错）；`tools/verify-cast-ui.cjs` 给测试隔离环境补了 `@/stores/playlist` 空队列桩，23/23 仍全绿。后端全量 549 passed。
@@ -152,13 +179,13 @@
 一轮只补一件事：**投屏失败的原因要送到用户眼前，而不是只留在看不见的那块屏上**。用户可感知面——窗口收进托盘后往电视投被拒，桌面会弹一条系统通知「投屏失败 / 设备名：电视返回的原文」。没有新能力、没有视觉改动。覆盖的是**五条失败出口**（媒体投屏两条 + 屏幕投屏三条），不是只修用户撞到的那一条。
 
 - **现象与真因**：2026-10-24 用户报「投 TCL 怎么没反应」，实际电视回的是 `HTTP 500 …请在电视上打开「多屏互动/无线投屏/DLNA」`。这条原因 v2.3.20 已经放进首页红条（`src/stores/cast.ts` 的 `lastError`），**但 HanCast 平时收在托盘里**——窗口不在前台时那条红字没人看得见，于是错误「产生了、没送达」。修的是投递，不是采集。
-- **五条失败出口进系统通知**：媒体投屏 ① `startCast` 抛错 → `notify.castFailed`（`src/stores/cast.ts:410`）；② 停止未送达（`stop_cast` 的 `control_failed`）→ `notify.stopNotDelivered`（`:478-479`）。屏幕投屏 ③ `start` 被拒或抛错、④ `stop` 未送达、⑤ **会话中途自己死了**（状态事件带 `error`）——三者统一经 `alertScreen()`（`src/stores/screencast.ts:61-67`）发出，调用点在 `:189-211`、`:212-249`、`:285-300`。正文原样带 Sidecar 给的失败原因，前端不改写、不翻译。
+- **五条失败出口进系统通知**：媒体投屏 ① `startCast` 抛错 → `notify.castFailed`（`src/stores/cast.ts:438`）；② 停止未送达（`stop_cast` 的 `control_failed`）→ `notify.stopNotDelivered`（`:478-479`）。屏幕投屏 ③ `start` 被拒或抛错、④ `stop` 未送达、⑤ **会话中途自己死了**（状态事件带 `error`）——三者统一经 `alertScreen()`（`src/stores/screencast.ts:61-67`）发出，调用点在 `:189-211`、`:212-249`、`:285-300`。正文原样带 Sidecar 给的失败原因，前端不改写、不翻译。
   ②与④是同一类坑的另一半：「本机停了、电视还在播」原本也只有红条说得出；⑤ 覆盖「投着投着采集进程退出」这种用户已经走开的场景。同一条 `error` 会被终止与停止各递一次，**按文本去重只弹第一条**（`:45` 的 `lastAlertedError`）；只投给浏览器（没有电视）时正文就是原因本身，不硬凑设备名。
 - **接线四处**：npm `@tauri-apps/plugin-notification@~2.4.0`（`package.json:20`）/ Rust `tauri-plugin-notification = "2.4"`，锁到 **2.4.0**（`src-tauri/Cargo.toml:26`）/ `.plugin(tauri_plugin_notification::init())`（`src-tauri/src/lib.rs:1124`，紧挨着插件链、带一句「窗口收进托盘时红条没人看得见」的为什么）/ capability `notification:default`（`src-tauri/capabilities/default.json:22`）。三平台后端由 `notify-rust 4.18.2` 分派，`Cargo.lock:2259-2268` 可见 `mac-notification-sys`（macOS）+ `zbus`（Linux DBus）+ `tauri-winrt-notification`（Windows Toast）。
   **版本配对是这轮唯一的返工**：第一次打的 tag 在三平台 `Tauri bundle` 步骤全部失败——`Found version mismatched Tauri packages … tauri (v2.11.5) : @tauri-apps/api (v2.12.4)` 与 `tauri-plugin-notification (v2.4.0) : @tauri-apps/plugin-notification (v2.7.0)`。根因是 npm 侧插件会拽着 `@tauri-apps/api` 往上涨（`plugin-notification@2.7.0` 要求 `api ^2.12.0`），而 `package.json` 里 `"@tauri-apps/api": "^2.0.0"` 这种宽范围让它在装依赖时飘到 2.12.4，`Cargo.lock` 的 `tauri` 却仍是 2.11.5。`cargo check`、`vue-tsc`、`vite build` **没有一个会报这件事**，只有 `tauri build` 在 bundle 阶段拒。所以把 `@tauri-apps/api` 收成 `~2.11.1`、通知插件收成 `~2.4.0`（Rust 侧 `2.4`）——**成对改**才对，单改一边照样失败；这条铁律写进 AGENTS.md 的 Rust 依赖块下面。
 - **`src/api/commands.ts:1433-1439` 的三条设计约束**：**权限惰性申请**（只在真要发通知时 `requestPermission()`，投屏路径绝不因申请权限而等待或失败）；**被拒不缓存**（`notifyGranted` 在返回 false 时清空，用户后来在系统设置里放开后，下一次失败还能再问一次）；**动态 `import()`**（浏览器 dev 与没装该插件的旧壳层直接 no-op，界面里那条红条作为兜底仍然存在）。
 - **i18n 从 `main.ts` 拆出**（新增 `src/i18n.ts`，19 行；`main.ts` 改成 `import { i18n } from './i18n'`）：store 层也要取文案，反向 import `main.ts` 会把 `main → App → store → main` 绕成循环依赖；`tt()` 是非组件环境的取文案出口。**这不只是通知这一处用到**——以后任何 store 里的用户可读错误都得走它。
-- **设备名从哪来**：`deviceLabel()`（`cast.ts:60-64`）先查本机会话、再查设备表、最后退回 device id——首次投屏失败时本地还没有会话，只有设备表里有名字。
+- **设备名从哪来**：`deviceLabel()`（`cast.ts:69-73`）先查本机会话、再查设备表、最后退回 device id——首次投屏失败时本地还没有会话，只有设备表里有名字。
 - **文案**：zh/en 各 **+3 条 key**（321 → **324**，两侧键集零差异）。
 - **测试**：`tools/verify-cast-ui.cjs` 21 → **23**，fixture 现在**同时装配真实的 `cast.ts` 与真实的 `screencast.ts`**（此前只装前者）。新增两条：媒体侧断言「投屏失败发 `notify.castFailed`」「停止未送达发 `notify.stopNotDelivered`」「成功一条都不发」；屏幕侧断言被拒 / 抛错 / 未送达 / 终止事件各发一条、**重复 error 只弹一次**、面板里那句话仍留着。标题、正文里的原因原文、设备名前缀与「浏览器目标不硬凑设备名」都 checked。**变异验过**：删掉 `start()` 里那行 `alertScreen` 后该用例转红（还原用 md5 比过，防的是「测试看着绿但其实什么也没依赖」）。本轮裁剪跑：`vue-tsc` + `vite build` 通过、`cargo check` 通过——后者顺带证明 `notification:default` 是合法 capability 标识（Tauri 构建期校验 capability，写错直接 fail），并且 `sendNotification` 在 `dist/assets/` 里独立成 chunk（动态导入被 Vite 正确切开）。**没跑全量，按既定口径。**
 - **文档同轮修订**：AGENTS.md（前端与 Rust 两张依赖表各一行、结构树补 `src/i18n.ts`、**安全约束新增第 5 条**：投屏失败必须进系统通知、权限只能惰性申请且不得阻断投屏、macOS linker-signed 每版换签名身份所以通知授权可能要重给，原第 5 条「规则包沙箱」顺延为 6、项目概述的版本号从滞后的 2.3.19 更正）；docs/HanCast-Frontend-Spec.md（依赖表两行、capability 清单、§8.1 记录 i18n 位置迁移的理由、store 间耦合从「唯一一处」更正为两处、`cast.ts` 与 `screencast.ts` 两行都补上失败出口，且两行的**全部** `:NNN-NNN` 区间按新行号重锚——`screencast.ts` 行数 327 → 现读 349、key 计数 321 → 324 与命名空间 16 → 17）；docs/README.md（索引里 Frontend-Spec 行数按现读 `wc -l` 重锚）；docs/开发指南.md（i18n 等键数从滞后的 278 更正为现读 324）。
@@ -326,7 +353,7 @@ GitHub CI 现在能打出 Arch 装得上的包：Linux 矩阵项在 tauri bundle
   - **失败自动回退，两条原因都留**：`索引拉取失败: 镜像 …；直连 …`，用户分得清「镜像挂了」和「根本没网」。走镜像时若 sha256 对不上也换下一条路（`import_url` 的 docstring `:548-556` 写明了为什么退回直连不构成放宽）。
   - **镜像是加速器，不是新的信任边界**：sha256 始终只认官方索引里那一份，镜像换包会被当场拦下——所以改前缀不需要重新签名任何东西；但把 `rules.index_url` 换成自建源就必须连 sha256 一起照抄（对照表在 [rule-packs/README.md](rule-packs/README.md) §2.3）。
   - 附带调整：`check_update` 直连的单次预算仍是 1 秒（GitHub 不通时不该拖住界面），**走镜像放宽到 3 秒**（`commands.py:907`）——国内往返本身 1~2 秒，照抄 1 秒等于开关白开。
-- **报错信息不再被界面截断**：`.media-input__error` 从 `overflow:hidden + text-overflow:ellipsis + white-space:nowrap` 改成 `white-space:normal + overflow-wrap:anywhere + line-height:1.45`（`MediaInput.vue:874-884`）。失败原因是一整句话（站点 + 状态码 + 下一步动作），截断等于把最有用的后半句丢掉；而长 URL 里没有可断点，光 `normal` 折不下来，必须配 `overflow-wrap`。
+- **报错信息不再被界面截断**：`.media-input__error` 从 `overflow:hidden + text-overflow:ellipsis + white-space:nowrap` 改成 `white-space:normal + overflow-wrap:anywhere + line-height:1.45`（`MediaInput.vue:1004-1014`）。失败原因是一整句话（站点 + 状态码 + 下一步动作），截断等于把最有用的后半句丢掉；而长 URL 里没有可断点，光 `normal` 折不下来，必须配 `overflow-wrap`。
 - **旧程序内置 FFmpeg 的残留清理**：macOS 删掉 `src-tauri/target/debug/ffmpeg/`（0 字节桩，gitignore 的构建目录里的遗留，其它搜到的 ffmpeg 都属于第三方软件，没动）；Windows 测试机 `.68` 删掉 `C:\Users\Administrator\AppData\Local\HanCast\ffmpeg\`（≤v2.3.10 随包那份 `ffmpeg.exe`，82,797,568 字节），删后全目录复扫再无 HanCast 的 ffmpeg 文件。系统 ffmpeg 确认还在两处（`WinGet\Links` 与 yt-dlp.FFmpeg 包），删除后检测报 `ok=True source=system path=…\WinGet\Links\ffmpeg.exe`、版本 `8.1.2-full_build`，ffprobe 同目录一并认成 `source=system`。
   - 这正是 v2.3.11「升级遗留」预告的场景落地：那台机器 `hancast_setting.json` 里 `screencast.ffmpeg_path` 仍指向刚被删掉的路径，而 `set_ffmpeg_path` 只能设不能清（[docs/屏幕投屏.md](docs/屏幕投屏.md) §5.1），值会一直留着。留着的代价只有每次检测多一次失败的 `-version` 子进程和一条 `Configured FFmpeg path no longer valid` 告警——`ffmpeg_manager._configured()`（`:416-427`）先校验再把结果交给 `status()`，死路径按设计降级到「系统已装 / 本程序下载」两层，功能没有锁死。
 - **数字口径**：`PARAM_SPECS` 30 → **32**（`params.py:41-265`；分组 screencast 9 / discovery 4 / player 3 / http 3 / browser 3 / failures 3 / media 2 / rules 2 / **network 2** / logs 1）；官方规则包 3 → **4** 个。命令面本轮未动（Rust `#[tauri::command]` 66 条 `lib.rs:1388-1455` / Sidecar 注册 59 条 `commands.py:110-198` / `commands.ts` 导出 65 个）。
@@ -368,7 +395,7 @@ GitHub CI 现在能打出 Arch 装得上的包：Linux 矩阵项在 tauri bundle
 
 - **根因不在后端**：`ShareResolver.resolve()` 对这类页面已经如实抛「页面中未找到可播放的视频源」并记进台账（`share_resolver.py:680-683`、`353-354`）。吞掉失败的是前端 `src/stores/media.ts` 的 catch —— 旧口径「只要从文本里抠得出链接就降级透传原始地址」，于是网页地址被当成可播媒体交给电视，电视拉到的是 HTML；顺带这条失败也再没人看得见。
 - **收紧**：新增媒体扩展名白名单 `MEDIA_FILE_RE`（`media.ts:15-19`，mp4/mkv/m3u8/mpd/音频图片类），catch 里只有**地址本身就是媒体文件**才透传，其余如实报错、投屏按钮保持禁用（`media.ts:142-182`）。
-- **台账入口就地可见**：报错下方新增一行提示「这条已记入解析失败台账：设置 → 解析插件 → 解析失败台账（按域名分组）」（`media.resolveLedgerHint`，`MediaInput.vue:610`；中英双份文案）。台账本身 v2.3.6 就有，只是入口藏在设置页折叠区底部，用户不知道去哪找他粘过的失败地址。
+- **台账入口就地可见**：报错下方新增一行提示「这条已记入解析失败台账：设置 → 解析插件 → 解析失败台账（按域名分组）」（`media.resolveLedgerHint`，`MediaInput.vue:677`；中英双份文案）。台账本身 v2.3.6 就有，只是入口藏在设置页折叠区底部，用户不知道去哪找他粘过的失败地址。
 - **dev mock 保真**：`src/api/commands.ts` 的 `resolve_share` 对网页地址同样抛「解不出可播源」。此前 mock 是无条件成功，浏览器模式下永远走不到真实报错分支，这类口径问题也就永远测不出来。
 - **测试不再污染用户数据**：新增 `hancast-backend/tests/conftest.py`（session 级 fixture 把 `failures.SETTING_DIR` 指进临时目录），`tools/share_resolve_probe.py` 默认同样重定向、`--keep-ledger` 才写真实台账。此前跑一次测试就往用户设置页那份台账里塞进 `b23.tv/AbCdEf`、`ads.example.com/lp` 之类的假域名，把真实失败冲淡。
 - **验收**：本机浏览器实测两条分支——网页地址 → 报错 + 台账提示、三台设备的投屏按钮全禁用；`…/movie.mp4` 直链 → 出预览卡片、按钮可用且不再误显示台账提示。`vue-tsc --noEmit` rc=0；定向 `pytest tests/test_share_resolver.py tests/test_jsplugins.py` 99 passed，且 `parse_failures.json` 跑前后 md5 逐字节一致。文档同步：[docs/HanCast-Frontend-API.md](docs/HanCast-Frontend-API.md) §4.3、[docs/HanCast-Frontend-Spec.md](docs/HanCast-Frontend-Spec.md) 链路 1 要点 3、[docs/故障排查.md](docs/故障排查.md) §7.4/§7.5、[docs/开发指南.md](docs/开发指南.md) §5.1、[tools/README.md](tools/README.md)。

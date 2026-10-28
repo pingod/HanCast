@@ -5,6 +5,7 @@ import { useMediaStore } from '@/stores/media'
 import { useDeviceStore } from '@/stores/device'
 import { useCastStore } from '@/stores/cast'
 import { usePlaylistStore } from '@/stores/playlist'
+import { useHistoryStore, type HistoryEntry } from '@/stores/history'
 import { readClipboardText } from '@/api/commands'
 import type { Device } from '@/types/device'
 import Modal from './Modal.vue'
@@ -293,6 +294,7 @@ function onHtmlDrop(e: DragEvent) {
         const url = urls[0].trim()
         if (/^https?:\/\//i.test(url)) {
           mediaStore.setInputChange(url)
+          dropQueueForSingleMedia()
           mediaStore.parseUrl(url)
           return
         }
@@ -303,6 +305,7 @@ function onHtmlDrop(e: DragEvent) {
     const text = dt.getData('text/plain')?.trim()
     if (text && /^https?:\/\//i.test(text)) {
       mediaStore.setInputChange(text)
+      dropQueueForSingleMedia()
       mediaStore.parseUrl(text)
     }
   }
@@ -337,6 +340,7 @@ onMounted(async () => {
           if (paths && paths.length > 0) {
             // File drop: has absolute path
             showPasteHint.value = false
+            dropQueueForSingleMedia()
             mediaStore.parseFile(paths[0])
           } else {
             // URL drag from browser: paths is empty
@@ -366,6 +370,7 @@ async function onPasteFromClipboard() {
     return
   }
   pickerError.value = null
+  dropQueueForSingleMedia()
   mediaStore.setInputChange(text.replace(/\s+/g, ' '))
   mediaStore.parseUrl(text)
 }
@@ -379,11 +384,13 @@ function onUrlPaste(e: ClipboardEvent) {
   if (!text || /^https?:\/\/\S+$/i.test(text)) return
   e.preventDefault()
   const cleaned = text.replace(/\s+/g, ' ')
+  dropQueueForSingleMedia()
   mediaStore.setInputChange(cleaned)
   mediaStore.parseUrl(text)
 }
 
 async function onParse() {
+  dropQueueForSingleMedia()
   await mediaStore.parseUrl()
 }
 
@@ -424,6 +431,15 @@ function pickTargetDevice(): Device | null {
   return targetDevice
 }
 
+/**
+ * 选了单个文件/链接时，把上一次的文件夹队列作废。
+ * 不作废的话 `onCast()` 会先看 `playlist.hasQueue` 走「投队列」分支，
+ * 于是「明明选的是新文件，投出去却还是上一个文件夹的列表」。
+ */
+function dropQueueForSingleMedia() {
+  if (playlist.hasQueue) playlist.reset()
+}
+
 /** 把队列按当前顺序投给目标设备（跳过未勾选） */
 async function castQueueToTarget() {
   // 文件夹/队列投屏是多设备场景：总是让用户挑目标设备，别默默用默认设备。
@@ -442,7 +458,7 @@ async function castQueueFirstTo(deviceId: string) {
     pickerError.value = t('media.queueEmpty')
     return false
   }
-  const ok = await castStore.castQueueItem(deviceId, first)
+  const ok = await castStore.castQueueItem(deviceId, first, { startsQueue: true })
   if (ok) showQueuePanel.value = false
   return ok
 }
@@ -487,6 +503,7 @@ async function openFilePicker() {
       }]
     })
     if (selected && typeof selected === 'string') {
+      dropQueueForSingleMedia()
       await mediaStore.parseFile(selected)
     }
   } catch (err: any) {
@@ -501,6 +518,7 @@ function onFileSelected(e: Event) {
   const input = e.target as HTMLInputElement
   const file = input.files?.[0]
   if (file) {
+    dropQueueForSingleMedia()
     mediaStore.parseFile(file)
   }
 }
@@ -558,6 +576,55 @@ function cycleMode() {
   const i = order.indexOf(playlist.playMode)
   playlist.setPlayMode(order[(i + 1) % order.length])
 }
+
+// ── 投屏历史（按设备） ──
+const history = useHistoryStore()
+const showHistoryPanel = ref(false)
+
+/** 按设备分组，最近投过的设备排前面；设备离线也保留（历史是记录，不是在线列表） */
+const historyGroups = computed(() =>
+  history.deviceIdsByRecency().map((deviceId) => {
+    const items = history.forDevice(deviceId)
+    return {
+      deviceId,
+      deviceName: items[0]?.deviceName ?? deviceId,
+      online: deviceStore.devices.some((d) => d.id === deviceId && d.status === 'online'),
+      items,
+    }
+  })
+)
+
+function formatHistoryTime(at: number) {
+  const d = new Date(at)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+/** 点历史条目重投到当初那台设备；队列条目先把那个文件夹重新读出来 */
+async function castFromHistory(entry: HistoryEntry) {
+  showHistoryPanel.value = false
+  pickerError.value = null
+  if (entry.kind === 'queue' && entry.folder) {
+    await playlist.loadFolder(entry.folder)
+    if (playlist.error) {
+      pickerError.value = playlist.error === 'empty'
+        ? t('media.queueEmpty')
+        : String(playlist.error)
+      return
+    }
+    await castQueueFirstTo(entry.deviceId)
+    return
+  }
+  await castStore.startCast(entry.deviceId, entry.uri, {
+    title: entry.title,
+    mime_type: entry.mime_type,
+    thumbnail: entry.thumbnail ?? null,
+  })
+}
+
+function clearHistory(deviceId: string) {
+  history.clear(deviceId)
+}
 </script>
 
 <template>
@@ -614,14 +681,23 @@ function cycleMode() {
         <p v-if="pickerError" class="media-input__error">⚠ {{ pickerError }}</p>
         <p v-if="translatedError" class="media-input__error">⚠ {{ translatedError }}</p>
         <p v-if="mediaStore.ledgerHint" class="media-input__ledger-hint">{{ t('media.resolveLedgerHint') }}</p>
-        <button
-          v-if="!mediaStore.isParsing"
-          class="media-input__folder-btn"
-          type="button"
-          @click.stop="openFolderPicker"
-        >
-          📁 {{ t('media.pickFolder') }}
-        </button>
+        <div v-if="!mediaStore.isParsing" class="media-input__folder-row">
+          <button
+            class="media-input__folder-btn"
+            type="button"
+            @click.stop="openFolderPicker"
+          >
+            📁 {{ t('media.pickFolder') }}
+          </button>
+          <button
+            class="media-input__folder-btn"
+            type="button"
+            :title="t('media.historyOpen')"
+            @click.stop="showHistoryPanel = true"
+          >
+            🕘 {{ t('media.historyOpen') }}
+          </button>
+        </div>
       </template>
     </div>
 
@@ -731,6 +807,60 @@ function cycleMode() {
       <template #actions>
         <button class="btn-cancel" @click="onCloseDeviceModal">{{ t('common.cancel') }}</button>
       </template>
+    </Modal>
+
+    <!-- ═══ Cast History Panel（按设备的投屏历史）═══ -->
+    <Modal
+      :visible="showHistoryPanel"
+      :title="t('media.historyTitle')"
+      :show-icon="false"
+      @close="showHistoryPanel = false"
+    >
+      <div class="history-panel">
+        <p v-if="historyGroups.length === 0" class="history-panel__hint">
+          {{ t('media.historyEmpty') }}
+        </p>
+        <div v-for="group in historyGroups" :key="group.deviceId" class="history-panel__group">
+          <div class="history-panel__group-head">
+            <span class="history-panel__device" :title="group.deviceName">
+              <span class="history-panel__dot" :class="{ 'history-panel__dot--offline': !group.online }" />
+              {{ group.deviceName }}
+              <span v-if="!group.online" class="history-panel__offline">· {{ t('media.historyOffline') }}</span>
+            </span>
+            <button class="history-panel__clear" type="button" @click="clearHistory(group.deviceId)">
+              {{ t('media.historyClear') }}
+            </button>
+          </div>
+          <ul class="history-panel__list" role="list">
+            <li v-for="entry in group.items" :key="entry.id" class="history-panel__item">
+              <button
+                class="history-panel__cast"
+                type="button"
+                :disabled="!group.online || castStore.loading"
+                :title="entry.uri"
+                @click="castFromHistory(entry)"
+              >
+                <span class="history-panel__icon">{{ entry.kind === 'queue' ? '📁' : entry.kind === 'url' ? '🔗' : '🎬' }}</span>
+                <span class="history-panel__body">
+                  <span class="history-panel__title">{{ entry.title }}</span>
+                  <span class="history-panel__meta">
+                    <template v-if="entry.kind === 'queue' && entry.folder">{{ entry.folder }}</template>
+                    <template v-else>{{ entry.uri.split('/').pop() }}</template>
+                    <template v-if="entry.kind === 'queue' && entry.count"> · {{ t('media.historyCount', { n: entry.count }) }}</template>
+                    · {{ formatHistoryTime(entry.at) }}
+                  </span>
+                </span>
+              </button>
+              <button
+                class="history-panel__remove"
+                type="button"
+                :title="t('media.historyRemove')"
+                @click="history.removeEntry(entry.id)"
+              >✕</button>
+            </li>
+          </ul>
+        </div>
+      </div>
     </Modal>
 
     <!-- ═══ Playlist Queue Panel（文件夹投屏队列）═══ -->
@@ -1325,6 +1455,155 @@ function cycleMode() {
   color: var(--accent);
   border-color: var(--accent);
 }
+
+.media-input__folder-row {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+.media-input__folder-row .media-input__folder-btn {
+  margin-top: 10px;
+}
+
+/* ── 投屏历史面板 ── */
+.history-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.history-panel__hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-align: center;
+  padding: 16px 0;
+}
+.history-panel__group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.history-panel__group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.history-panel__device {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.history-panel__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #3ecf8e;
+  flex: none;
+}
+.history-panel__dot--offline {
+  background: var(--text-secondary);
+  opacity: 0.5;
+}
+.history-panel__offline {
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+.history-panel__clear {
+  flex: none;
+  padding: 2px 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.history-panel__clear:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.history-panel__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.history-panel__item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.history-panel__cast {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  text-align: left;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.history-panel__cast:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+.history-panel__cast:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.history-panel__icon {
+  flex: none;
+  font-size: 13px;
+}
+.history-panel__body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.history-panel__title {
+  font-size: 12px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.history-panel__meta {
+  font-size: 11px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.history-panel__remove {
+  flex: none;
+  padding: 2px 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.history-panel__remove:hover {
+  color: var(--accent);
+}
+
 
 /* ── 播放队列面板 ── */
 .queue-panel {

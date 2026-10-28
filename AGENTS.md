@@ -3,7 +3,7 @@
 > 旧名 `CLAUDE.md`（Claude Code 私有约定），2026-10-15 改名为跨工具的 `AGENTS.md`；
 > `CLAUDE.md` 现在只留三行指针指向本文件。
 
-> 最后校对：2026-10-28，对应版本 v2.4.1（`package.json:4`）。本轮（v2.4.1）：文件夹投屏两处 bug 修复（队列投屏不弹设备选择 / 播完一集不按模式续投），仅改前端 `MediaInput.vue`、`cast.ts`，无后端与行号变化；上一轮（v2.4.0）：文件夹投屏 + 播放队列（新 store `playlist.ts`、命令 `list_folder_media`，命令数 68/Sidecar 63/store 10），并含 TCL 后缀门修复（`media/server.py`）。
+> 最后校对：2026-10-29，对应版本 v2.4.2（`package.json:4`）。本轮（v2.4.2）：手动停止不再被自动续投顶回来、投新文件不再沿用旧文件夹队列，新增按设备的投屏历史（新 store `history.ts`，store 10→11），仅改前端 `cast.ts`、`MediaInput.vue`、`stores/history.ts` 与两份 locale，行号已按 diff 重校；上一轮（v2.4.1）：文件夹投屏两处 bug 修复（队列投屏不弹设备选择 / 播完一集不按模式续投）。
 > 本文件是速览与硬约束；逐模块的深度内容在 **docs/README.md** 的索引里，别在这里找细节。
 
 ## 项目概述
@@ -12,7 +12,7 @@
 
 - **项目名**: HanCast
 - **作者**: lanzeweie@foxmail.com
-- **版本**: 2.4.1（版本 SSOT 是 `package.json` 的 `version`，`scripts/sync-version.cjs:4`；改版本只走 `npm run version:set`，见「版本管理」）
+- **版本**: 2.4.2（版本 SSOT 是 `package.json` 的 `version`，`scripts/sync-version.cjs:4`；改版本只走 `npm run version:set`，见「版本管理」）
 - **性质**: 二次开发（非原项目官方更新）
 - **原始代码**: [xfangfang/Macast](https://github.com/xfangfang/Macast)（原作者 xfangfang，最后更新 2022-01）。仓库里**不含** `Macast-main/`、`Macast-plugins-main/` 这些本地目录，1.x 源码只作为移植参考，见「原始代码复用情况」
 - **目标架构**: Tauri 2.0 前端 + Rust 桥接 + Python Sidecar（+ MPV 接收端播放、FFmpeg 屏幕抓取）
@@ -72,11 +72,12 @@ HanCast/
 │   │   ├── HomeView.vue         # 主视图
 │   │   ├── SettingsView.vue     # 设置页（语言、DLNA 名称、后台参数、关于）
 │   │   └── CastControllerView.vue # 整窗控制器变体，无路由/无 import（死代码，见 docs/HanCast-Frontend-Spec.md §10.11）
-│   ├── stores/                  # 10 个 Pinia store
+│   ├── stores/                  # 11 个 Pinia store
 │   │   ├── cast.ts              # 投屏状态 + 事件订阅
 │   │   ├── device.ts            # 设备列表（30s 自动刷新）
 │   │   ├── media.ts             # 媒体输入状态机
 │   │   ├── playlist.ts          # 播放队列（文件夹投屏：排序/勾选/上下一集/顺序记忆/随机·单曲循环）
+│   │   ├── history.ts           # 投屏历史（按设备记账，localStorage `hancast.cast.history`，每设备 20 条）
 │   │   ├── settings.ts          # 应用设置
 │   │   ├── screencast.ts        # 屏幕投屏状态
 │   │   ├── guard.ts             # 投屏确认 / 信任设备
@@ -235,7 +236,7 @@ HanCast/
 `cast_confirm_request`、`screen_cast_state_changed`、`browser_request`），但 **`browser_request` 不转发前端**——
 它是壳层↔Sidecar 的反向 RPC，`sidecar.rs:361` 的专分支转给离屏渲染窗口。所以**回推前端 6 条**，
 Rust 侧另发 2 条（`update-available`、`autostart-changed`），**前端合计监听 8 条**。
-`ready` 两侧都没有订阅者（只作握手痕迹），`cast_error` 是前端遗留的死监听（`src/stores/cast.ts:728`）。
+`ready` 两侧都没有订阅者（只作握手痕迹），`cast_error` 是前端遗留的死监听（`src/stores/cast.ts:787`）。
 完整清单与触发时机见 docs/HanCast-Frontend-API.md。
 
 ### Tauri 命令列表（节选，完整清单以 `src-tauri/src/lib.rs` 的 `generate_handler!`（lib.rs:1472-1541，**68 条**）为准）

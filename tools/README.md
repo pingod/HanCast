@@ -2,7 +2,7 @@
 
 > 这份文档回答：`tools/` 下这些脚本各自验什么、怎么跑、需要什么环境，以及新增脚本要守哪些约定。
 >
-> 最后校对：2026-10-28，对应版本 v2.4.1（分类表按当前工作区重数；新增 §1.8 文档体检）
+> 最后校对：2026-10-29，对应版本 v2.4.2（分类表按当前工作区重数；新增 §1.8 文档体检）
 
 `tools/` 里放的是**可重复运行的验收 / 探针脚本**，不是一次性的 `/tmp` 手搓脚本。它们必须自适应当前机器——设备名、网卡、产物路径、参数条数都从现场现读，不写死。用法上的两条铁律：**修 bug 之前先跑它复现，修完之后再用它证明**。「证明」的对象是判据（退出码 / PASS-FAIL 行），不是截图，也不是「我点了一下看起来对」。
 
@@ -110,7 +110,7 @@ ssh administrator@192.168.1.68 "schtasks /delete /tn <TASK> /f"      # 收尾
 | `verify-media-theme.cjs` | 真实 Vue/Pinia 验解析代次（清空、编辑、文件/URL 交错与失败）、直链兜底、安全解码及系统主题切换 | `node tools/verify-media-theme.cjs` | 已安装前端依赖；API/DOM/定时器使用内存桩，无网络及用户配置写入 |
 | `verify-cast-ui.cjs` | 编译生产 store 与控制器 SFC，验证错误反馈、单飞轮询、操作代次、进度解锁/清理和封面回退 | `node tools/verify-cast-ui.cjs`；可附测试名子串只跑匹配项，例如 `node tools/verify-cast-ui.cjs "preview never"` | 同上；真实 Vue renderer/Pinia，假设备/API，无真实投屏；CSS 编译不等于跨平台渲染验收 |
 | `verify-app-lifecycle.cjs` | 编译真实 App/Home，验证首页→设置→首页监听仍各一份、事件可达、App 卸载及迟到 listen 句柄清理 | `node tools/verify-app-lifecycle.cjs` | 同上；设置路由和叶子控件用桩，根组件及首页脚本/模板实际编译，不复制产品初始化代码冒充验证 |
-| `verify-playlist-advance.cjs` | 播放队列自动续播验收（v2.4.1）：把真实 `playlist.ts` + `cast.ts` 转译进隔离 vm、挂组件实例让 `onMounted` 真注册事件监听，断言 `cast_state_changed` 的 stopped/idle 能在 `prevStatus=playing` 时推进队列；6 项断言（顺序/随机/单曲循环/connect 瞬态不接管等） | `node tools/verify-playlist-advance.cjs` | 同上；纯逻辑层转译，无浏览器无真机。可用「回退到旧写法」反证该项 FAIL，证明判据确实抓得住不续播 bug |
+| `verify-playlist-advance.cjs` | 播放队列自动续播与投屏历史验收（v2.4.2）：把真实 `playlist.ts` + `cast.ts` + `history.ts` 转译进隔离 vm、挂组件实例让 `onMounted` 真注册事件监听；10 项断言——顺序/随机/单曲循环推进、connect 瞬态不接管、**手动停止后 STOPPED 不再续投**、**投单文件清空旧队列**、**队列历史只记一条且按设备可查** | `node tools/verify-playlist-advance.cjs` | 同上；纯逻辑层转译，无浏览器无真机。可用「回退到旧写法」反证该项 FAIL，证明判据确实抓得住不续播/停不住/沿用旧队列三类 bug |
 | `verify-params-ui.mjs` | 设置页「后台参数」区块的浏览器验收：用真实 Chromium（headless shell + CDP）渲染，不靠快照推断布局。走 vite dev 的 mock 通道，只验 UI 行为（展开 / 四类控件 / 待保存计数 / 保存回落 / 恢复默认）。分组标题是**逐串比对**的（v2.3.12 起期望值含「GitHub 加速」），所以新增 section 忘了补 i18n 时它会红 | `node tools/verify-params-ui.mjs [base-url]`（默认 `http://localhost:5199`） | 先起 vite：`node node_modules/vite/bin/vite.js --port 5199`；`~/.cache/puppeteer/chrome-headless-shell` 下有 `mac_arm-*` 构建；CDP 端口 9337；截图落 `.tmp-win/hancast-params-ui.png`；退出码 0 = 全部断言通过。**后端契约不由它负责**——那是 `hancast-backend/tests/test_params*.py` 与 `tools/accept-macos-artifact.sh` 的活 |
 | `verify-error-wrap-ui.mjs` | 「解析失败原因」整行可见的浏览器验收（v2.3.12）：走 vite dev 的 mock 通道喂一条非媒体网页地址，mock 后端抛的就是真后端那条长错误，于是文案与样式都是真实形状。判据用**几何**不用文本——`textContent` 永远完整，截断只发生在渲染上，所以量「换了几行」「有没有一行的右边界超出元素盒子」，并在 **420px 窄窗**里测（宽窗会把老的 `nowrap` 样式也放过）<br>| `node tools/verify-error-wrap-ui.mjs [base-url]`（默认 `http://localhost:5199`） | 先起 vite：`node node_modules/vite/bin/vite.js --port 5199`；Chrome 同 §1.6 上一行；截图落 `.tmp-win/hancast-error-wrap.png`；退出码 0 = 全部断言通过 |
 | `verify-sidecar-utf8-protocol.py` | 验证 sidecar 的 stdin/stdout 协议在「父进程没有 locale」时仍走得通。登记表/错误文案全是中文，而 stdout 就是与 Rust 的通信通道；父进程没给 `LANG`/`LC_*` 时 Python 的 stdout 会退回 ASCII，`emit_response(..., ensure_ascii=False)` 直接抛 `UnicodeEncodeError`，表现为「命令永远失败」而不是「编码不对」 | `python3 tools/verify-sidecar-utf8-protocol.py [python 二进制]`（缺省用 `sys.executable`；可指向打包版 sidecar） | 后端源码可 import；无需外网、无需真机。判据：hostile env（`LC_ALL=C` 等）下 `get_params` 必须成功、条数不少于 18、中文标签原样回来；`stop_screen_cast`（空载）这种带中文提示的响应也必须回来。v2.2.18 用打包版实测撞到过 `{"id":2,"success":false,"error":"'ascii' codec can't encode characters …"}` |

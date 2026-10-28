@@ -1,6 +1,6 @@
 # HanCast Python Sidecar
 
-> 最后校对：2026-10-28，对应版本 v2.4.1（`package.json:4`）。深度内容见 [../docs/README.md](../docs/README.md)。
+> 最后校对：2026-10-29，对应版本 v2.4.2（`package.json:4`）。深度内容见 [../docs/README.md](../docs/README.md)。
 
 `hancast-backend/` 是 HanCast 的 Python 后端，以 **Sidecar 子进程**形式被 Tauri 壳层拉起，
 通过 stdin/stdout 的行分隔 JSON 与 Rust 通信。它负责 DLNA/SSDP、媒体服务、mpv 渲染、

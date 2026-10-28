@@ -22,6 +22,7 @@ import { notify } from '@/api/commands'
 import { tt } from '@/i18n'
 import { useDeviceStore } from '@/stores/device'
 import { usePlaylistStore } from '@/stores/playlist'
+import { useHistoryStore } from '@/stores/history'
 
 /** Parse "HH:MM:SS" to total seconds */
 function parseTimeToSeconds(time: string): number {
@@ -40,6 +41,14 @@ export const useCastStore = defineStore('cast', () => {
   const lastError = ref<string | null>(null)
   /** 正在换集的设备（播放队列自动续播时用，防 STOPPED 抖动造成重复起播） */
   const queueAdvancing = new Set<string>()
+  /**
+   * 用户手动点过「停止投屏」的设备。
+   * 设备收到 Stop 后会自报 STOPPED，那条事件长得和「一集播完」一模一样；
+   * 不挡住的话 advancePlaylistIfActive() 会把它当成自然播完、立刻续投下一集，
+   * 表现就是「点了停止又自己投起来，得点好几次才停得掉」。
+   * 下一次新的投屏（startCast）时清掉。
+   */
+  const userStoppedDevices = new Set<string>()
   let pollTimer: ReturnType<typeof setInterval> | null = null
   let pollInFlight = false
   let pollEpoch = 0
@@ -363,10 +372,16 @@ export const useCastStore = defineStore('cast', () => {
     qualities?: MediaQuality[]
     quality?: string
     source_url?: string
-  }) {
+  }, opts?: { fromQueue?: boolean }) {
     loading.value = true
     stopWarning.value = null
     dismissError()
+    // 新的投屏开始了：撤掉「刚手动停过」的记号，往后自然播完还能照常续播
+    userStoppedDevices.delete(deviceId)
+    // 投单个文件/链接时把旧队列清掉——否则界面还挂着上一个文件夹的列表，
+    // 再点「投屏」会照着旧队列把那个文件夹又投一遍
+    const playlist = usePlaylistStore()
+    if (!opts?.fromQueue && playlist.hasQueue) playlist.reset()
     const operation = beginOperation(deviceId)
     stopSim(deviceId)
     try {
@@ -401,6 +416,19 @@ export const useCastStore = defineStore('cast', () => {
       // Start progress simulation immediately — don't wait for cast_state_changed event
       // The device will start playing very soon after apiStartCast succeeds
       startSim(deviceId)
+      // 投屏成功了才记历史（失败的条目点了也重现不了，只会让人以为是软件坏了）
+      if (!opts?.fromQueue) {
+        useHistoryStore().record({
+          deviceId,
+          deviceName: sessions.value[deviceId]?.device_name ?? deviceId,
+          uri: mediaUri,
+          title: mediaInfo?.title ?? mediaUri.split('/').pop() ?? mediaUri,
+          mime_type: mediaInfo?.mime_type ?? '',
+          thumbnail: mediaInfo?.thumbnail ?? null,
+          kind: mediaInfo?.source_url ? 'url' : 'file',
+          at: Date.now(),
+        })
+      }
 
       // Check if we should prompt for autostart (first successful cast)
       checkAutostartPrompt()
@@ -449,7 +477,13 @@ export const useCastStore = defineStore('cast', () => {
     ])]
     const operations = new Map(ids.map(id => [id, beginOperation(id)]))
     // 停止会让在途的自动续播 startCast 失效，别让它把会话又拉起来
-    ids.forEach((id) => { beginCastOp(id); stopSim(id) })
+    ids.forEach((id) => {
+      beginCastOp(id)
+      stopSim(id)
+      // 打上「用户主动停」的记号：此后该设备自报的 STOPPED 不再被当成「一集播完」
+      userStoppedDevices.add(id)
+      queueAdvancing.delete(id)
+    })
     // 手动停止队列播放也要把队列的「当前项」清掉，免得下次事件误判仍在队列中
     usePlaylistStore().playingId = null
     const names = ids.map((id) => sessions.value[id]?.device_name ?? id)
@@ -662,24 +696,47 @@ export const useCastStore = defineStore('cast', () => {
   }
 
   /** 把队列里的一项投给设备；用 beginCastOp 判断这次 startCast 是否仍是最新操作 */
-  async function castQueueItem(deviceId: string, item: { id: string; media: any }): Promise<boolean> {
+  async function castQueueItem(
+    deviceId: string,
+    item: { id: string; media: any },
+    opts?: { startsQueue?: boolean },
+  ): Promise<boolean> {
+    // 用户刚按了停止：在途/排队的续播一律作废，别把设备又拉起来
+    if (userStoppedDevices.has(deviceId)) return false
     const playlist = usePlaylistStore()
     const media = item.media as {
       uri: string; title?: string; mime_type?: string; thumbnail?: string | null
     }
     const castOp = beginCastOp(deviceId)
+    // 只有「从头投这一轮队列」的那一次调用记历史；换集/手动切集不记，
+    // 否则一部剧放完能在历史里堆出几十条一模一样的文件夹条目。
+    const isQueueStart = !!opts?.startsQueue
     // 本地文件走 media_server.serve_file（后端按需要），这里照常把 uri 交给 startCast
     await startCast(deviceId, media.uri, {
       title: media.title,
       mime_type: media.mime_type,
       thumbnail: media.thumbnail ?? null,
-    })
+    }, { fromQueue: true })
     // startCast 有内建错误处理：失败会把 lastError 设上、session 标 error。
     // 用代次判断这次起播有没有被后续操作（手动切集/停止）取代——是则不再改 playingId。
     if (!isCastOpCurrent(deviceId, castOp)) return false
     const session = sessions.value[deviceId]
     if (session && session.status === 'error') return false
     playlist.playingId = item.id
+    if (isQueueStart) {
+      useHistoryStore().record({
+        deviceId,
+        deviceName: sessions.value[deviceId]?.device_name ?? deviceId,
+        uri: media.uri,
+        title: playlist.folder || media.title || media.uri,
+        mime_type: media.mime_type ?? '',
+        thumbnail: media.thumbnail ?? null,
+        kind: 'queue',
+        folder: playlist.folder,
+        count: playlist.total,
+        at: Date.now(),
+      })
+    }
     return true
   }
 
@@ -691,6 +748,8 @@ export const useCastStore = defineStore('cast', () => {
   function advancePlaylistIfActive(deviceId: string): boolean {
     const playlist = usePlaylistStore()
     if (!playlist.hasQueue) return false
+    // 用户刚手动停过这台设备：这次 STOPPED 是他按的，不是播完，绝不续投
+    if (userStoppedDevices.has(deviceId)) return false
     // 该设备当前投的必须是队列里的某一项，否则（普通单文件投屏）不接管
     const session = sessions.value[deviceId]
     const currentUri = session?.media?.uri

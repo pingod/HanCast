@@ -57,7 +57,8 @@ class Clock {
       if (next > end) break
       assert.ok(++iterations < 10000, 'timer runaway')
       this.now = next
-      for (const [id, job] of [...this.jobs]) {
+      
+for (const [id, job] of [...this.jobs]) {
         if (job.at !== next || !this.jobs.has(id)) continue
         if (job.repeat) job.at += job.delay
         else this.jobs.delete(id)
@@ -179,10 +180,24 @@ async function fixture(locale = 'en-US') {
   imports['@/types/cast'] = evaluate(fs.readFileSync(path.join(root, 'src/types/cast.ts'), 'utf8'),
     path.join(root, 'src/types/cast.ts'), imports, clock, logs)
   imports['@/stores/device'] = { useDeviceStore: pinia.defineStore('device', () => ({ devices: deviceList })) }
-  // cast.ts 现在会反查播放队列（自动续播/切集），测试隔离环境给个空队列桩
+  // cast.ts 会反查播放队列（自动续播/切集）。桩必须可变：v2.4.2 的两处停止缺陷
+  // （停止后又被自动续投 / 停止后投新东西仍沿用旧文件夹队列）只能靠改队列状态复现。
+  // 注意两点：① pinia 会把 setup 返回值**深拷贝**成自己的 state，所以状态只能通过
+  // store 代理读写（拿原始对象改是改不到的）；② 方法里的 `this` 绑在 store 上，
+  // 计数器必须写成 state 属性再用 `this.x += 1`，否则测试读不到。
   imports['@/stores/playlist'] = { usePlaylistStore: pinia.defineStore('playlist', () => ({
     hasQueue: false, items: [], playingId: null, playingIndex: 0, total: 0,
-    nextItem: () => null, manualNext: () => null, manualPrev: () => null,
+    nextCalls: 0, resetCalls: 0, nextValue: null,
+    nextItem() { this.nextCalls += 1; return this.nextValue },
+    manualNext: () => null,
+    manualPrev: () => null,
+    reset() { this.resetCalls += 1; this.hasQueue = false; this.items = [] },
+  })) }
+  // cast.ts 投屏成功后会写「投屏历史」（按设备记账）；本 harness 只验 UI 错误可见性，
+  // 历史用一个只记调用的空桩，保持隔离
+  imports['@/stores/history'] = { useHistoryStore: pinia.defineStore('history', () => ({
+    entries: [], forDevice: () => [], deviceIdsByRecency: () => [],
+    record() {}, removeEntry() {}, clear() {},
   })) }
   const storeModule = evaluate(storeSource, storeFile, imports, clock, logs)
   imports['@/stores/cast'] = storeModule
@@ -194,12 +209,15 @@ async function fixture(locale = 'en-US') {
   const renderer = makeRenderer(body)
   const storeRoot = pinia.createPinia()
   const showChild = vue.ref(true)
+  let playlistStore = null
   let store, screen, instance
   const app = renderer.createApp({
     setup() {
       instance = vue.getCurrentInstance()
       store = storeModule.useCastStore()
       screen = screenModule.useScreenCastStore()
+      // 队列桩在 setup 里先实化，测试在起播前就能改队列状态（模拟「上一个文件夹还在队列里」）
+      playlistStore = imports['@/stores/playlist'].usePlaylistStore()
       return () => showChild.value ? vue.h(Controller) : vue.h('empty')
     },
   })
@@ -209,6 +227,7 @@ async function fixture(locale = 'en-US') {
   await flush()
   return {
     store, screen, handlers, calls, clock, logs, listeners, body, showChild, notified, deviceList,
+    get playlist() { return playlistStore },
     get ui() { return instance.subTree.component.setupState },
     count(name) { return calls.filter(call => call.name === name).length },
     find(className) { return allNodes(body).find(el => el.props.class?.split(' ').includes(className)) },
@@ -699,6 +718,47 @@ test('preview never loads a video as an image and recovers after a broken cover'
   assert.equal(f.ui.isImage, true)
   assert.equal(f.ui.previewFailed, false)
   assert.equal(f.find('ctrl__thumb-img').props.src, 'https://invalid.test/photo.png?token=x')
+})
+
+test('manual stop suppresses the queue auto-advance', async f => {
+  await f.start('tv1')
+  const session = f.store.sessions.tv1
+  assert.ok(session, '起播应建立会话')
+  const currentUri = session.media?.uri ?? 'https://invalid.test/low.mp4'
+  // 造出「正在放队列里某一项」的现场
+  f.playlist.hasQueue = true
+  f.playlist.items = [{ id: 'i1', media: { uri: currentUri } }]
+  f.playlist.nextValue = { id: 'i2', media: { uri: 'https://invalid.test/next.mp4' } }
+  const castsBefore = f.count('startCast')
+
+  // 关键时序：设备收到 Stop 后自报的 STOPPED，完全可能早于 stop_cast 的响应回来，
+  // 那时本地会话还在——这条事件与「一集播完」逐字相同，正是用户报的 bug 的现场。
+  f.handlers.stopCast = async () => {
+    f.listeners.get('cast_state_changed')({ payload: { device_id: 'tv1', status: 'STOPPED' } })
+    await flush()
+    return {}
+  }
+  await f.store.stopCast('tv1')
+  await flush()
+
+  assert.equal(f.playlist.nextCalls, 0, '用户手动停止后的 STOPPED 不许当成自然播完')
+  assert.equal(f.count('startCast'), castsBefore, '停止后又自动投下一集，就是用户点的「一次停不掉」')
+})
+
+test('casting a new item drops the stale folder queue', async f => {
+  f.playlist.hasQueue = true
+  f.playlist.items = [{ id: 'i1', media: { uri: 'https://invalid.test/old-folder-ep1.mp4' } }]
+  await f.store.startCast('tv1', 'https://invalid.test/other.mp4')
+  await flush()
+  assert.equal(f.playlist.resetCalls, 1, '投单个文件必须清掉上一个文件夹的队列')
+  assert.equal(f.playlist.hasQueue, false, '旧队列不能继续挂着，否则界面和续投都还在用旧列表')
+
+  // 队列自己发起的起播不能反过来把队列清掉（否则自动续播会把队列打断）
+  f.playlist.hasQueue = true
+  await f.store.startCast('tv1', 'https://invalid.test/queue-ep.mp4', undefined, { fromQueue: true })
+  await flush()
+  assert.equal(f.playlist.resetCalls, 1, '队列发起的起播不许 reset')
+  assert.equal(f.playlist.hasQueue, true)
 })
 
 ;(async () => {

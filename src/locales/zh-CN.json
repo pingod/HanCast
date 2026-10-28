@@ -344,5 +344,12 @@
   "devices.addOk": "已添加「{name}」",
   "screencast.noDeviceHint": "没找到电视/大屏？可以手动按 IP 添加设备，并检查两端防火墙是否放行了 HanCast。",
   "screencast.dlnaNoPull": "电视没有拉取播放列表",
-  "screencast.dlnaLowBitrate": "电视在拉流但跟不上当前码率"
+  "screencast.dlnaLowBitrate": "电视在拉流但跟不上当前码率",
+  "media.historyOpen": "历史",
+  "media.historyTitle": "投屏历史",
+  "media.historyEmpty": "还没有投屏记录",
+  "media.historyOffline": "设备离线",
+  "media.historyClear": "清空",
+  "media.historyRemove": "删除这条记录",
+  "media.historyCount": "{n} 项"
 }

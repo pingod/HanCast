@@ -239,3 +239,11 @@ HanCast-Frontend-Spec,README,开发指南}.md 的计数与 §11 状态。
   - 新增 MediaParser + MediaServer
   - 完整通信协议定义
   - PyInstaller 打包流程
+
+## 2026-10-29 晨：v2.4.1 装端（macOS + Linux 完成，Windows 离线）
+- CI run 40688622534 首轮 macos-arm64 三次抢不到 GitHub 托管机（cancelled，"job was not acquired by Runner"），第 4 次 rerun 成功；最终三平台全绿，draft Release 10 项资产齐。
+- 下载踩坑：release-assets 限速 ~60-150KB/s 且易 stall；pdl.sh（12-14 段并发、全段覆盖重试）最终拿到——pkg sha256 9ba7db…✓、dmg sha256 196b28…✓ 且 hdiutil VALID。中途 resume1.sh 追加式续传导致过 pkg 字节损坏（sha 对不上），已弃用。
+- macOS：/Applications 从 2.4.0 → 2.4.1（adhoc），已启动（sidecar 运行）。
+- Linux cachyos(192.168.1.68:10086)：pacman -U 2.4.0-1 → 2.4.1-1，sidecar smoke 正常（version 2.4.1，get_settings success，wlgrab 在 /usr/lib/HanCast/）。
+- Windows（Host win 192.168.1.68:22）：连接拒绝，机器离线，未装（仍 2.3.15）。
+- Release 仍是 draft：按 DEC-006 边界③，publish 前需真机 TCL 确认两处修复（选设备弹窗 + 连续续播）。

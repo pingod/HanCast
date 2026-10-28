@@ -2,7 +2,7 @@
 
 > 本文档回答：HanCast 桌面端（Tauri 2 + Vue 3）的界面层是怎么搭起来的——窗口壳层、路由视图、组件与 Store 全量清单、真实数据流时序、样式与国际化机制、浏览器 mock 模式，以及写代码前必须知道的约束与坑。
 >
-> 最后校对：2026-10-28，对应版本 v2.4.1（`package.json:4`）。引用行号与硬数字由 `tools/check-doc-freshness.py` 机械核对；本轮（未发版）：文件夹投屏与播放队列（§6.5 + `playlist.ts`），`cast.ts` 行数与两语言 key 数（各 346）随之更新。
+> 最后校对：2026-10-29，对应版本 v2.4.2（`package.json:4`）。引用行号与硬数字由 `tools/check-doc-freshness.py` 机械核对；本轮（v2.4.2）：手动停止不再被自动续投顶回来、投新媒体不再沿用旧队列、新增按设备的投屏历史（§6.6 + `history.ts`），store 10→11，`cast.ts` 行数与两语言 key 数（各 353）随之更新；上一轮（v2.4.1）：文件夹投屏与播放队列（§6.5 + `playlist.ts`）。
 
 术语约定：**Sidecar** = Python 后台进程（`hancast-backend/`，打包为 `hancast-sidecar`）；**壳层** = Rust/Tauri 层（`src-tauri/`）；**规则包** = JS 解析插件 zip；**声明式规则** = JSON 站点规则；**屏幕投屏** = screencast（把电脑屏幕投出去）；**接收投屏** = 本机作为 DLNA 渲染端被别的设备投；**投屏确认** = Device Guard；**后台参数** = `params.py` 可调项。
 
@@ -206,7 +206,7 @@ default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src '
 
 `src/App.vue:43-52` 在 router-view 之外全局挂载 4 个模态：`GuardConfirmModal`(:46)、`UpdateModal`(:48)、`LogsPanel`(:50)、`AddDeviceModal`(:51)——它们需要跨路由可弹。另：非 DEV 构建禁用右键菜单（:26-39）；`onMounted` 拉取 `fetchSettings`（:31-32）。
 
-**App 的 setup 首先调用 `useDeviceStore()`、`useCastStore()`、`useScreenCastStore()`（`App.vue:19-24`）**。Pinia setup store 是单例，但其组件生命周期钩子归首次调用者；因此 device 的 30s 刷新与事件（`src/stores/device.ts:148-158`）、cast 的恢复/轮询/模拟进度与事件（`src/stores/cast.ts:744-758`）、screencast 的状态事件与下载轮询清理（`src/stores/screencast.ts:305-314`）均归 App 生命周期。历史上首次调用落在 HomeView 子树，进入设置会卸载这些订阅，返回又不会重跑单例 setup；本轮上移所有权修复，模态视图本身仍按路由挂载。cast 另用 `disposed` 防止根组件卸载后恢复请求重启轮询，并即时释放迟到的原生注册结果（`cast.ts:168-179`、`:221-225`、`:634-637`、`:736-741`）。
+**App 的 setup 首先调用 `useDeviceStore()`、`useCastStore()`、`useScreenCastStore()`（`App.vue:19-24`）**。Pinia setup store 是单例，但其组件生命周期钩子归首次调用者；因此 device 的 30s 刷新与事件（`src/stores/device.ts:148-158`）、cast 的恢复/轮询/模拟进度与事件（`src/stores/cast.ts:803-817`）、screencast 的状态事件与下载轮询清理（`src/stores/screencast.ts:305-314`）均归 App 生命周期。历史上首次调用落在 HomeView 子树，进入设置会卸载这些订阅，返回又不会重跑单例 setup；本轮上移所有权修复，模态视图本身仍按路由挂载。cast 另用 `disposed` 防止根组件卸载后恢复请求重启轮询，并即时释放迟到的原生注册结果（`cast.ts:186-197`、`:221-225`、`:634-637`、`:736-741`）。
 
 ---
 
@@ -239,23 +239,24 @@ default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src '
 
 ---
 
-## 5. Store 清单（10 个，`src/stores/`）
+## 5. Store 清单（11 个，`src/stores/`）
 
 全部为 Pinia **setup store**（`defineStore('x', () => {...})`）。需要组件生命周期的 store 在内部使用 `onMounted`/`onUnmounted` 管理定时器与事件监听；device/cast/screencast 由 App 首次创建，清理随 App 而非路由卸载（`src/App.vue:19-24`，见 §3.5）。Tauri 事件通常动态 import 后 `listen`，unlisten 函数收进数组、卸载时统一释放；浏览器 mock 下注册失败被 catch。theme 的系统主题监听则使用 **store scope** 的 `onScopeDispose` 清理（`src/stores/theme.ts:37-45`），不是组件卸载钩子。
 
 | Store | 行数 | 核心 state（类型） | 主要 actions | 订阅事件 | 调用的壳层命令 | 与其他 store 耦合 |
 |---|---|---|---|---|---|---|
-| `cast.ts` | 915 | `sessions: Record<string, CastSession>`、`focusedDeviceId: string\|null`、`showController`、`stopWarning: StopWarning\|null`、`lastError: string\|null`、`qualitySwitching`、`showAutostartPrompt`、`loading`；兼容用 computed `castState`（:103-127，把多设备折叠成聚焦设备视图） | `fetchState`(:190-236，恢复时也校验操作代次)、`startCast`(:356-417)、`stopCast`(:438-484)、`switchQuality`(:527-572，重解析 + restorePosition 最多 4 次 seek)、pause/resume/seek/setVolume/setMute、`startPolling`（1s tick、单飞与 epoch/逐设备操作 token 过滤旧响应，:237-305，见 §10.8）、`startSim`(:306-329，前端每秒 +1 模拟进度)、`checkAutostartPrompt`(:418-437，localStorage `has_asked_autostart` + 6s 延迟)、`openController`/`dismissStopWarning`/`dismissError` | `cast_state_changed`(:653-724)、`cast_error`(:728-738) | `get_cast_state`、`start_cast`、`stop_cast`、`pause_cast`、`resume_cast`、`seek_cast`、`set_volume`、`set_mute`、`get_cast_url` | **→ device**（`deviceLabel()` :60-66 在首次投屏失败时查设备名，本地那时会话还没建起来）；**失败出口**：`startCast` 失败与 `stopCast` 的 `control_failed` 除写 `lastError`/`stopWarning` 外还经 `alertDevice()`（:67-72）调 `notify()` 发系统通知并把隐藏窗口带回前台——标题走 `tt()`、正文是 Sidecar 原文 |
+| `cast.ts` | 977 | `sessions: Record<string, CastSession>`、`focusedDeviceId: string\|null`、`showController`、`stopWarning: StopWarning\|null`、`lastError: string\|null`、`qualitySwitching`、`showAutostartPrompt`、`loading`；兼容用 computed `castState`（:103-127，把多设备折叠成聚焦设备视图） | `fetchState`(:190-236，恢复时也校验操作代次)、`startCast`(:356-417)、`stopCast`(:438-484)、`switchQuality`(:527-572，重解析 + restorePosition 最多 4 次 seek)、pause/resume/seek/setVolume/setMute、`startPolling`（1s tick、单飞与 epoch/逐设备操作 token 过滤旧响应，:237-305，见 §10.8）、`startSim`(:306-329，前端每秒 +1 模拟进度)、`checkAutostartPrompt`(:418-437，localStorage `has_asked_autostart` + 6s 延迟)、`openController`/`dismissStopWarning`/`dismissError` | `cast_state_changed`(:653-724)、`cast_error`(:728-738) | `get_cast_state`、`start_cast`、`stop_cast`、`pause_cast`、`resume_cast`、`seek_cast`、`set_volume`、`set_mute`、`get_cast_url` | **→ device**（`deviceLabel()` :60-66 在首次投屏失败时查设备名，本地那时会话还没建起来）；**失败出口**：`startCast` 失败与 `stopCast` 的 `control_failed` 除写 `lastError`/`stopWarning` 外还经 `alertDevice()`（:67-72）调 `notify()` 发系统通知并把隐藏窗口带回前台——标题走 `tt()`、正文是 Sidecar 原文 |
 | `device.ts` | 179 | `devices: Device[]`、`selectedDevice`、`manualDevices`、`showAddModal` | `fetchDevices`（30s 自动取列表 :148-152）、`refresh`（手动发现 :38-47）、`addDevice`(:94-112，直接并入设备列表)、`openAddModal`、rename/setDefault/hide | `device_found`(:121-135，upsert)、`device_lost`(:138-142) | `get_devices`、`refresh_devices`、`add_device`、`get_manual_devices`、`rename_device`、`remove_device`、`hide_device`、`set_default_device` | 无 |
-| `media.ts` | 230 | `state: 'idle'\|'dragover'\|'input'\|'parsing'\|'ready'`、`mediaInfo: MediaInfo\|null`、`localFile: File\|null`、`urlInput`、`error`、`ledgerHint` | `parseFile`(:83-116，路径字符串→Tauri；File 对象→本地元数据 + localFile，预览 URL 由 MediaInput 生成)、`parseUrl`(:124-203，见 §6 链路 1)、`setInputChange`/`reset` 递增 `parseGeneration` 使旧请求失效（:42-78）；新解析清空旧预览，仅最新代次可写回成功/失败，直链降级容忍畸形百分号（:173-180）；`setThumbnail` | 无 | `parse_media_file`、（经 `resolveShare`）`resolve_share` + `get_resolve_result` | 无 |
+| `media.ts` | 229 | `state: 'idle'\|'dragover'\|'input'\|'parsing'\|'ready'`、`mediaInfo: MediaInfo\|null`、`localFile: File\|null`、`urlInput`、`error`、`ledgerHint` | `parseFile`(:83-116，路径字符串→Tauri；File 对象→本地元数据 + localFile，预览 URL 由 MediaInput 生成)、`parseUrl`(:124-203，见 §6 链路 1)、`setInputChange`/`reset` 递增 `parseGeneration` 使旧请求失效（:42-78）；新解析清空旧预览，仅最新代次可写回成功/失败，直链降级容忍畸形百分号（:173-180）；`setThumbnail` | 无 | `parse_media_file`、（经 `resolveShare`）`resolve_share` + `get_resolve_result` | 无 |
 | `guard.ts` | 190 | `pendingRequest: CastConfirmRequest\|null`、`countdown`、`settings: GuardSettings`、`trustedDevices`/`blacklistedDevices: GuardDevice[]`、`loading` | `handleResponse`(:72-86)、`fetchDevices`、`fetchSettings`、`removeDevice`、`setPolicy`、倒计时（到 0 自动拒绝 `handleResponse(false,'once')` :33-39）；`setupListeners` 在 `onMounted` 之外也被立即调用一次（:171，保证 App 级弹窗不依赖组件挂载时机） | `cast_confirm_request`(:126-149：guard 禁用时自动批准 :129-132；已有 pending 时拒绝新请求 :134-137；`win.show()+setFocus()` 把窗口拉到前台 :141-148) | `respond_cast_confirm`、`get_guard_devices`、`remove_guard_device`、`set_guard_policy`、`get_guard_settings`、`save_guard_settings` | 无 |
 | `settings.ts` | 83 | `settings: AppSettings\|null` | `fetchSettings`、`saveSettings`（增量合并）、`toggleAutostart` | `autostart-changed`(:28-38，托盘改自启时同步) | `get_settings`、`save_settings`、`get_autostart`、`set_autostart` | 无 |
-| `theme.ts` | 49 | `mode: 'light'\|'dark'\|'system'`、内部响应式 `systemDark`、computed `applied`（:9-17；不是 `resolved`） | `apply`/`toggle`(:24-32)；`persist`(:19-22)：写 `data-theme` + `localStorage 'hancast-theme'`；非法已存模式回退 system；持续监听 matchMedia change 更新 systemDark，system 模式才更新 DOM，`onScopeDispose` 移除监听（:37-45，见 §7.2） | 无（matchMedia 非 Tauri 事件） | 无 | 无 |
+| `theme.ts` | 48 | `mode: 'light'\|'dark'\|'system'`、内部响应式 `systemDark`、computed `applied`（:9-17；不是 `resolved`） | `apply`/`toggle`(:24-32)；`persist`(:19-22)：写 `data-theme` + `localStorage 'hancast-theme'`；非法已存模式回退 system；持续监听 matchMedia change 更新 systemDark，system 模式才更新 DOM，`onScopeDispose` 移除监听（:37-45，见 §7.2） | 无（matchMedia 非 Tauri 事件） | 无 | 无 |
 | `logs.ts` | 124 | `visible`、`page: LogPage\|null`、`query: LogQuery`、`level` | `open`/`close`、`refresh`（`TAIL_INTERVAL = 3000` :7；撞车时排队 `pendingRefresh` :33-36）、`toggleDebug`（setLogLevel DEBUG/INFO） | 无 | `get_logs`、`set_log_level`、`export_logs` | 无 |
 | `update.ts` | 131 | `info: UpdateInfo\|null`、`modalState: UpdateModalState`、`showModal`、`storeVersion` | `checkUpdate`（商店版跳过 :28-31）、`ignoreVersion`、`openDownload`(:71-76，window.open) | `update-available`(:94-97，Rust 启动 3s 后推送) | `check_update`、`ignore_update_version`、`is_store_version` | 无 |
 | `screencast.ts` | 349 | `state: ScreenCastState`、`sources: ScreenSources\|null`、`stopWarning`、`showDepsModal`(:39)、`ffmpegReport: FfmpegStatus\|null`(:40)、`downloadTask: FfmpegDownloadTask\|null`(:41)、`downloading`(:42)、`reportLoading`(:43)；computed `ffmpegOk`(:49) | `fetchSources`(:68-84，顺带把 `sources.ffmpeg` 回填进 `ffmpegReport`)、`refreshFfmpegReport`(:85-101，`refresh=false` 吃后端 30s 缓存，弹窗首开秒出)、`startFfmpegDownload`(:126-140，起任务后 1s `setInterval` 轮询 `pollDownload` :109-125，`done` 自动重测)、`resumeDownloadPolling`(:155-170，打开依赖弹窗时向后端对齐；下载定时器现在由 App 生命周期持有，路由切换不再触发 :310-314 的清理，旧「关面板就断」注释不再代表当前挂载关系)、`openFfmpegDir`(:141-154)、`openDepsModal`/`closeDepsModal`(:171-179)、`start`(:189-211)、`stop`(:212-249，`control_failed` → stopWarning，**借 `useDeviceStore` 把 device_id 翻译成设备名** :236-237)、`setFfmpegPath`(:250-265)、`dismissStopWarning`(:347) | `screen_cast_state_changed`(:285-300，迟到注册在卸载后立即释放 :298-299) | `list_screen_sources`、`start_screen_cast`、`stop_screen_cast`、`screen_cast_status`、`set_ffmpeg_path`、`ffmpeg_status`、`ffmpeg_download_start`、`ffmpeg_download_status`、`open_ffmpeg_dir` | **→ device**（设备 id 翻译成设备名）；**失败出口**：`start` 被拒/抛错、`stop` 的 `control_failed`、状态事件里的 `error` 三种各经 `alertScreen()`（:61-67）发一条系统通知，同一句 error 去重（`lastAlertedError` :45） |
+| `history.ts` | 117 | `entries: Record<string, HistoryEntry[]>`（以 deviceId 为键）、`loading` | `load()`（从 localStorage `hancast.cast.history` 灌入并做结构校验）、`record(...)`（投屏成功后入账，`kind: 'file'\|'url'\|'queue'`，同一 `uri+deviceId` 去重后提到最前，每设备上限 20 条）、`clear(deviceId?)`、`remove(deviceId, entryId)`、`entriesFor(deviceId)` | 无 | 无（纯 localStorage，不经壳层） | **被 cast 反查**：`cast.ts` 的 `startCast`/`castQueueItem` 成功后写账；`MediaInput.vue` 的历史面板按当前选中设备读 `entriesFor`，点击条目即重投（队列条目先 `playlist.loadFolder(folder)` 再 `castQueueFirstTo`） |
 | `playlist.ts` | 255 | `items: QueueItem[]`、`folder`、`playingId: string\|null`、`playMode: 'sequential'\|'shuffle'\|'repeat-one'`、`selectedIds: Set<string>`、`error`、`loading`；computed `playableItems`（= 勾选项）、`total`、`playingIndex`、`hasQueue`（:60-68） | `loadFolder`(:126-148，调 `listFolderMedia` + 应用顺序记忆)、`isSelected`/`toggleSelected`/`selectAll`/`selectNone`(:78-95)、`moveItem`/`moveUp`/`moveDown`/`removeItem`(:149-176，改动即 `rememberOrder` 写 localStorage)、`setPlayMode`(:179)、`nextItem`（自动续播，处理 repeat-one/shuffle :189-207）、`manualNext`/`manualPrev`（上/下一集按钮 :209-226）、顺序记忆 `loadOrderMap`/`saveOrderMap`/`rememberOrder`/`applyRememberedOrder`（localStorage `hancast.playlist.order`，:17-125） | 无（由 `cast.ts` 在 `cast_state_changed`→STOPPED 时回调 `advancePlaylistIfActive`） | `list_folder_media` | **被 cast 反查**：`cast.ts` 的 `advancePlaylistIfActive` / `skipToNext` / `skipToPrev` / `castQueueItem` 读本 store 的 `items`/`nextItem`，判断当前投的 URI 是否队列项并推进队列 |
-**store 间耦合共三处**：`screencast → device`；2026-10-24 起的 `cast → device`（`deviceLabel()` 在首次投屏失败时查设备名，那时本地还没有会话）；本轮新增的 `cast → playlist`（队列续播/切集）。此前这里写的是「`screencast → device` 是唯一一处」，那句现在不成立了。
+**store 间耦合共四处**：`screencast → device`；2026-10-24 起的 `cast → device`（`deviceLabel()` 在首次投屏失败时查设备名，那时本地还没有会话）；`cast → playlist`（队列续播/切集，v2.4.0）；v2.4.2 起的 `cast → history`（每次投屏成功入账一条历史，见 §6.6）。此前这里写的是「`screencast → device` 是唯一一处」，那句现在不成立了。
 
 ---
 
@@ -299,11 +300,11 @@ default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src '
 
 1. 剪贴板读取走 Rust（`read_clipboard`），Web API 仅降级（`commands.ts:967-980`，原因见 §10.1）。
 2. `resolve_share` 是**异步任务**：立即返回 `task_id`，前端 400ms 轮询 `get_resolve_result`，45s 兜底超时（`commands.ts:702-727`；Sidecar 单条解析预算 25s，注释写明）。兼容「直接返回结果」的旧实现/浏览器 mock（`commands.ts:712-716`）。
-3. 后端解析失败时**不再无条件透传**：只有从文本里抠出的地址本身带媒体扩展名（`media.ts:15-19` 白名单）才 `extractFirstUrl` + 按扩展名推 MIME 透传；网页地址一律如实报错（`media.ts:158-203`）。旧口径「能抠出链接就降级透传」会让随便一个 HTML 页面也能点投屏、点了却毫无动作，且失败被吞进台账之外无人看见。报错时 `ledgerHint` 置真，输入框下方直接指出「设置 → 解析插件 → 解析失败台账（按域名分组）」入口（`MediaInput.vue:611`）；本轮为降级文件名解码加 try/catch，畸形 `%` 不会再次抛错而卡住 parsing（`media.ts:173-180`）。
-4. 投屏目标选择优先级：选中设备（在线）→ 默认设备（在线）→ 弹设备选择 Modal（`MediaInput.vue:412-451`）。
-5. `startCast` **等待命令成功但不等事件**，然后乐观置 playing（`cast.ts:355-363` 注释「Set playing immediately — don't wait for event」），同时启动本地进度模拟与 1s 单飞轮询；状态事件处理另见 §10.6，操作代次防护见 §10.8。
-6. Ctrl+V 直接进输入框时：纯链接保持默认粘贴（可编辑），**非纯链接的口令文本**才拦截并自动解析（`MediaInput.vue:381-388`）。
-7. 本轮 `parseGeneration` 统一隔离文件/URL 的在途解析：新解析、清空、编辑输入均使旧结果失效，成功和异常分支都先验代次（`media.ts:42-78`、`:83-116`、`:124-159`）。输入框通过 `setInputChange` 更新（`MediaInput.vue:667-668`），同时清掉旧媒体/本地预览和错误，避免旧响应复活已清空或替换的内容；历史上没有此保护，慢请求可能覆盖较新的选择。这里只阻止前端写回，不取消后端任务。
+3. 后端解析失败时**不再无条件透传**：只有从文本里抠出的地址本身带媒体扩展名（`media.ts:15-19` 白名单）才 `extractFirstUrl` + 按扩展名推 MIME 透传；网页地址一律如实报错（`media.ts:158-203`）。旧口径「能抠出链接就降级透传」会让随便一个 HTML 页面也能点投屏、点了却毫无动作，且失败被吞进台账之外无人看见。报错时 `ledgerHint` 置真，输入框下方直接指出「设置 → 解析插件 → 解析失败台账（按域名分组）」入口（`MediaInput.vue:754`）；本轮为降级文件名解码加 try/catch，畸形 `%` 不会再次抛错而卡住 parsing（`media.ts:173-180`）。
+4. 投屏目标选择优先级：选中设备（在线）→ 默认设备（在线）→ 弹设备选择 Modal（`MediaInput.vue:426-483`）。
+5. `startCast` **等待命令成功但不等事件**，然后乐观置 playing（`cast.ts:373-387` 注释「Set playing immediately — don't wait for event」），同时启动本地进度模拟与 1s 单飞轮询；状态事件处理另见 §10.6，操作代次防护见 §10.8。
+6. Ctrl+V 直接进输入框时：纯链接保持默认粘贴（可编辑），**非纯链接的口令文本**才拦截并自动解析（`MediaInput.vue:392-402`）。
+7. 本轮 `parseGeneration` 统一隔离文件/URL 的在途解析：新解析、清空、编辑输入均使旧结果失效，成功和异常分支都先验代次（`media.ts:42-78`、`:83-116`、`:124-159`）。输入框通过 `setInputChange` 更新（`MediaInput.vue:873-874`），同时清掉旧媒体/本地预览和错误，避免旧响应复活已清空或替换的内容；历史上没有此保护，慢请求可能覆盖较新的选择。这里只阻止前端写回，不取消后端任务。
 
 ### 链路 2：手机投屏到本机（接收投屏）→ 投屏确认 → MPV 播放
 
@@ -347,6 +348,27 @@ default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src '
 - **上/下一集**：投屏控制器（`CastController.vue`）在队列投屏时显示 ⏮ / 第 i/n 集 / ⏭，调 `castStore.skipToPrev`/`skipToNext`。
 
 只投**单个文件**时仍走原来的单文件链路，不涉及队列。队列只在本地文件场景出现（分享链接解析结果不进队列）。
+
+## 6.6 投屏历史（2026-10-29 新增，v2.4.2）
+
+媒体输入区多了一条「🕘 投屏历史」入口，列出**当前选中设备**过去投过的东西（`history.ts` + `MediaInput.vue` 的历史面板）。
+
+- **按设备记账**：`entries` 是 `Record<deviceId, HistoryEntry[]>`，投给 A 电视的记录不会出现在 B 音箱的列表里。没选设备时面板给出提示而不是展示别的设备的账。
+- **三类条目**（`kind`）：`file`（本地文件，带 `filePath` 供重投时重新解析）、`url`（分享链接/直链，带原始 `uri`）、`queue`（文件夹队列，带 `folder` 与 `count`，重投时先 `playlist.loadFolder(folder)` 复原队列再投第一项）。
+- **去重与上限**：同一 `deviceId + uri` 再投一次只把条目提到最前并刷新 `playedAt`/`castCount`，不产生重复行；每设备最多 **20 条**（`MAX_PER_DEVICE`），超出丢最旧。
+- **持久化**：只写 localStorage `hancast.cast.history`（不落 AppData、不经壳层）；`load()` 对读回的结构做校验，字段缺失/类型不对的条目直接丢弃——旧版本写下的坏数据不能让面板白屏。
+- **入账时机**：`cast.ts` 在 `startCast` / `castQueueItem` **成功之后**才 `record(...)`，失败不记账（否则历史里会堆一串点不动的失败条目）。
+
+---
+
+## 6.7 队列投屏「停止」的语义（v2.4.2 修）
+
+v2.4.1 的队列投屏有两处让「停止」失效的缺陷，修法都在 `cast.ts`，不涉及后端：
+
+1. **点一次停止，下一集又被投上来**。根因是续播的触发口径分不清「这集播完了」和「用户喊停」：两者在 DLNA 事件流里都是设备自报 `STOPPED`，`advancePlaylistIfActive` 一律当成自然播完，于是立刻投下一集，用户得连点好几次。修法是显式记账：`stopCast` 在**发 Stop 之前**就给所有目标设备打上 `userStoppedDevices`（`cast.ts:51`）标记（`cast.ts:484`）——顺序很重要，设备自报的 STOPPED 常常早于 `stop_cast` 的响应回来，那时本地会话还在，晚一步打标记就拦不住；同时清掉 `queueAdvancing` 与 `playlist.playingId`。`advancePlaylistIfActive`（`cast.ts:748`）与 `castQueueItem`（`cast.ts:699`）进来先看这个标记，命中就直接放弃；标记在**下一次成功起播**时撤掉（`cast.ts:380`），所以停止后重新投屏不受影响。另外 `advancePlaylistIfActive` 还会再核一遍「设备当前 URI 仍是本队列的某一项」，陈旧事件拉不起已经停掉的会话。
+2. **停止后再投别的东西，投的还是旧文件夹的队列**。根因是 `playlist` 是全局单例，停止只清会话、不清队列，界面还挂着上一个文件夹的列表，再点投屏就照着旧队列又投一遍。修法在 `startCast`：只要这次起播**不是**队列自己发起的（`opts.fromQueue` 为假）而 `playlist.hasQueue` 为真，就先 `playlist.reset()`（`cast.ts:384`）把旧队列清掉。
+
+两条不变量都有回归用例（`tools/verify-cast-ui.cjs`：`manual stop suppresses the queue auto-advance` 与 `casting a new item drops the stale folder queue`），且都做过**变异验证**——把守卫去掉后这两条立刻红，说明它们真的钉住了缺陷而不是陪跑。第一条刻意按真实时序构造：让设备在 `stop_cast` 的响应回来之前发出 STOPPED，这正是「一次停不掉」的现场。
 
 ---
 
@@ -407,7 +429,7 @@ default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src '
 
 ### 8.3 两语言是否等键（脚本比对结果）
 
-2026-10-28 读取两份扁平 JSON 比对：**zh-CN / en-US 各 346 个 key，双向差集为 0**（本轮文件夹投屏新增一组 `media.*` 队列文案，并清掉了几个脚手架期间写下、从未被引用的 key）。278、321、324 都是历史取证数，不能继续当作现值。
+2026-10-29 读取两份扁平 JSON 比对：**zh-CN / en-US 各 353 个 key，双向差集为 0**（本轮新增一组 `media.history*` 投屏历史文案，7 个键）。278、321、324、346 都是历史取证数，不能继续当作现值。
 
 ### 8.4 覆盖范围与已知缺口
 
@@ -445,9 +467,9 @@ default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src '
 |---|---|
 | 真实设备发现 / 真实投屏 / DLNA 全部 | mock 数据，无真实网络行为 |
 | 系统剪贴板读取 | 返回空串；`readClipboardText` 会尝试 `navigator.clipboard.readText()` 降级（需用户授权，`commands.ts:975-979`） |
-| 文件解析 | `media.ts:83-116` 双模式：`<input type=file>` 的 File 留在 `localFile`；`MediaInput.vue:106-107`、`:128-136` 生成 `URL.createObjectURL` 做图片/视频预览 |
+| 文件解析 | `media.ts:83-116` 双模式：`<input type=file>` 的 File 留在 `localFile`；`MediaInput.vue:108-109`、`:128-136` 生成 `URL.createObjectURL` 做图片/视频预览 |
 | 窗口控制（拖拽/最小化/关闭/托盘） | 全部无效（无 IPC）；`data-tauri-drag-region` 无行为 |
-| 原生文件选择对话框 | `MediaInput.vue:465-484`、`PluginSettings.vue:51-83` 均有 dialog → HTML `<input>` 降级路径 |
+| 原生文件选择对话框 | `MediaInput.vue:497-517`、`PluginSettings.vue:51-83` 均有 dialog → HTML `<input>` 降级路径 |
 | 打开外部链接 | `plugin-shell open` → `window.open` 降级（`DownloadModal.vue:19-27`） |
 | 自启动 / 更新检查 / 日志导出 / MPV / ffmpeg 屏幕投屏 | mock 或静默失败 |
 
@@ -461,7 +483,7 @@ default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src '
 
 ### 10.2 Tauri 原生拖拽与 HTML5 拖拽互斥
 
-`MediaInput.vue:223-245` 有大段注释记录：`dragDropEnabled: true`（当前配置，`tauri.conf.json:29`）时 WebView 收不到 HTML5 `dragover/drop` 事件，二者只能取其一；上游 issue tauri-apps/tauri#14055 标记 not planned、#14373 讨论过。项目采取的策略：**文件走 Tauri 原生 `onDragDropEvent`（拿绝对路径，交 Rust 解析）；URL/口令引导用户粘贴**（拖拽进入时显示 showPasteHint，`MediaInput.vue:335-356`；原生事件的 `paths` 为空时也回落到粘贴提示）。
+`MediaInput.vue:225-247` 有大段注释记录：`dragDropEnabled: true`（当前配置，`tauri.conf.json:29`）时 WebView 收不到 HTML5 `dragover/drop` 事件，二者只能取其一；上游 issue tauri-apps/tauri#14055 标记 not planned、#14373 讨论过。项目采取的策略：**文件走 Tauri 原生 `onDragDropEvent`（拿绝对路径，交 Rust 解析）；URL/口令引导用户粘贴**（拖拽进入时显示 showPasteHint，`MediaInput.vue:341-364`；原生事件的 `paths` 为空时也回落到粘贴提示）。
 
 ### 10.3 CSP `unsafe-eval` 不能删
 
@@ -483,17 +505,17 @@ Modal 打开后聚焦 dialog，自带 Escape 关闭、Tab/Shift+Tab 循环与关
 
 ### 10.7 `stop_cast` 的 `control_failed` 不能吞
 
-`lib.rs:532-533` 注释：本地会话已释放、但电视没收到 Stop 时，前端要靠返回体里的 `control_failed` 解释「界面停了、电视还在播」。落点：`cast.ts:438-484`（stopCast 在 finally 释放仍属于本次操作的会话 + 置 `stopWarning`，不会删掉等待 Stop 时新开的同设备会话）→ `StopWarningBanner`（`HomeView.vue:53-57`）；屏幕投屏同款逻辑 `screencast.ts:212-249`。类型定义 `StopCastResult`/`StopWarning` 在 `commands.ts:1151-1167`。
+`lib.rs:532-533` 注释：本地会话已释放、但电视没收到 Stop 时，前端要靠返回体里的 `control_failed` 解释「界面停了、电视还在播」。落点：`cast.ts:500-552`（stopCast 在 finally 释放仍属于本次操作的会话 + 置 `stopWarning`，不会删掉等待 Stop 时新开的同设备会话）→ `StopWarningBanner`（`HomeView.vue:53-57`）；屏幕投屏同款逻辑 `screencast.ts:212-249`。类型定义 `StopCastResult`/`StopWarning` 在 `commands.ts:1151-1167`。
 
 ### 10.8 进度条与轮询的打架：主动解锁 + 单飞 + 操作代次
 
 历史上解锁逻辑放在无人消费的 computed 中，惰性 getter 不执行，seek 显示可能一直锁住；轮询也曾可重叠，并用只向前的位置合并掩盖旧响应。本轮分别处理：
 
 - **组件交互锁**：`CastController.vue:145-149` 用主动 `watch` 观察位置、时长和锁目标，距目标小于 3 秒即解锁；seek 请求完成（失败同样返回）或 5s 兜底也解锁。`seekRequest` 保证旧请求结束不释放新拖动的锁（`:199-220`）。切设备、隐藏控制器、卸载都重置交互并清除定时器（`:151-163`）。音量仍为 50ms 防抖，但回调捕获操作时的设备 id，不向后来聚焦的设备发音量（`:112-121`）。
-- **轮询单飞与生命周期代次**：`src/stores/cast.ts:237-305` 每 1s 触发一次检查；`pollInFlight` 保证整个逐设备扫描只有一轮在途，慢请求期间跳过 tick。`pollEpoch` 隔离 stop/restart，旧轮响应无权写回；停止定时器不会提前释放在途锁，只有 `finally` 释放。因此不是「每秒必有一次新请求」。
-- **逐设备操作代次**：start/stop/pause/resume/seek/画质切换替换设备 token（`cast.ts:41-50`、`:341-597`）；轮询跳过 pending 操作，返回时检查 epoch、会话仍存在与 token 身份（`:243-250`）。旧 start/stop/seek/画质恢复的会话写回不能覆盖同设备新操作，首次恢复 `fetchState` 也检查 token 快照（`:175-192`）。新鲜轮询位置允许合法回退（向后 seek），仅 playing/paused 时位置与时长全零的样本不采纳（`:261-271`）；这不是后端取消机制，也不代表无 token 的事件流已能辨认旧响应。
+- **轮询单飞与生命周期代次**：`src/stores/cast.ts:246-314` 每 1s 触发一次检查；`pollInFlight` 保证整个逐设备扫描只有一轮在途，慢请求期间跳过 tick。`pollEpoch` 隔离 stop/restart，旧轮响应无权写回；停止定时器不会提前释放在途锁，只有 `finally` 释放。因此不是「每秒必有一次新请求」。
+- **逐设备操作代次**：start/stop/pause/resume/seek/画质切换替换设备 token（`cast.ts:43-68`、`:341-597`）；轮询跳过 pending 操作，返回时检查 epoch、会话仍存在与 token 身份（`:243-250`）。旧 start/stop/seek/画质恢复的会话写回不能覆盖同设备新操作，首次恢复 `fetchState` 也检查 token 快照（`:175-192`）。新鲜轮询位置允许合法回退（向后 seek），仅 playing/paused 时位置与时长全零的样本不采纳（`:261-271`）；这不是后端取消机制，也不代表无 token 的事件流已能辨认旧响应。
 
-播控错误写入 `lastError`，由首页与控制器显示原始原因（`HomeView.vue:49-52`、`CastController.vue:244-248`）。seek/画质失败后如当前会话仍 playing 会恢复模拟进度；画质恢复位置最多试 4 次，最后一次失败不再静默吞掉（`cast.ts:544-596`）。画质 select 在请求后回读当前会话，失败时复位所选档位（`CastController.vue:54-60`）。上述为前端防护，不等于电视已执行命令；本轮验证边界见附录。
+播控错误写入 `lastError`，由首页与控制器显示原始原因（`HomeView.vue:49-52`、`CastController.vue:244-248`）。seek/画质失败后如当前会话仍 playing 会恢复模拟进度；画质恢复位置最多试 4 次，最后一次失败不再静默吞掉（`cast.ts:612-664`）。画质 select 在请求后回读当前会话，失败时复位所选档位（`CastController.vue:54-60`）。上述为前端防护，不等于电视已执行命令；本轮验证边界见附录。
 
 ### 10.9 macOS 麦克风授权（TCC）要由 WebView 代触发
 
@@ -510,10 +532,10 @@ Modal 打开后聚焦 dialog，自带 Escape 关闭、Tab/Shift+Tab 循环与关
 
 ### 10.12 渲染性能注意点
 
-- 进度每秒跳动由 `startSim` 本地模拟（`cast.ts:290-313`），新鲜轮询仍可校正位置；投屏轮询每 1s tick、在途则跳过、逐设备扫描，不能再写成固定每秒并发拉取（`cast.ts:221-288`）。日志 tail 固定 3s（`logs.ts:7`）。
+- 进度每秒跳动由 `startSim` 本地模拟（`cast.ts:308-331`），新鲜轮询仍可校正位置；投屏轮询每 1s tick、在途则跳过、逐设备扫描，不能再写成固定每秒并发拉取（`cast.ts:239-306`）。日志 tail 固定 3s（`logs.ts:7`）。
 - 日志关键字 450ms 防抖（`LogsPanel.vue:73-78`）、音量 change 后 50ms 防抖（`CastController.vue:112-121`，input 本地即时更新）、窗口尺寸保存 500ms（Rust 侧）。
 - 日志刷新撞车时排队而不并发（`logs.ts:33-36` `pendingRefresh`）；投屏轮询使用的是跳过 tick 的单飞策略，不是日志的排队策略。
-- 缩略图抽帧用 `<video>` + canvas 在前端完成并生成 JPEG data URL（`MediaInput.vue:33-44`）；Tauri 本地预览源走 `asset:`，浏览器 File 则由组件生成 blob URL（`:90-109`、`:128-136`），不能把缩略图也写成「不进 base64」。
+- 缩略图抽帧用 `<video>` + canvas 在前端完成并生成 JPEG data URL（`MediaInput.vue:35-46`）；Tauri 本地预览源走 `asset:`，浏览器 File 则由组件生成 blob URL（`:90-109`、`:128-136`），不能把缩略图也写成「不进 base64」。
 
 ### 10.13 其他平台/环境差异
 
