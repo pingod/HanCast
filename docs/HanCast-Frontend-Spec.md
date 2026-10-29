@@ -2,7 +2,7 @@
 
 > 本文档回答：HanCast 桌面端（Tauri 2 + Vue 3）的界面层是怎么搭起来的——窗口壳层、路由视图、组件与 Store 全量清单、真实数据流时序、样式与国际化机制、浏览器 mock 模式，以及写代码前必须知道的约束与坑。
 >
-> 最后校对：2026-10-29，对应版本 v2.4.2（`package.json:4`）。引用行号与硬数字由 `tools/check-doc-freshness.py` 机械核对；本轮（v2.4.2）：手动停止不再被自动续投顶回来、投新媒体不再沿用旧队列、新增按设备的投屏历史（§6.6 + `history.ts`），store 10→11，`cast.ts` 行数与两语言 key 数（各 353）随之更新；上一轮（v2.4.1）：文件夹投屏与播放队列（§6.5 + `playlist.ts`）。
+> 最后校对：2026-10-29，对应版本 v2.4.3（`package.json:4`）。引用行号与硬数字由 `tools/check-doc-freshness.py` 机械核对；本轮（v2.4.3）：投屏历史从「记录列表」改成可用——点条目回到投屏流程、行内 ▶ 直接重投、记原始文件路径/来源页、次数与清空全部（§6.6、`history.ts` 126 行、两语言 key 各 358）；上一轮（v2.4.2）：手动停止不再被自动续投顶回来、投新媒体不再沿用旧队列、新增按设备的投屏历史，store 10→11；再上一轮（v2.4.1）：文件夹投屏与播放队列（§6.5 + `playlist.ts`）。
 
 术语约定：**Sidecar** = Python 后台进程（`hancast-backend/`，打包为 `hancast-sidecar`）；**壳层** = Rust/Tauri 层（`src-tauri/`）；**规则包** = JS 解析插件 zip；**声明式规则** = JSON 站点规则；**屏幕投屏** = screencast（把电脑屏幕投出去）；**接收投屏** = 本机作为 DLNA 渲染端被别的设备投；**投屏确认** = Device Guard；**后台参数** = `params.py` 可调项。
 
@@ -254,7 +254,7 @@ default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src '
 | `logs.ts` | 124 | `visible`、`page: LogPage\|null`、`query: LogQuery`、`level` | `open`/`close`、`refresh`（`TAIL_INTERVAL = 3000` :7；撞车时排队 `pendingRefresh` :33-36）、`toggleDebug`（setLogLevel DEBUG/INFO） | 无 | `get_logs`、`set_log_level`、`export_logs` | 无 |
 | `update.ts` | 131 | `info: UpdateInfo\|null`、`modalState: UpdateModalState`、`showModal`、`storeVersion` | `checkUpdate`（商店版跳过 :28-31）、`ignoreVersion`、`openDownload`(:71-76，window.open) | `update-available`(:94-97，Rust 启动 3s 后推送) | `check_update`、`ignore_update_version`、`is_store_version` | 无 |
 | `screencast.ts` | 349 | `state: ScreenCastState`、`sources: ScreenSources\|null`、`stopWarning`、`showDepsModal`(:39)、`ffmpegReport: FfmpegStatus\|null`(:40)、`downloadTask: FfmpegDownloadTask\|null`(:41)、`downloading`(:42)、`reportLoading`(:43)；computed `ffmpegOk`(:49) | `fetchSources`(:68-84，顺带把 `sources.ffmpeg` 回填进 `ffmpegReport`)、`refreshFfmpegReport`(:85-101，`refresh=false` 吃后端 30s 缓存，弹窗首开秒出)、`startFfmpegDownload`(:126-140，起任务后 1s `setInterval` 轮询 `pollDownload` :109-125，`done` 自动重测)、`resumeDownloadPolling`(:155-170，打开依赖弹窗时向后端对齐；下载定时器现在由 App 生命周期持有，路由切换不再触发 :310-314 的清理，旧「关面板就断」注释不再代表当前挂载关系)、`openFfmpegDir`(:141-154)、`openDepsModal`/`closeDepsModal`(:171-179)、`start`(:189-211)、`stop`(:212-249，`control_failed` → stopWarning，**借 `useDeviceStore` 把 device_id 翻译成设备名** :236-237)、`setFfmpegPath`(:250-265)、`dismissStopWarning`(:347) | `screen_cast_state_changed`(:285-300，迟到注册在卸载后立即释放 :298-299) | `list_screen_sources`、`start_screen_cast`、`stop_screen_cast`、`screen_cast_status`、`set_ffmpeg_path`、`ffmpeg_status`、`ffmpeg_download_start`、`ffmpeg_download_status`、`open_ffmpeg_dir` | **→ device**（设备 id 翻译成设备名）；**失败出口**：`start` 被拒/抛错、`stop` 的 `control_failed`、状态事件里的 `error` 三种各经 `alertScreen()`（:61-67）发一条系统通知，同一句 error 去重（`lastAlertedError` :45） |
-| `history.ts` | 117 | `entries: Record<string, HistoryEntry[]>`（以 deviceId 为键）、`loading` | `load()`（从 localStorage `hancast.cast.history` 灌入并做结构校验）、`record(...)`（投屏成功后入账，`kind: 'file'\|'url'\|'queue'`，同一 `uri+deviceId` 去重后提到最前，每设备上限 20 条）、`clear(deviceId?)`、`remove(deviceId, entryId)`、`entriesFor(deviceId)` | 无 | 无（纯 localStorage，不经壳层） | **被 cast 反查**：`cast.ts` 的 `startCast`/`castQueueItem` 成功后写账；`MediaInput.vue` 的历史面板按当前选中设备读 `entriesFor`，点击条目即重投（队列条目先 `playlist.loadFolder(folder)` 再 `castQueueFirstTo`） |
+| `history.ts` | 126 | `entries: HistoryEntry[]`（扁平、时间倒序） | `forDevice(deviceId)`、`deviceIdsByRecency()`、`record(entry)`（成功后入账，同一 `deviceId+uri` 只提序并 `castCount`+1，每设备 20 / 全局 200 上限）、`removeEntry(id)`、`clear(deviceId?)`（省略即清空全部） | 无 | 无（纯 localStorage，不经壳层） | **被 cast 反查**：`cast.ts` 的 `startCast`/`castQueueItem` 成功后写账；`MediaInput.vue` 的历史面板按设备分组展示，**点条目 = 回填投屏流程**（`reuseFromHistory`），行内 ▶ 才是直接重投 |
 | `playlist.ts` | 255 | `items: QueueItem[]`、`folder`、`playingId: string\|null`、`playMode: 'sequential'\|'shuffle'\|'repeat-one'`、`selectedIds: Set<string>`、`error`、`loading`；computed `playableItems`（= 勾选项）、`total`、`playingIndex`、`hasQueue`（:60-68） | `loadFolder`(:126-148，调 `listFolderMedia` + 应用顺序记忆)、`isSelected`/`toggleSelected`/`selectAll`/`selectNone`(:78-95)、`moveItem`/`moveUp`/`moveDown`/`removeItem`(:149-176，改动即 `rememberOrder` 写 localStorage)、`setPlayMode`(:179)、`nextItem`（自动续播，处理 repeat-one/shuffle :189-207）、`manualNext`/`manualPrev`（上/下一集按钮 :209-226）、顺序记忆 `loadOrderMap`/`saveOrderMap`/`rememberOrder`/`applyRememberedOrder`（localStorage `hancast.playlist.order`，:17-125） | 无（由 `cast.ts` 在 `cast_state_changed`→STOPPED 时回调 `advancePlaylistIfActive`） | `list_folder_media` | **被 cast 反查**：`cast.ts` 的 `advancePlaylistIfActive` / `skipToNext` / `skipToPrev` / `castQueueItem` 读本 store 的 `items`/`nextItem`，判断当前投的 URI 是否队列项并推进队列 |
 **store 间耦合共四处**：`screencast → device`；2026-10-24 起的 `cast → device`（`deviceLabel()` 在首次投屏失败时查设备名，那时本地还没有会话）；`cast → playlist`（队列续播/切集，v2.4.0）；v2.4.2 起的 `cast → history`（每次投屏成功入账一条历史，见 §6.6）。此前这里写的是「`screencast → device` 是唯一一处」，那句现在不成立了。
 
@@ -349,15 +349,23 @@ default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src '
 
 只投**单个文件**时仍走原来的单文件链路，不涉及队列。队列只在本地文件场景出现（分享链接解析结果不进队列）。
 
-## 6.6 投屏历史（2026-10-29 新增，v2.4.2）
+## 6.6 投屏历史（v2.4.2 新增，v2.4.3 补成可用）
 
-媒体输入区多了一条「🕘 投屏历史」入口，列出**当前选中设备**过去投过的东西（`history.ts` + `MediaInput.vue` 的历史面板）。
+媒体输入区有一条「🕘 历史」入口，面板按机器分组列出**所有投过屏的设备**各自的历史（`history.ts` + `MediaInput.vue`）。v2.4.2 那版只能看、点一下就直接重投，被用户一句「只是个记录列表」判了不合适；v2.4.3 起**点条目是「回到投屏流程」**。
 
-- **按设备记账**：`entries` 是 `Record<deviceId, HistoryEntry[]>`，投给 A 电视的记录不会出现在 B 音箱的列表里。没选设备时面板给出提示而不是展示别的设备的账。
-- **三类条目**（`kind`）：`file`（本地文件，带 `filePath` 供重投时重新解析）、`url`（分享链接/直链，带原始 `uri`）、`queue`（文件夹队列，带 `folder` 与 `count`，重投时先 `playlist.loadFolder(folder)` 复原队列再投第一项）。
-- **去重与上限**：同一 `deviceId + uri` 再投一次只把条目提到最前并刷新 `playedAt`/`castCount`，不产生重复行；每设备最多 **20 条**（`MAX_PER_DEVICE`），超出丢最旧。
-- **持久化**：只写 localStorage `hancast.cast.history`（不落 AppData、不经壳层）；`load()` 对读回的结构做校验，字段缺失/类型不对的条目直接丢弃——旧版本写下的坏数据不能让面板白屏。
-- **入账时机**：`cast.ts` 在 `startCast` / `castQueueItem` **成功之后**才 `record(...)`，失败不记账（否则历史里会堆一串点不动的失败条目）。
+- **按设备分组**：`entries` 是扁平数组（时间倒序），`deviceIdsByRecency()` 按最近一次投放排出设备顺序，`forDevice(deviceId)` 取某台的条目；离线设备的历史照样保留（历史是账本，不是在线列表），只是行内「直接投」按钮禁用。
+- **三类条目**（`kind`）与它们重投时走什么路：
+  - `file`：带 `filePath`（本地文件**原始路径**，不是后端 media server 那条临时 URL）。重投走 `mediaStore.parseFile(filePath)` 重新解析——临时 URL 在程序重启后就是条死链。
+  - `url`：带 `sourceUrl`（解析来源页，如 `https://v.douyin.com/…`）与 `uri`（当时解出来的直链）。重投**优先回来源页重新解**，因为分享链的直链带签名、几小时就过期。
+  - `queue`：带 `folder` 与 `count`。重投走 `playlist.loadFolder(folder)` 复原队列，并把队列面板摊开让他先改顺序/勾选。
+- **两种点击**：主区域点击 = 载入回输入区（`reuseFromHistory`），选好设备/画质再点「投屏」；行内 `▶` = 跳过输入区直接投回当初那台设备（`castFromHistory`）。分开的理由是「再投一次同样的东西」和「拿它当起点换个设备/画质」是两种意图，混成一个按钮必然有一半人不顺手。
+- **去重与次数**：同一 `deviceId + uri` 再投只把条目提到最前并把 `castCount` +1（钉住重复行），界面上显示「投过 N 次」。
+- **上限**：每设备 **20 条**（`PER_DEVICE_MAX`，`history.ts:42`），全局 **200 条**（`TOTAL_MAX`，`history.ts:44`），超出丢最旧。
+- **持久化**：只写 localStorage `hancast.cast.history`（不落 AppData、不经壳层）；`load()` 校验结构，坏条目直接丢弃——旧版本写下的坏数据不能让面板白屏。
+- **入账时机**：`cast.ts` 在 `startCast` / `castQueueItem` **成功之后**才 `record(...)`（`record` 实现在 `history.ts:91`），失败不记账。
+- **清空**：分组头部「清空」只清那一台（`clear(deviceId)`），面板底部「清空全部历史」清空所有设备（`clear()`，`history.ts:118`）。
+
+回归用例在 `tools/verify-cast-ui.cjs`：「本地文件按原始路径记账」「链接类留来源页」「文件夹记 folder/count」三条钉住入账口径，另两条直接测真 `history.ts`（次数累加不重复行、单设备上限与按设备清空）。
 
 ---
 
@@ -365,7 +373,7 @@ default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src '
 
 v2.4.1 的队列投屏有两处让「停止」失效的缺陷，修法都在 `cast.ts`，不涉及后端：
 
-1. **点一次停止，下一集又被投上来**。根因是续播的触发口径分不清「这集播完了」和「用户喊停」：两者在 DLNA 事件流里都是设备自报 `STOPPED`，`advancePlaylistIfActive` 一律当成自然播完，于是立刻投下一集，用户得连点好几次。修法是显式记账：`stopCast` 在**发 Stop 之前**就给所有目标设备打上 `userStoppedDevices`（`cast.ts:51`）标记（`cast.ts:484`）——顺序很重要，设备自报的 STOPPED 常常早于 `stop_cast` 的响应回来，那时本地会话还在，晚一步打标记就拦不住；同时清掉 `queueAdvancing` 与 `playlist.playingId`。`advancePlaylistIfActive`（`cast.ts:748`）与 `castQueueItem`（`cast.ts:699`）进来先看这个标记，命中就直接放弃；标记在**下一次成功起播**时撤掉（`cast.ts:380`），所以停止后重新投屏不受影响。另外 `advancePlaylistIfActive` 还会再核一遍「设备当前 URI 仍是本队列的某一项」，陈旧事件拉不起已经停掉的会话。
+1. **点一次停止，下一集又被投上来**。根因是续播的触发口径分不清「这集播完了」和「用户喊停」：两者在 DLNA 事件流里都是设备自报 `STOPPED`，`advancePlaylistIfActive` 一律当成自然播完，于是立刻投下一集，用户得连点好几次。修法是显式记账：`stopCast` 在**发 Stop 之前**就给所有目标设备打上 `userStoppedDevices`（`cast.ts:51`）标记（`cast.ts:484`）——顺序很重要，设备自报的 STOPPED 常常早于 `stop_cast` 的响应回来，那时本地会话还在，晚一步打标记就拦不住；同时清掉 `queueAdvancing` 与 `playlist.playingId`。`advancePlaylistIfActive`（`cast.ts:753`）与 `castQueueItem`（`cast.ts:704`）进来先看这个标记，命中就直接放弃；标记在**下一次成功起播**时撤掉（`cast.ts:380`），所以停止后重新投屏不受影响。另外 `advancePlaylistIfActive` 还会再核一遍「设备当前 URI 仍是本队列的某一项」，陈旧事件拉不起已经停掉的会话。
 2. **停止后再投别的东西，投的还是旧文件夹的队列**。根因是 `playlist` 是全局单例，停止只清会话、不清队列，界面还挂着上一个文件夹的列表，再点投屏就照着旧队列又投一遍。修法在 `startCast`：只要这次起播**不是**队列自己发起的（`opts.fromQueue` 为假）而 `playlist.hasQueue` 为真，就先 `playlist.reset()`（`cast.ts:384`）把旧队列清掉。
 
 两条不变量都有回归用例（`tools/verify-cast-ui.cjs`：`manual stop suppresses the queue auto-advance` 与 `casting a new item drops the stale folder queue`），且都做过**变异验证**——把守卫去掉后这两条立刻红，说明它们真的钉住了缺陷而不是陪跑。第一条刻意按真实时序构造：让设备在 `stop_cast` 的响应回来之前发出 STOPPED，这正是「一次停不掉」的现场。
@@ -429,7 +437,7 @@ v2.4.1 的队列投屏有两处让「停止」失效的缺陷，修法都在 `ca
 
 ### 8.3 两语言是否等键（脚本比对结果）
 
-2026-10-29 读取两份扁平 JSON 比对：**zh-CN / en-US 各 353 个 key，双向差集为 0**（本轮新增一组 `media.history*` 投屏历史文案，7 个键）。278、321、324、346 都是历史取证数，不能继续当作现值。
+2026-10-29 读取两份扁平 JSON 比对：**zh-CN / en-US 各 358 个 key，双向差集为 0**（v2.4.3 补 5 个 `media.history*` 键：`historyReuseHint`、`historyCastNow`、`historyTimes`、`historyClearAll`、`historyFolderMissing`；v2.4.2 那轮是 353）。278、321、324、346 都是历史取证数，不能继续当作现值。
 
 ### 8.4 覆盖范围与已知缺口
 

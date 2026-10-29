@@ -351,5 +351,10 @@
   "media.historyOffline": "设备离线",
   "media.historyClear": "清空",
   "media.historyRemove": "删除这条记录",
-  "media.historyCount": "{n} 项"
+  "media.historyCount": "{n} 项",
+  "media.historyReuseHint": "点击载入到投屏区，换设备/改画质后再投",
+  "media.historyCastNow": "直接投回这台设备",
+  "media.historyTimes": "投过 {n} 次",
+  "media.historyClearAll": "清空全部历史",
+  "media.historyFolderMissing": "这条记录没有文件夹路径，请重新选择文件夹"
 }

@@ -351,5 +351,10 @@
   "media.historyOffline": "offline",
   "media.historyClear": "Clear",
   "media.historyRemove": "Remove this record",
-  "media.historyCount": "{n} items"
+  "media.historyCount": "{n} items",
+  "media.historyReuseHint": "Click to load it back into the cast box, then pick device or quality",
+  "media.historyCastNow": "Cast to this device again",
+  "media.historyTimes": "casted {n}x",
+  "media.historyClearAll": "Clear all history",
+  "media.historyFolderMissing": "This record has no folder path; please pick the folder again"
 }

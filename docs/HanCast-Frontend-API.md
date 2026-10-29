@@ -2,7 +2,7 @@
 
 > 回答一个问题：前端 `invoke()` 出去的每一条命令，究竟由壳层（Rust/Tauri）就地执行、还是转发给 Sidecar（Python 后台进程）；它的入参、返回结构、可能错误，以及 Sidecar 主动推给前端的事件分别是什么。
 >
-> 最后校对：2026-10-29，对应版本 v2.4.2（`package.json:4`。本轮（2026-10-28）：投 TCL 电视「投不上」——渲染端只认 URL 后缀，交付直链加后缀门改走代理补后缀（docs/故障排查.md §5.5），顺带修 models/session.py 丢 mime_type；media/server.py、media/share_resolver.py、models/session.py 行号按实测重校。 （`package.json:4`。引用行号与硬数字由 `tools/check-doc-freshness.py` 机械核对；上一轮：`protocol/dlna.py:77-84` 因入站 SOAP 容错下移到 :111-118；上一轮：§6.7 补 macOS 通知日志落进同一份 hancast.log 的例外）
+> 最后校对：2026-10-29，对应版本 v2.4.3（`package.json:4`。本轮（2026-10-28）：投 TCL 电视「投不上」——渲染端只认 URL 后缀，交付直链加后缀门改走代理补后缀（docs/故障排查.md §5.5），顺带修 models/session.py 丢 mime_type；media/server.py、media/share_resolver.py、models/session.py 行号按实测重校。 （`package.json:4`。引用行号与硬数字由 `tools/check-doc-freshness.py` 机械核对；上一轮：`protocol/dlna.py:77-84` 因入站 SOAP 容错下移到 :111-118；上一轮：§6.7 补 macOS 通知日志落进同一份 hancast.log 的例外）
 
 ---
 

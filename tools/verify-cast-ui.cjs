@@ -111,7 +111,7 @@ function makeRenderer(body) {
 function allNodes(el) { return [el, ...el.children.flatMap(allNodes)] }
 function textOf(el) { return el.text + el.children.map(textOf).join('') }
 
-function evaluate(source, filename, imports, clock, logs) {
+function evaluate(source, filename, imports, clock, logs, globals = {}) {
   const result = ts.transpileModule(source, {
     fileName: filename,
     reportDiagnostics: true,
@@ -132,6 +132,7 @@ function evaluate(source, filename, imports, clock, logs) {
     clearInterval: id => clock.jobs.delete(id),
     localStorage: { getItem: () => 'true', setItem() {} },
     window: {},
+    ...globals,
   }, { filename })
   return exports
 }
@@ -193,11 +194,13 @@ async function fixture(locale = 'en-US') {
     manualPrev: () => null,
     reset() { this.resetCalls += 1; this.hasQueue = false; this.items = [] },
   })) }
-  // cast.ts 投屏成功后会写「投屏历史」（按设备记账）；本 harness 只验 UI 错误可见性，
-  // 历史用一个只记调用的空桩，保持隔离
+  // cast.ts 投屏成功后会写「投屏历史」（按设备记账）。这里用记调用的桩：
+  // 历史本身的行为由下面「history store」那组用例直接测真实现，两边不重复。
+  const historyRecords = []
   imports['@/stores/history'] = { useHistoryStore: pinia.defineStore('history', () => ({
     entries: [], forDevice: () => [], deviceIdsByRecency: () => [],
-    record() {}, removeEntry() {}, clear() {},
+    record(entry) { historyRecords.push(entry) },
+    removeEntry() {}, clear() {},
   })) }
   const storeModule = evaluate(storeSource, storeFile, imports, clock, logs)
   imports['@/stores/cast'] = storeModule
@@ -226,7 +229,7 @@ async function fixture(locale = 'en-US') {
   app.mount(container)
   await flush()
   return {
-    store, screen, handlers, calls, clock, logs, listeners, body, showChild, notified, deviceList,
+    store, screen, handlers, calls, clock, logs, listeners, body, showChild, notified, deviceList, historyRecords,
     get playlist() { return playlistStore },
     get ui() { return instance.subTree.component.setupState },
     count(name) { return calls.filter(call => call.name === name).length },
@@ -759,6 +762,98 @@ test('casting a new item drops the stale folder queue', async f => {
   await flush()
   assert.equal(f.playlist.resetCalls, 1, '队列发起的起播不许 reset')
   assert.equal(f.playlist.hasQueue, true)
+})
+
+/** 用真实现装一份 history store（内存 localStorage），历史语义直接在这里验 */
+function loadRealHistoryStore() {
+  const mem = new Map()
+  const localStorage = {
+    getItem: key => (mem.has(key) ? mem.get(key) : null),
+    setItem: (key, value) => { mem.set(key, String(value)) },
+    removeItem: key => { mem.delete(key) },
+  }
+  const file = path.join(root, 'src/stores/history.ts')
+  const clock = new Clock()
+  const logs = []
+  const mod = evaluate(fs.readFileSync(file, 'utf8'), file, { vue, pinia }, clock, logs, { localStorage })
+  const previous = pinia.getActivePinia?.()
+  try {
+    pinia.setActivePinia(pinia.createPinia())
+    return { store: mod.useHistoryStore(), mem }
+  } finally {
+    if (previous) pinia.setActivePinia(previous)
+  }
+}
+
+test('a local file is remembered by its own path, never by the temporary media URL', async f => {
+  // 后端把本地文件挂到自己那个 HTTP 服务上再投给电视，所以 uri 是「本机临时地址」；
+  // 重启后那套注册就没了。历史里只记 uri 的话，用户点它就是一条点不动的死链。
+  const path = '/Users/pavia/Movies/纪录片/第1集.mp4'
+  await f.store.startCast('tv1', 'http://192.168.1.5:51999/media/deadbeef.mp4', {
+    media_type: 'file', uri: 'http://192.168.1.5:51999/media/deadbeef.mp4', title: '第1集.mp4',
+    mime_type: 'video/mp4', file_size: 1, duration: null, thumbnail: null, file_path: path,
+  })
+  await flush()
+  const rec = f.historyRecords.at(-1)
+  assert.ok(rec, '投屏成功要落一条历史')
+  assert.equal(rec.kind, 'file')
+  assert.equal(rec.filePath, path, '本地文件必须记住原始路径，否则历史条目无法重新解析')
+  assert.equal(rec.sourceUrl, undefined)
+})
+
+test('a resolved share link is remembered with its source page so it can be re-resolved', async f => {
+  // 分享链解析出来的直链带签名，几小时就过期；重投要回到来源页重新解一次
+  await f.store.startCast('tv1', 'https://v6-cold.douyinvod.com/xyz/video.mp4', {
+    media_type: 'url', uri: 'https://v6-cold.douyinvod.com/xyz/video.mp4', title: '豆包',
+    mime_type: 'video/mp4', file_size: null, duration: null, thumbnail: null,
+    source_url: 'https://v.douyin.com/cAS0o-smMyw/',
+  })
+  await flush()
+  const rec = f.historyRecords.at(-1)
+  assert.equal(rec.kind, 'url')
+  assert.equal(rec.sourceUrl, 'https://v.douyin.com/cAS0o-smMyw/', '链接类历史要留来源页')
+  assert.equal(rec.filePath, undefined)
+})
+
+test('a folder cast is remembered as a queue with its folder and item count', async f => {
+  f.playlist.hasQueue = true
+  f.playlist.folder = '/movies/season1'
+  f.playlist.total = 3
+  await f.store.castQueueItem('tv1', { id: 'i1', media: { uri: 'https://invalid.test/e1.mp4', title: 'e1' } }, { startsQueue: true })
+  await flush()
+  const rec = f.historyRecords.at(-1)
+  assert.equal(rec.kind, 'queue')
+  assert.equal(rec.folder, '/movies/season1', '文件夹投屏要记住文件夹，重投时才能把整队重新读出来')
+  assert.equal(rec.count, 3)
+})
+
+test('history store: re-casting the same item bumps a count instead of piling up rows', async () => {
+  const { store, mem } = loadRealHistoryStore()
+  const base = { deviceId: 'tv1', deviceName: 'TCL', uri: 'https://x/a.mp4', title: 'A', mime_type: 'video/mp4', kind: 'url', at: 1000 }
+  store.record(base)
+  store.record({ ...base, at: 2000 })
+  assert.equal(store.entries.length, 1, '同一设备同一内容只留一行')
+  assert.equal(store.entries[0].castCount, 2, '重复投同一内容要累加次数（界面上显示「投过 N 次」）')
+  assert.equal(store.entries[0].at, 2000, '最近一次投放要顶到最前')
+
+  // 持久化：重启后历史还在（localStorage 里是 JSON）
+  const saved = JSON.parse(mem.get('hancast.cast.history'))
+  assert.equal(saved.length, 1)
+  assert.equal(saved[0].castCount, 2)
+})
+
+test('history store: per-device cap keeps the newest entries and clearing stays scoped', async () => {
+  const { store } = loadRealHistoryStore()
+  for (let i = 0; i < 25; i++) {
+    store.record({ deviceId: 'tv1', deviceName: 'TCL', uri: `https://x/${i}.mp4`, title: `E${i}`, mime_type: '', kind: 'url', at: 1000 + i })
+  }
+  assert.equal(store.forDevice('tv1').length, 20, '单设备上限 20 条，超了要淘汰最旧的')
+  assert.equal(store.forDevice('tv1')[0].title, 'E24', '留下的是最新的那批')
+
+  store.record({ deviceId: 'tv2', deviceName: 'Linux', uri: 'https://x/other.mp4', title: 'other', mime_type: '', kind: 'url', at: 9000 })
+  store.clear('tv1')
+  assert.equal(store.forDevice('tv1').length, 0, '清空要按设备隔离')
+  assert.equal(store.forDevice('tv2').length, 1, '别把别的设备的历史一起清掉')
 })
 
 ;(async () => {

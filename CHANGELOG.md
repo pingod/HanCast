@@ -1,6 +1,6 @@
 # Changelog
 
-> 最后校对：2026-10-29，对应版本 v2.4.2（`package.json:4`）
+> 最后校对：2026-10-29，对应版本 v2.4.3（`package.json:4`）
 
 本文件记录 HanCast 的版本历史。口径说明：
 
@@ -8,6 +8,31 @@
 - 版本号唯一来源是 **`package.json` 的 `version`**（`scripts/sync-version.cjs:4,17`），`npm run version:set <x.y.z>` 把它刷进 7 处契约点：`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`（本地包那条，v2.3.8 起收进来——此前每版都靠人肉补）、`hancast-backend/pyproject.toml`、`hancast_sidecar/utils/config.py:39`、`src/api/commands.ts`（mock）、`src/stores/settings.ts`。`scripts/check-version.cjs` 自称以 `tauri.conf.json` 为源（口径相反），但全仓无人调用，是未接线的孤儿脚本——判定以 `sync-version.cjs` 为准。详见 [docs/构建与发布.md](docs/构建与发布.md) §1。
 - 下表「提交」列即 `git tag <版本>` 指向的提交；细节以 `git show <提交>` 为准，本文只留用户可感知的变化。
 - 新加版本时**同一次提交**里补这里，并按 [docs/README.md](docs/README.md) §4 的约定同步对应文档。
+
+---
+
+## v2.4.3 — 2026-10-29
+
+投屏历史从「只能看的记录列表」补成能干活的入口。用户原话：「刚才那个'历史'功能有点废啊，只是个记录列表，能不能给加上更丰富的功能，比如支持点击对应的历史条目然后重新回到投屏流程」。
+
+### 点条目 = 回到投屏流程（不再是点了就投）
+- 主区域点击改为 `reuseFromHistory()`：本地文件按**原始路径**重新解析、链接回到**解析来源页**重新解、文件夹重新读出队列并摊开队列面板；之后由用户自己挑设备、改画质，再点「投屏」。
+- 行内新增 `▶` 按钮（`castFromHistory()`）= 跳过输入区直接投回当初那台设备。两种意图分开，因为「再投一次」和「拿它当起点换个设备」混成一个按钮必然有一半人不顺手。
+- 离线设备的历史照旧保留（历史是账本不是在线列表），只是 `▶` 禁用；主区域点击仍然可用。
+
+### 顺带修掉记账口径里的两个坑
+- **本地文件改成记原始路径**：此前只记 media server 那条临时 URL（`http://<本机>:<端口>/media/<hash>.mp4`），程序重启后注册表没了，条目就是条死链。现在 `MediaInfo` 带 `file_path`（`src/types/media.ts`，由 `mediaStore.parseFile()` 补上，后端不回这个字段），历史里存路径，重投时重新解析。
+- **链接类记录来源页**：分享链解析出来的直链带签名、几小时过期，所以 `HistoryEntry` 增加 `sourceUrl`，重投优先回来源页重新解；没有来源页才退回当初那条地址。
+
+### 其余
+- 同一设备同一内容再投不再产生重复行，改为 `castCount` +1（界面上显示「投过 N 次」）。
+- 面板底部新增「清空全部历史」（`clear()` 不带参数），分组头部原有的「清空」只清那一台。
+- 回归用例 5 条（`tools/verify-cast-ui.cjs`，25→30）：三条钉入账口径（本地文件记路径、链接记来源页、文件夹记 folder/count），两条直接测真 `history.ts`（次数累加不重复行、单设备 20 条上限与按设备清空）。同时给测试夹具加了 `evaluate(..., globals)` 覆盖点，真 store 才能拿到可控的 `localStorage`。
+
+### 验证
+- `npx vue-tsc --noEmit` 退出码 0、`npm run build` 通过；`node tools/verify-cast-ui.cjs` **30/30 通过**；后端全量 `pytest` **549 passed / 0 failed**（本轮未改后端，跑它是为了确认前端契约改动没有越界）。
+- 文档：`docs/HanCast-Frontend-Spec.md` §6.6 按实测重写（旧稿把 `entries` 写成按设备分组的 Record、字段名写成 `playedAt`、API 写成 `entriesFor/remove`，都与代码不符），store 表 `history.ts` 行改 126 行；两语言 key 各 353→358。
+- **未做真机复核**：这一段全是前端状态机 + localStorage，判据是上面那 30 条；电视侧行为没有变化（投出去的动作与 v2.4.2 一致）。
 
 ---
 
@@ -179,7 +204,7 @@
 一轮只补一件事：**投屏失败的原因要送到用户眼前，而不是只留在看不见的那块屏上**。用户可感知面——窗口收进托盘后往电视投被拒，桌面会弹一条系统通知「投屏失败 / 设备名：电视返回的原文」。没有新能力、没有视觉改动。覆盖的是**五条失败出口**（媒体投屏两条 + 屏幕投屏三条），不是只修用户撞到的那一条。
 
 - **现象与真因**：2026-10-24 用户报「投 TCL 怎么没反应」，实际电视回的是 `HTTP 500 …请在电视上打开「多屏互动/无线投屏/DLNA」`。这条原因 v2.3.20 已经放进首页红条（`src/stores/cast.ts` 的 `lastError`），**但 HanCast 平时收在托盘里**——窗口不在前台时那条红字没人看得见，于是错误「产生了、没送达」。修的是投递，不是采集。
-- **五条失败出口进系统通知**：媒体投屏 ① `startCast` 抛错 → `notify.castFailed`（`src/stores/cast.ts:438`）；② 停止未送达（`stop_cast` 的 `control_failed`）→ `notify.stopNotDelivered`（`:478-479`）。屏幕投屏 ③ `start` 被拒或抛错、④ `stop` 未送达、⑤ **会话中途自己死了**（状态事件带 `error`）——三者统一经 `alertScreen()`（`src/stores/screencast.ts:61-67`）发出，调用点在 `:189-211`、`:212-249`、`:285-300`。正文原样带 Sidecar 给的失败原因，前端不改写、不翻译。
+- **五条失败出口进系统通知**：媒体投屏 ① `startCast` 抛错 → `notify.castFailed`（`src/stores/cast.ts:443`）；② 停止未送达（`stop_cast` 的 `control_failed`）→ `notify.stopNotDelivered`（`:478-479`）。屏幕投屏 ③ `start` 被拒或抛错、④ `stop` 未送达、⑤ **会话中途自己死了**（状态事件带 `error`）——三者统一经 `alertScreen()`（`src/stores/screencast.ts:61-67`）发出，调用点在 `:189-211`、`:212-249`、`:285-300`。正文原样带 Sidecar 给的失败原因，前端不改写、不翻译。
   ②与④是同一类坑的另一半：「本机停了、电视还在播」原本也只有红条说得出；⑤ 覆盖「投着投着采集进程退出」这种用户已经走开的场景。同一条 `error` 会被终止与停止各递一次，**按文本去重只弹第一条**（`:45` 的 `lastAlertedError`）；只投给浏览器（没有电视）时正文就是原因本身，不硬凑设备名。
 - **接线四处**：npm `@tauri-apps/plugin-notification@~2.4.0`（`package.json:20`）/ Rust `tauri-plugin-notification = "2.4"`，锁到 **2.4.0**（`src-tauri/Cargo.toml:26`）/ `.plugin(tauri_plugin_notification::init())`（`src-tauri/src/lib.rs:1124`，紧挨着插件链、带一句「窗口收进托盘时红条没人看得见」的为什么）/ capability `notification:default`（`src-tauri/capabilities/default.json:22`）。三平台后端由 `notify-rust 4.18.2` 分派，`Cargo.lock:2259-2268` 可见 `mac-notification-sys`（macOS）+ `zbus`（Linux DBus）+ `tauri-winrt-notification`（Windows Toast）。
   **版本配对是这轮唯一的返工**：第一次打的 tag 在三平台 `Tauri bundle` 步骤全部失败——`Found version mismatched Tauri packages … tauri (v2.11.5) : @tauri-apps/api (v2.12.4)` 与 `tauri-plugin-notification (v2.4.0) : @tauri-apps/plugin-notification (v2.7.0)`。根因是 npm 侧插件会拽着 `@tauri-apps/api` 往上涨（`plugin-notification@2.7.0` 要求 `api ^2.12.0`），而 `package.json` 里 `"@tauri-apps/api": "^2.0.0"` 这种宽范围让它在装依赖时飘到 2.12.4，`Cargo.lock` 的 `tauri` 却仍是 2.11.5。`cargo check`、`vue-tsc`、`vite build` **没有一个会报这件事**，只有 `tauri build` 在 bundle 阶段拒。所以把 `@tauri-apps/api` 收成 `~2.11.1`、通知插件收成 `~2.4.0`（Rust 侧 `2.4`）——**成对改**才对，单改一边照样失败；这条铁律写进 AGENTS.md 的 Rust 依赖块下面。

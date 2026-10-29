@@ -27,7 +27,13 @@ export interface HistoryEntry {
   folder?: string
   /** kind 为 queue 时的参与播放项数 */
   count?: number
-  /** 毫秒时间戳 */
+  /** kind 为 file 时本地文件的原始路径：重投要走「重新解析」而不是拿旧直链再投一次 */
+  filePath?: string
+  /** kind 为 url 时的解析来源页：分享链的直链带签名、几小时就过期，重投要回到来源页重新解 */
+  sourceUrl?: string
+  /** 投过几次（同一设备同一 uri 重复投累加，界面上用来排序/提示） */
+  castCount?: number
+  /** 毫秒时间戳（最近一次投放） */
   at: number
 }
 
@@ -82,10 +88,13 @@ export const useHistoryStore = defineStore('history', () => {
     return seen
   }
 
-  function record(entry: Omit<HistoryEntry, 'id'>) {
+  function record(entry: Omit<HistoryEntry, 'id' | 'castCount'>) {
     const id = entryId(entry.deviceId, entry.uri)
+    const prev = entries.value.find((e) => e.id === id)
+    // 同一设备同一 URI 再投一次：只把条目提到最前、次数 +1，不产生重复行
+    const castCount = (prev?.castCount ?? 0) + 1
     const rest = entries.value.filter((e) => e.id !== id)
-    const next = [{ ...entry, id }, ...rest].sort((a, b) => b.at - a.at)
+    const next = [{ ...entry, id, castCount }, ...rest].sort((a, b) => b.at - a.at)
     // 先按设备截断，再按全局截断
     const perDevice = new Map<string, number>()
     const capped: HistoryEntry[] = []

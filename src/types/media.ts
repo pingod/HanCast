@@ -18,6 +18,8 @@ export interface MediaInfo {
   quality?: string
   /** 解析来源页地址：切换画质时按它重新解析 */
   source_url?: string
+  /** 本地文件的原始路径（投屏历史靠它重新解析；后端不回这个字段，由前端补） */
+  file_path?: string
 }
 
 export type MediaInputState = 'idle' | 'dragover' | 'input' | 'parsing' | 'ready'

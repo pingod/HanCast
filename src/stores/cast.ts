@@ -372,6 +372,8 @@ export const useCastStore = defineStore('cast', () => {
     qualities?: MediaQuality[]
     quality?: string
     source_url?: string
+    /** 本地文件原始路径：只用于记进投屏历史，下发后端时会被忽略 */
+    file_path?: string
   }, opts?: { fromQueue?: boolean }) {
     loading.value = true
     stopWarning.value = null
@@ -426,6 +428,9 @@ export const useCastStore = defineStore('cast', () => {
           mime_type: mediaInfo?.mime_type ?? '',
           thumbnail: mediaInfo?.thumbnail ?? null,
           kind: mediaInfo?.source_url ? 'url' : 'file',
+          // 记住原文而不是解析后的直链：直链带签名会过期，重投得回到源头重新解
+          filePath: mediaInfo?.file_path,
+          sourceUrl: mediaInfo?.source_url,
           at: Date.now(),
         })
       }

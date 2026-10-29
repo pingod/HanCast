@@ -600,7 +600,41 @@ function formatHistoryTime(at: number) {
   return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
-/** 点历史条目重投到当初那台设备；队列条目先把那个文件夹重新读出来 */
+/**
+ * 点历史条目 = 回到投屏流程，而不是直接开投。
+ * 理由：历史里存的必须是「原文」（本地路径 / 分享页 / 文件夹）而不是当初解出来的直链——
+ * 直链带签名、几小时就过期，而且用户常常想换个设备投、想先改画质再投。
+ * 所以这里只把内容重新载入输入区，投不投、投给谁由他下一步决定。
+ */
+async function reuseFromHistory(entry: HistoryEntry) {
+  showHistoryPanel.value = false
+  pickerError.value = null
+  if (entry.kind === 'queue') {
+    if (!entry.folder) {
+      pickerError.value = t('media.historyFolderMissing')
+      return
+    }
+    await playlist.loadFolder(entry.folder)
+    if (playlist.error) {
+      pickerError.value = playlist.error === 'empty'
+        ? t('media.queueEmpty')
+        : String(playlist.error)
+      return
+    }
+    // 队列面板打开着，他可以直接排序/勾选，再点「投屏」选设备
+    showQueuePanel.value = true
+    return
+  }
+  if (playlist.hasQueue) playlist.reset()
+  if (entry.kind === 'file' && entry.filePath) {
+    await mediaStore.parseFile(entry.filePath)
+    return
+  }
+  // url 条目回到解析来源页重新解；没有来源页就退回当初那个地址
+  await mediaStore.parseUrl(entry.sourceUrl || entry.uri)
+}
+
+/** 「直接投回这台设备」：跳过输入区，把当初那条内容原样再投一次 */
 async function castFromHistory(entry: HistoryEntry) {
   showHistoryPanel.value = false
   pickerError.value = null
@@ -619,6 +653,8 @@ async function castFromHistory(entry: HistoryEntry) {
     title: entry.title,
     mime_type: entry.mime_type,
     thumbnail: entry.thumbnail ?? null,
+    file_path: entry.filePath,
+    source_url: entry.sourceUrl,
   })
 }
 
@@ -834,23 +870,35 @@ function clearHistory(deviceId: string) {
           <ul class="history-panel__list" role="list">
             <li v-for="entry in group.items" :key="entry.id" class="history-panel__item">
               <button
-                class="history-panel__cast"
+                class="history-panel__reuse"
                 type="button"
-                :disabled="!group.online || castStore.loading"
-                :title="entry.uri"
-                @click="castFromHistory(entry)"
+                :title="t('media.historyReuseHint')"
+                @click="reuseFromHistory(entry)"
               >
                 <span class="history-panel__icon">{{ entry.kind === 'queue' ? '📁' : entry.kind === 'url' ? '🔗' : '🎬' }}</span>
                 <span class="history-panel__body">
-                  <span class="history-panel__title">{{ entry.title }}</span>
+                  <span class="history-panel__title">
+                    {{ entry.title }}
+                    <span v-if="(entry.castCount ?? 1) > 1" class="history-panel__times">
+                      {{ t('media.historyTimes', { n: entry.castCount }) }}
+                    </span>
+                  </span>
                   <span class="history-panel__meta">
                     <template v-if="entry.kind === 'queue' && entry.folder">{{ entry.folder }}</template>
+                    <template v-else-if="entry.kind === 'file' && entry.filePath">{{ entry.filePath }}</template>
                     <template v-else>{{ entry.uri.split('/').pop() }}</template>
                     <template v-if="entry.kind === 'queue' && entry.count"> · {{ t('media.historyCount', { n: entry.count }) }}</template>
                     · {{ formatHistoryTime(entry.at) }}
                   </span>
                 </span>
               </button>
+              <button
+                class="history-panel__cast-now"
+                type="button"
+                :disabled="!group.online || castStore.loading"
+                :title="t('media.historyCastNow')"
+                @click="castFromHistory(entry)"
+              >▶</button>
               <button
                 class="history-panel__remove"
                 type="button"
@@ -860,6 +908,12 @@ function clearHistory(deviceId: string) {
             </li>
           </ul>
         </div>
+        <button
+          v-if="historyGroups.length"
+          class="history-panel__clear-all"
+          type="button"
+          @click="history.clear()"
+        >{{ t('media.historyClearAll') }}</button>
       </div>
     </Modal>
 
@@ -1545,7 +1599,7 @@ function clearHistory(deviceId: string) {
   align-items: center;
   gap: 4px;
 }
-.history-panel__cast {
+.history-panel__reuse {
   flex: 1;
   min-width: 0;
   display: flex;
@@ -1559,12 +1613,50 @@ function clearHistory(deviceId: string) {
   cursor: pointer;
   transition: all 0.15s;
 }
-.history-panel__cast:hover:not(:disabled) {
+.history-panel__reuse:hover {
   border-color: var(--accent);
 }
-.history-panel__cast:disabled {
-  opacity: 0.45;
+.history-panel__cast-now {
+  flex: none;
+  padding: 6px 9px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.history-panel__cast-now:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.history-panel__cast-now:disabled {
+  opacity: 0.4;
   cursor: not-allowed;
+}
+.history-panel__times {
+  margin-left: 4px;
+  padding: 0 4px;
+  font-size: 10px;
+  color: var(--text-secondary);
+  background: var(--bg-hover, rgba(128, 128, 128, 0.15));
+  border-radius: 4px;
+}
+.history-panel__clear-all {
+  align-self: center;
+  margin-top: 2px;
+  padding: 4px 12px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.history-panel__clear-all:hover {
+  color: var(--accent);
+  border-color: var(--accent);
 }
 .history-panel__icon {
   flex: none;

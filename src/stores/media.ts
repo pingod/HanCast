@@ -92,7 +92,8 @@ export const useMediaStore = defineStore('media', () => {
         // Tauri mode: send path to backend
         const info = await parseMediaFile(filePathOrFile)
         if (generation !== parseGeneration) return
-        mediaInfo.value = info
+        // 后端不知道「用户点的是哪个路径」，补上才能记进投屏历史并重新解析
+        mediaInfo.value = { ...info, file_path: filePathOrFile }
       } else {
         // Browser mode: extract info from File object directly
         const file = filePathOrFile

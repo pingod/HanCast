@@ -247,3 +247,16 @@ HanCast-Frontend-Spec,README,开发指南}.md 的计数与 §11 状态。
 - Linux cachyos(192.168.1.68:10086)：pacman -U 2.4.0-1 → 2.4.1-1，sidecar smoke 正常（version 2.4.1，get_settings success，wlgrab 在 /usr/lib/HanCast/）。
 - Windows（Host win 192.168.1.68:22）：连接拒绝，机器离线，未装（仍 2.3.15）。
 - Release 仍是 draft：按 DEC-006 边界③，publish 前需真机 TCL 确认两处修复（选设备弹窗 + 连续续播）。
+
+## 2026-10-29 v2.4.2 已发布构建并装到两台机器（待用户真机确认）
+- CI run 40789901148 全绿（windows 19m34s / macos 8m8s / linux 17m43s / upload 38s），draft Release 10 项资产。
+- 下载：pdl.sh 16 段并发，本轮 GitHub 很快（dmg 1 分钟、pkg 2 分钟）；pkg 的 c7 段卡住，手工用新签名补拉剩余 range 后拼装。
+- 校验：dmg sha256 35a0936004044da5… ✓、pkg sha256 2510329440d4b4aa… ✓，均与 GitHub 声明一致。
+- macOS：/Applications 2.4.1 → 2.4.2（旧包留 /tmp/HanCast_pre_241_081116.app），已启动，description.xml 200。
+- Linux cachyos：pacman -U 2.3… → 2.4.2-1；GUI 需重启才生效——SSH 里 hyprctl 缺 HYPRLAND_INSTANCE_SIGNATURE，
+  从 /run/user/1000/hypr/ 读出签名 + wayland-1 后用 `setsid nohup /usr/bin/HanCast` 重启成功，
+  sidecar get_settings 返回 success。
+- 现场取证（用户报「还没解决」时的 Linux 日志）：20 秒内 4 次发往 Mac 的 SetAVTransportURI，中间无用户操作；
+  每次都是「用户 Stop → 24ms 后第二次 Stop（play() 自带的清场）→ SetURI → Play」，且 4 次投的是**同一个文件**——
+  停止时清空 playingId 让续播找不到当前项，只能重投。两台机器当时都还是 2.4.1（修复未装机），故仍复现。
+- 遗留：Release v2.4.1/v2.4.2 都是 draft，待真机确认后 publish；Windows（Host win）仍 2.3.15 且离线。
