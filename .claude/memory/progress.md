@@ -240,6 +240,21 @@ HanCast-Frontend-Spec,README,开发指南}.md 的计数与 §11 状态。
   - 完整通信协议定义
   - PyInstaller 打包流程
 
+## 2026-10-29 发布轮：v2.4.3（投屏历史可回到投屏流程，tag 已推，CI 跑着）
+
+用户原话：「刚才那个'历史'功能有点废啊，只是个记录列表，能不能给加上更丰富的功能，比如支持点击对应的历史条目然后重新回到投屏流程」。
+
+- **历史从流水账变入口**：点条目走 `reuseFromHistory()` 回到投屏流程（本地文件按原始路径重新解析、链接回来源页重新解、文件夹重读队列并摊开面板），行内新增 `▶` 走 `castFromHistory()` 直接投回当初那台设备——两种意图分开，「再投一次」和「换个设备」不该共用一个按钮。
+- **记账口径修正**：`MediaInfo` 加 `file_path`（由 `mediaStore.parseFile()` 补，后端不回），本地文件不再记 media server 临时 URL（重启即死链）；`HistoryEntry` 加 `sourceUrl`，分享直链带签名几小时过期，重投优先回来源页；同设备同内容改 `castCount` +1 不堆行；面板底部加「清空全部历史」。
+- **测试** `tools/verify-cast-ui.cjs` 25 → **30**：三条钉入账口径、两条直接测真 `history.ts`（次数累加、单设备 20 条上限）。夹具加了 `evaluate(..., globals)` 覆盖点，真 store 才能拿到可控 `localStorage`。
+- **文档同轮**：spec §6.6 按实测重写（旧稿把 `entries` 写成按设备分组的 Record、字段名写 `playedAt`、API 写 `entriesFor/remove`，全与代码不符）；顺带校准 tests 清单 32 → **34 个文件 / 8931 → 9247 行**（补 `test_folder_playlist.py`、`test_tv_url_suffix.py`，`test_ghmirror.py` 330 → 335）。
+- **验收**：`vue-tsc` 0、`npm run build` 通过、verify-cast-ui 30/30、后端 `pytest` **549 passed**、`audit-doc-refs` 3824 处可疑 0、`check-doc-freshness` FAIL 0 / WARN 0。
+- 提交 **341902b**、tag **v2.4.3**、CI run **40794894598**（macos-arm64 首轮抢不到托管机被 cancelled，`gh run rerun --failed` 补跑才绿）。
+- **装端**：dmg sha256 `1f25a558…`、pkg sha256 `68664886…` 均与 GitHub 一致；macOS 2.4.2→**2.4.3**（accept 89 PASS / 0 FAIL / ALL PASS、GUI + sidecar 8080 正常）；Linux cachyos `pacman -U` 到 **2.4.3-1**（sidecar 回 `version=2.4.3`、`list_screen_sources` 正常）。
+- **下载坑（第二次）**：release-assets 某些字节区间反复 stall，整段重试无效——必须把停滞段再切成 4–6 个子区间单独拉。追加式续传（v2.4.1 那次）会污染字节，别再用。
+- **已 publish**：`gh release edit v2.4.3 --draft=false` → draft=false（2026-10-29T02:04:42Z），Release 正文写了改动/验证/边界。v2.4.1、v2.4.2 的 draft 不再单独发布（被 v2.4.3 覆盖）。
+- 未做真机复核：全是前端状态机 + localStorage，电视侧行为与 v2.4.2 一致。
+
 ## 2026-10-29 晨：v2.4.1 装端（macOS + Linux 完成，Windows 离线）
 - CI run 40688622534 首轮 macos-arm64 三次抢不到 GitHub 托管机（cancelled，"job was not acquired by Runner"），第 4 次 rerun 成功；最终三平台全绿，draft Release 10 项资产齐。
 - 下载踩坑：release-assets 限速 ~60-150KB/s 且易 stall；pdl.sh（12-14 段并发、全段覆盖重试）最终拿到——pkg sha256 9ba7db…✓、dmg sha256 196b28…✓ 且 hdiutil VALID。中途 resume1.sh 追加式续传导致过 pkg 字节损坏（sha 对不上），已弃用。

@@ -34,6 +34,18 @@
 - 文档：`docs/HanCast-Frontend-Spec.md` §6.6 按实测重写（旧稿把 `entries` 写成按设备分组的 Record、字段名写成 `playedAt`、API 写成 `entriesFor/remove`，都与代码不符），store 表 `history.ts` 行改 126 行；两语言 key 各 353→358。
 - **未做真机复核**：这一段全是前端状态机 + localStorage，判据是上面那 30 条；电视侧行为没有变化（投出去的动作与 v2.4.2 一致）。
 
+### v2.4.3 装端落账（2026-10-29，装完才发布）
+
+- **CI**：run `40794894598`，`linux-x64` / `windows-x64` 首轮就绿；`macos-arm64` 第一轮被 GitHub **抢不到 macOS 托管机**直接 cancelled（0 个 step 跑起来，`gh run rerun --failed` 才补上——v2.4.1 同一毛病，第 4 次才成功）。重跑后 draft Release 10 项资产齐。
+- **产物校验**：macOS dmg 85,204,121 字节、sha256 `1f25a558a10020384b63076ba3824ef44a22d9fe17b046d4c4eda80f7cf26c20`；Arch pkg 52,439,333 字节、sha256 `68664886c87d4f039ada14e9acfb30504850ee9b7b5d8aa82838d530b5c0f33d`——两者都与 GitHub 声明逐字节一致，`hdiutil verify` CRC VALID。
+- **下载**：`release-assets` 对每个连接限速且某些字节区间**反复 stall**（本轮 dmg 的 c06、pkg 的 c01/c08 三段卡在 1.7–3.7 MB 不动）。整段重试无效，最后把卡住的那段再切成 4–6 个子区间单独拉才补齐——这是继 v2.4.1 「追加式续传污染字节」之后的第二个坑，记在这里：**按段覆盖式重下 + 对停滞段二次切分**，不要试图在已有文件上续写。
+- **macOS**：`/Applications` 2.4.2 → **2.4.3**（adhoc），`tools/accept-macos-artifact.sh 2.4.3` → **89 PASS / 0 FAIL / ALL PASS**；GUI 起得来、sidecar 在听 8080（`/description.xml` 200）。
+- **Linux（cachyos 192.168.1.68）**：`pacman -U` 2.4.2-1 → **2.4.3-1**；装完喂两条命令给 `/usr/lib/HanCast/hancast-sidecar`：`get_settings` 回 `success=true` 且 `version=2.4.3`，`list_screen_sources` 也回得来（`hancast-wlgrab` 与 sidecar 同级且带执行位）。
+- **生产发布**：v2.4.3 是当前两机在跑的版本，装端判据齐了就 publish；**v2.4.1 / v2.4.2 的 draft 不再单独发布**（已被 v2.4.3 覆盖，用户装最新的即可）。
+- **仍未真机复核**：本轮改动全在前端状态机 + localStorage，电视侧投出去的动作与 v2.4.2 完全一致，所以没有新增电视端判据；历史面板的交互（点条目回到投屏流程、`▶` 直接重投、次数徽标、清空全部）判据是那 30 条 harness 用例，**真机点一遍仍待用户**。
+
+---
+
 ---
 
 ## v2.4.2 — 2026-10-29（发布提交，队列停止语义修正 + 投屏历史）
