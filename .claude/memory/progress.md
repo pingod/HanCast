@@ -24,7 +24,9 @@
 
 **文档**：全仓行号按 diff equal 段重映射；locale 引用 `zh-CN.json:346→357`；模块行数表校准（commands 1257、ssdp 1343、mpv 662、media/server 706，并顺带修 parser 163→214、jsruntime 761→845）；Frontend-API §0 统计表 71/61/70/64、§2.1 补 3 条命令、§6.10 重写、§7 快速表 67→71 行；Frontend-Spec §4 组件 20→21、device.ts 179→228、locale 358→369；19 份校对戳 → 2026-10-30/v2.4.4；CHANGELOG 新增 v2.4.4 节。
 
-**未做**：真机只验 macOS 本机 + Linux 装端；Windows（Host win）离线待补装；publish 前需真机 TCL 实投（DEC-006 边界③）。
+**装端**：CI run 41052359324 macos 首轮 `hdiutil create failed - Resource busy`（runner 抖动），rerun --failed 后全绿；dmg sha256 3d178a1f… 与 GitHub 一致、hdiutil verify VALID；install 2.4.4 成功（adhoc, com.han.hancast），accept 88 PASS/0 FAIL/1 SKIP（SKIP 为 FFmpeg 下载源需代理）；产物内 4 份 sidecar 源 sha256 与仓库一致；实装探针三条新命令 success。
+
+**未做**：Linux(192.168.1.68)/Windows(Host win) 均离线（ssh/ping 全超时）→ 未装端；局域网扫不到渲染端 → 未真机投一次 → **Release 保持 draft 未 publish**（DEC-006 边界③）。
 
 ## 2026-10-28 发布轮：v2.4.0（已发布 + 已装 macOS/Linux ✅）
 

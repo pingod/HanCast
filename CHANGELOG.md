@@ -43,9 +43,15 @@
 - `commands.py` 1257 行（注册表 64 条）、`ssdp.py` 1343 行、`renderer/mpv.py` 662 行、`media/server.py` 706 行、`lib.rs` 1584 行（71 条 `#[tauri::command]`，`generate_handler!` `lib.rs:1509-1581`）、`src/api/commands.ts` 70 个导出、`stores/device.ts` 228 行、`DeviceList.vue` 257 行、`App.vue` 58 行、locale 369 键。
 - 全仓文档的 `文件:行号` 引用按 `git diff` 的 equal 段精确重映射（不机械加偏移），`protocol/*.py`、`commands.py`、`ssdp.py`、`renderer/mpv.py`、`media/server.py`、`lib.rs`、`commands.ts`、`device.ts`、`DeviceList.vue`、`App.vue`、`verify-params-ui.mjs` 全覆盖；locale 引用 `zh-CN.json:346→357` 同批修正。顺带校准两条早于本轮就漂了的模块行数（`media/parser.py` 163→214、`media/rules/jsruntime.py` 761→845）。
 
+### 装端验收（tag 之后补记）
+- CI run `41052359324`：linux-x64 / windows-x64 一次通过，macos-arm64 首轮在 `hdiutil: create failed - Resource busy`（runner 资源占用，非代码）失败，`gh run rerun --failed` 后全绿。draft Release 10 项资产齐。
+- dmg 用 API asset id 分块下载（12 段）拼接，**sha256 `3d178a1f08d8bc084434bd6f27c4155ea60a342a1a9b4ffff9a0c83649a11920`** 与 GitHub 声明逐字节一致，`hdiutil verify` CRC32 `FDEEECC7` VALID。
+- `tools/install-macos-artifact.sh 2.4.4` 装好（`CFBundleShortVersionString=2.4.4`，`Signature=adhoc`、`Identifier=com.han.hancast`，非 linker-signed），`tools/accept-macos-artifact.sh 2.4.4` → **88 PASS / 0 FAIL / 1 SKIP**（SKIP = FFmpeg 下载源需代理，本机直连超时，属环境限制）。
+- 产物内 4 份本轮改动的 sidecar 源码 sha256 与仓库逐字节一致（`commands.py`/`media/server.py`/`ssdp.py`/`renderer/mpv.py`）；启动实装 App 后 `description.xml` 200，另起临时 HOME 的 sidecar 探针实测 `get_hidden_devices` / `remove_manual_device` / `unhide_device` 三条新命令均 `success: true`。
+
 ### 未闭合
-- 真机只验了 macOS 本机 + Linux（cachyos）装端；Windows（`Host win`，线上才在、现停 2.3.15）上线后补装。
-- `player_safe_suffix` 的修复由纯函数矩阵证明，电视端真实播放仍需用户实投确认。
+- **Linux（192.168.1.68）与 Windows（`Host win`）当前都离线**（ssh 22/10086 与 ping 全超时），本轮无法装端；上线后补装。
+- **没有真机投屏一次**：局域网此刻扫不到任何渲染端（TCL/Linux 均不在线），DEC-006 边界③要求的「真投一次」缺失 ⇒ **Release 保持 draft，未 publish**。`player_safe_suffix` 的修复由纯函数矩阵证明，电视端真实播放仍待实投确认。
 
 ---
 
