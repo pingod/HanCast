@@ -179,7 +179,7 @@ const MOCK_DEVICES: Device[] = [
 const MOCK_SETTINGS: AppSettings = {
   usn: 'hancast-uuid-001',
   friendly_name: 'HanCast',
-  version: '2.4.3',
+  version: '2.4.4',
   media_port: 8080,
   default_device: null,
   network_interface: '',
@@ -637,8 +637,8 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
     case 'check_update':
       return {
         has_update: false,
-        current: '2.4.3',
-        latest: '2.4.3',
+        current: '2.4.4',
+        latest: '2.4.4',
         url: '',
         body: '',
         source: 'github',
@@ -737,6 +737,23 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
     }
     case 'get_manual_devices':
       return [...mockManualDevices] as T
+    case 'remove_manual_device': {
+      const target = String(args?.target ?? '').trim()
+      if (!target) throw new Error('要删除的地址不能为空')
+      const i = mockManualDevices.indexOf(target)
+      if (i >= 0) mockManualDevices.splice(i, 1)
+      return undefined as T
+    }
+    case 'get_hidden_devices':
+      return [
+        { udn: 'uuid:mock-hidden-1', name: '客厅电视', ip: '192.168.1.44', device_type: 'MediaRenderer', online: true, is_self: false },
+        { udn: 'uuid:mock-hidden-2', name: '3f2a91bc', ip: '', device_type: 'unknown', online: false, is_self: false },
+      ] as T
+    case 'unhide_device': {
+      const id = String(args?.id ?? '')
+      if (!id) throw new Error('缺少设备 id')
+      return undefined as T
+    }
     case 'get_logs': {
       // dev 模式：样本行覆盖多模块/多级别，过滤器才看得出效果
       // get_logs 走 Rust 的 params 形参，所以查询条件在 args.params 里
@@ -811,6 +828,28 @@ export async function hideDevice(id: string): Promise<void> {
   await invoke('hide_device', { id })
 }
 
+/** 取消隐藏：把设备从隐藏列表里移除，重新出现在设备列表里 */
+export async function unhideDevice(id: string): Promise<void> {
+  const invoke = await initInvoke()
+  await invoke('unhide_device', { id })
+}
+
+/** 隐藏设备条目（Sidecar 按 UDN 回查补了名字与在离线，查不到则退回 UDN 尾段） */
+export interface HiddenDevice {
+  udn: string
+  name: string
+  ip: string
+  device_type: string
+  online: boolean
+  /** 就是本程序自己的渲染端（隐藏它是正常状态，别让用户以为出了 bug） */
+  is_self?: boolean
+}
+
+export async function getHiddenDevices(): Promise<HiddenDevice[]> {
+  const invoke = await initInvoke()
+  return invoke<HiddenDevice[]>('get_hidden_devices')
+}
+
 /** 手动添加设备：IP / IP:端口 / 完整 description.xml 地址 */
 export async function addDevice(address: string): Promise<Device> {
   const invoke = await initInvoke()
@@ -821,6 +860,12 @@ export async function addDevice(address: string): Promise<Device> {
 export async function getManualDevices(): Promise<string[]> {
   const invoke = await initInvoke()
   return invoke<string[]>('get_manual_devices')
+}
+
+/** 删除一条手动设备地址（不动已发现的设备；地址填错时唯一的出口） */
+export async function removeManualDevice(target: string): Promise<void> {
+  const invoke = await initInvoke()
+  await invoke('remove_manual_device', { target })
 }
 
 // Media parsing

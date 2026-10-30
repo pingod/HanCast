@@ -168,6 +168,21 @@ class TestPlayerSafeSuffixByMime(unittest.TestCase):
         self.assertEqual(player_safe_suffix("https://f.cdn/api/m3u8?id=1", "video/mp4"),
                          ".m3u8")
 
+    def test_playlist_by_mime_not_only_by_path(self):
+        """路径无后缀、靠 MIME 声明的播放列表也得给 .m3u8
+
+        此前这一支把 mime 参数丢了（`_looks_like_playlist("", url)`），
+        于是「mpegurl 类型 + 无后缀路径」被兜底成 .ts —— 代理出去等于给电视
+        一个假装成 TS 的播放列表，照旧播不了。2026-10-30 由
+        `tools/verify-tv-url-suffix.py` 的矩阵抓出来。
+        """
+        for mime in ("application/vnd.apple.mpegurl",
+                     "application/x-mpegURL",
+                     "audio/mpegurl"):
+            with self.subTest(mime=mime):
+                self.assertEqual(
+                    player_safe_suffix("https://f.cdn/live/master", mime), ".m3u8")
+
 
 class TestTvExtOkShape(unittest.TestCase):
     def test_trailing_slash_and_bare_name_both_fail(self):

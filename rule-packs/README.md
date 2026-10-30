@@ -2,7 +2,7 @@
 
 > 这个目录回答一个问题：**官方解析规则包的「源 / 产物 / 索引」三件套是怎么组织的、怎么打包发布、用户机器上怎么装到**。写规则包的 API 细节不在这里。
 >
-> 最后校对：2026-10-29，对应版本 v2.4.3（`package.json:4`。本轮只重跑闸门：引用行号与「4 个官方包 / 32 项后台参数」的实测口径都还成立）
+> 最后校对：2026-10-30，对应版本 v2.4.4（`package.json:4`。本轮只重跑闸门：引用行号与「4 个官方包 / 32 项后台参数」的实测口径都还成立）
 
 ---
 
@@ -182,7 +182,7 @@ schema 就是一个 `packs` 数组，5 个键（`rule-packs/index.json:1-25`，�
 
 开关覆盖的是**程序运行时对 GitHub 的四类请求**：规则包索引、规则包 zip、检查新版本、FFmpeg 按需下载。
 镜像失败一律自动退回直连，并把两条路的失败原因拼进同一条报错（`jsplugins.py:350-369` 索引、
-`jsplugins.py:549-590` 包下载、`commands.py:892-916` 更新检查、`hancast-backend/hancast_sidecar/utils/ffmpeg_deps.py`
+`jsplugins.py:549-590` 包下载、`commands.py:944-968` 更新检查、`hancast-backend/hancast_sidecar/utils/ffmpeg_deps.py`
 的 `_open_stream`）——只说「拉取失败」，用户分不清是镜像挂了还是线路挂了，而这两种动作完全不同。
 前缀可改是实测逼的：2026-10-15 本机不挂代理，`gh-proxy.com` 对 raw / dist zip /
 releases/download / `api.github.com` 四种形态都成立且字节与直连逐位一致，而 `ghfast.top`
@@ -287,23 +287,23 @@ RAW_BASE = "https://raw.githubusercontent.com/pingod/HanCast/main/rule-packs/dis
 
 ### 4.5 用户侧「检查规则包更新」的完整链路
 
-**整条链只有 sidecar 在下载和校验**：壳层（Rust）只转发命令，前端只渲染结果。摘要校验在后端完成这一点，前端注释写得很明白（`src/api/commands.ts:892-893`「摘要校验在后端完成：包按索引条目下载，sha256 对不上就不落盘」）。
+**整条链只有 sidecar 在下载和校验**：壳层（Rust）只转发命令，前端只渲染结果。摘要校验在后端完成这一点，前端注释写得很明白（`src/api/commands.ts:937-938`「摘要校验在后端完成：包按索引条目下载，sha256 对不上就不落盘」）。
 
 | # | 环节 | 位置 | 说明 |
 | --- | --- | --- | --- |
 | 1 | 用户点「检查规则包更新」 | `src/components/PluginSettings.vue:388-390` | 设置 → 解析插件 → 规则包更新段（`:385-386`） |
 | 2 | `onCheckUpdates()` | `PluginSettings.vue:132-150` | 置 `checking`，成功后把结果拆进 `packUpdates` / `packAvailable` / `indexUrl` |
-| 3 | `pluginCheckUpdates(indexUrl = '')` | `src/api/commands.ts:877-890` | `invoke('plugin_check_updates', { indexUrl: indexUrl \|\| null })`；留空即走后台参数 |
-| 4 | Rust command `plugin_check_updates` | `src-tauri/src/lib.rs:324-335` | 纯转发：`sidecar.send_command("plugin_check_updates", {"index_url": …})` |
-| 5 | sidecar 命令表 | `hancast-backend/hancast_sidecar/commands.py:144` | 注册到 `CommandHandler` |
-| 6 | `_plugin_check_updates()` | `commands.py:676-680` | 先 `mgr.refresh()`（指纹变了就热重载），再 `mgr.check_updates(index_url)` |
+| 3 | `pluginCheckUpdates(indexUrl = '')` | `src/api/commands.ts:922-935` | `invoke('plugin_check_updates', { indexUrl: indexUrl \|\| null })`；留空即走后台参数 |
+| 4 | Rust command `plugin_check_updates` | `src-tauri/src/lib.rs:361-372` | 纯转发：`sidecar.send_command("plugin_check_updates", {"index_url": …})` |
+| 5 | sidecar 命令表 | `hancast-backend/hancast_sidecar/commands.py:145` | 注册到 `CommandHandler` |
+| 6 | `_plugin_check_updates()` | `commands.py:728-732` | 先 `mgr.refresh()`（指纹变了就热重载），再 `mgr.check_updates(index_url)` |
 | 7 | `PluginManager.check_updates()` | `jsplugins.py:371-386` | 拉索引 → 对上本地 `self._plugins` → 分两堆：本机没装的进 `available`（`:381-382`），索引版本更高的进 `updates`（带 `current`，`:383-384`）；返回 `{index_url, updates, available, installed}` |
 | 8 | `fetch_index()` | `jsplugins.py:331-369` | `requests` GET 索引，超时取 `rules.index_timeout_s`，UA 用 `_IMPORT_UA`（`:52`）；HTTP ≥400 / 非法 JSON / 网络异常都翻成 `PluginError`（`:349-355`）；坏条目静默丢掉（`:358-364`） |
 | 9 | 前端渲染两堆 | `PluginSettings.vue:396-424` | 「可更新」卡片 `:396-409`，「官方源里有、本机没装」卡片 `:411-424`；两堆都空时显示 `rulesNoUpdates`（`:426-429`） |
 | 10 | 用户点「更新」/「安装」→ `onPull(entry)` | `PluginSettings.vue:152-166` | 成功后用返回的全量清单替换 `script_packs`，并把该项从两堆里过滤掉（`:156-158`） |
-| 11 | `pluginPull(name, indexUrl = '')` | `src/api/commands.ts:892-901` | `invoke('plugin_pull', { name, indexUrl: indexUrl \|\| null })`，返回 `resp.plugins ?? []` |
-| 12 | Rust command `plugin_pull` | `src-tauri/src/lib.rs:337-350` | 纯转发。**注意参数改名**：壳层收 `index_url`，往 sidecar 发的是 `{"name": …, "url": …}`（`:347`） |
-| 13 | `_plugin_pull()` | `commands.py:682-692` | `mgr.pull(name, params["url"])`，然后回 **`{"plugins": mgr.list_info()}`**（全量清单，不是单包 info） |
+| 11 | `pluginPull(name, indexUrl = '')` | `src/api/commands.ts:937-946` | `invoke('plugin_pull', { name, indexUrl: indexUrl \|\| null })`，返回 `resp.plugins ?? []` |
+| 12 | Rust command `plugin_pull` | `src-tauri/src/lib.rs:374-387` | 纯转发。**注意参数改名**：壳层收 `index_url`，往 sidecar 发的是 `{"name": …, "url": …}`（`:347`） |
+| 13 | `_plugin_pull()` | `commands.py:734-744` | `mgr.pull(name, params["url"])`，然后回 **`{"plugins": mgr.list_info()}`**（全量清单，不是单包 info） |
 | 14 | `PluginManager.pull()` | `jsplugins.py:388-403` | 先查索引拿 `url` + `sha256`；索引不可用时退回包自己声明的 `update_url`（`:400`）；两者都没有才报「既不在官方索引里，也没声明 update_url」（`:397-402`） |
 | 15 | `import_url()` | `jsplugins.py:534-554` | 流式下载、64KB 分块、超 2MB 立刻断（`:543-547`），**然后比 sha256**（`:548-553`） |
 | 16 | `import_zip_bytes()` | `jsplugins.py:475-532` | 四道体积上限（`:476-487`）→ 路径合法性（`:488-491`）→ 条目白名单（`:492-493`）→ 单文件上限（`:494-495`）→ 软链接拒收（`:496-497`）→ 恰好一个 manifest（`:498-501`）→ name 正则（`:506-509`）→ scripts 必须 `.js` 且必须存在（`:510-518`）→ `rmtree` 同名目录后落盘（`:520-528`）→ `self._fingerprint = None; self.refresh()`（`:530-531`） |

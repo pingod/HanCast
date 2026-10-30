@@ -282,7 +282,14 @@ class MPVRenderer(Renderer):
         with self.proc_lock:
             proc = self.proc
             if proc is None or proc.poll() is not None:
-                logger.error(f"MPV 进程不可用，跳过命令: {command[0] if command else '?'}")
+                # quit 是关停路径的例行一步，进程早退了属正常——用 ERROR 记它
+                # 会让每次退出都在日志里留一条假红（两天实测 10 条），
+                # 真正需要知道的"播放中途进程死了"反而被噪声盖住
+                name = command[0] if command else '?'
+                if name == 'quit':
+                    logger.debug(f"MPV 进程已退出，跳过 quit")
+                else:
+                    logger.error(f"MPV 进程不可用，跳过命令: {name}")
                 return False
         data = {"command": command}
         msg = json.dumps(data) + '\n'

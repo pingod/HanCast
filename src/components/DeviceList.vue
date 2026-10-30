@@ -79,6 +79,18 @@ const handleRefresh = () => {
       />
     </div>
 
+    <button
+      v-if="deviceStore.hiddenDevices.length"
+      class="device-list__hidden"
+      @click="deviceStore.openHiddenModal()"
+    >
+      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19M1 1l22 22" />
+      </svg>
+      <span>{{ t('devices.hiddenCount', { n: deviceStore.hiddenDevices.length }) }}</span>
+      <span class="device-list__hidden-manage">{{ t('devices.hiddenManage') }}</span>
+    </button>
+
     <div v-else class="device-list__empty">
       <svg aria-hidden="true" viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round">
         <rect x="3" y="4" width="18" height="13" rx="2" /><path d="M8 21h8M12 17v4M8 10h.01M12 10h.01M16 10h.01" />
@@ -206,6 +218,33 @@ const handleRefresh = () => {
 
 .device-list__empty-btn:hover {
   border-color: var(--border-focus);
+  color: var(--primary);
+}
+
+.device-list__hidden {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  margin-top: 8px;
+  padding: 5px 8px;
+  font-size: 11px;
+  font-family: var(--font);
+  color: var(--text-tertiary);
+  background: transparent;
+  border: 1px dashed var(--border);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.device-list__hidden:hover {
+  color: var(--text-secondary);
+  border-color: var(--border-focus);
+}
+
+.device-list__hidden-manage {
+  margin-left: auto;
   color: var(--primary);
 }
 

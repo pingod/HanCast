@@ -210,6 +210,43 @@ async fn hide_device(sidecar: State<'_, SidecarManager>, id: String) -> Result<(
     Ok(())
 }
 
+/// 取消隐藏设备。
+///
+/// Sidecar 侧早有 `unhide_device`，但壳层没暴露、前端没调用，于是"隐藏"成了单向门：
+/// 手滑隐藏一台，界面上就再也找不回来，只能手动改 `hancast_setting.json`。
+#[tauri::command]
+async fn unhide_device(sidecar: State<'_, SidecarManager>, id: String) -> Result<(), String> {
+    sidecar
+        .send_command("unhide_device", serde_json::json!({"id": id}))
+        .await?;
+    Ok(())
+}
+
+/// 隐藏设备列表（带名称与在离线，供设置页管理与一键恢复）
+#[tauri::command]
+async fn get_hidden_devices(
+    sidecar: State<'_, SidecarManager>,
+) -> Result<serde_json::Value, String> {
+    sidecar
+        .send_command("get_hidden_devices", serde_json::json!({}))
+        .await
+}
+
+/// 删除一条手动添加的设备地址（不动已发现的设备）
+///
+/// 与 `remove_device` 的语义相反：那条是删设备并连带摘地址，这里只摘地址——
+/// 填错的 IP 会每次开机自动重连一遍，之前没有任何入口能删掉它。
+#[tauri::command]
+async fn remove_manual_device(
+    sidecar: State<'_, SidecarManager>,
+    target: String,
+) -> Result<(), String> {
+    sidecar
+        .send_command("remove_manual_device", serde_json::json!({"target": target}))
+        .await?;
+    Ok(())
+}
+
 /// 手动添加设备：组播被系统/安全软件拦截时的兜底通道
 #[tauri::command]
 async fn add_device(sidecar: State<'_, SidecarManager>, address: String) -> Result<serde_json::Value, String> {
@@ -1478,8 +1515,11 @@ pub fn run() {
             rename_device,
             remove_device,
             hide_device,
+            unhide_device,
+            get_hidden_devices,
             add_device,
             get_manual_devices,
+            remove_manual_device,
             parse_media_file,
             parse_media_url,
             list_folder_media,

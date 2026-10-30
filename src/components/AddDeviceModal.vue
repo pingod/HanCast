@@ -22,6 +22,15 @@ async function submit() {
     setTimeout(() => deviceStore.closeAddModal(), 900)
   }
 }
+
+// 删掉一条填错的地址。以前这里只有只读文本，填错一次就得每次开机看着它自动重连失败
+async function removeAddress(addr: string) {
+  try {
+    await deviceStore.removeManualAddress(addr)
+  } catch (err) {
+    deviceStore.addError = err instanceof Error ? err.message : String(err)
+  }
+}
 </script>
 
 <template>
@@ -55,7 +64,19 @@ async function submit() {
     <div class="adm-saved">
       <div class="adm-saved-title">{{ t('devices.manualSaved') }}</div>
       <div v-if="deviceStore.manualDevices.length" class="adm-saved-list">
-        <div v-for="addr in deviceStore.manualDevices" :key="addr" class="adm-saved-item">{{ addr }}</div>
+        <div v-for="addr in deviceStore.manualDevices" :key="addr" class="adm-saved-item">
+          <span class="adm-saved-addr">{{ addr }}</span>
+          <button
+            class="adm-saved-del"
+            :title="t('devices.manualRemove')"
+            :aria-label="t('devices.manualRemove')"
+            @click="removeAddress(addr)"
+          >
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M18 6L6 18M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
       </div>
       <div v-else class="adm-saved-empty">{{ t('devices.manualEmpty') }}</div>
     </div>
@@ -163,9 +184,33 @@ async function submit() {
 }
 
 .adm-saved-item {
-  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 11px;
   color: var(--text-primary);
+}
+
+.adm-saved-addr {
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  word-break: break-all;
+}
+
+.adm-saved-del {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-sm);
+  color: var(--text-tertiary);
+  transition: all var(--transition-fast);
+}
+
+.adm-saved-del:hover {
+  background: rgba(239, 68, 68, 0.12);
+  color: #DC2626;
 }
 
 .adm-saved-empty {

@@ -8,8 +8,12 @@ import {
   setDefaultDevice as apiSetDefault,
   renameDevice as apiRename,
   hideDevice as apiHide,
+  unhideDevice as apiUnhide,
+  getHiddenDevices,
   addDevice as apiAddDevice,
   getManualDevices,
+  removeManualDevice as apiRemoveManual,
+  type HiddenDevice,
 } from '@/api/commands'
 
 export const useDeviceStore = defineStore('device', () => {
@@ -63,6 +67,37 @@ export const useDeviceStore = defineStore('device', () => {
     if (selectedDevice.value?.id === id) {
       selectedDevice.value = null
     }
+    // 隐藏后同步隐藏列表，用户想反悔时能立刻在「已隐藏」里找回
+    fetchHiddenDevices()
+  }
+
+  // ── 已隐藏设备（此前"隐藏"是单向门：界面上没有任何入口能恢复）──
+
+  const hiddenDevices = ref<HiddenDevice[]>([])
+  const showHiddenModal = ref(false)
+
+  async function fetchHiddenDevices() {
+    try {
+      hiddenDevices.value = await getHiddenDevices()
+    } catch (err) {
+      console.error('Failed to fetch hidden devices:', err)
+    }
+  }
+
+  function openHiddenModal() {
+    showHiddenModal.value = true
+    fetchHiddenDevices()
+  }
+
+  function closeHiddenModal() {
+    showHiddenModal.value = false
+  }
+
+  /** 取消隐藏：从隐藏列表移除，再把设备重新拉回列表 */
+  async function unhide(id: string) {
+    await apiUnhide(id)
+    hiddenDevices.value = hiddenDevices.value.filter((d) => d.udn !== id)
+    await fetchDevices()
   }
 
   function selectDevice(device: Device | null) {
@@ -77,6 +112,12 @@ export const useDeviceStore = defineStore('device', () => {
     } catch (err) {
       console.error('Failed to fetch manual devices:', err)
     }
+  }
+
+  /** 删掉一条填错/不再需要的地址（只摘持久化记录，不动已发现的设备） */
+  async function removeManualAddress(address: string) {
+    await apiRemoveManual(address)
+    await fetchManualDevices()
   }
 
   function openAddModal() {
@@ -148,6 +189,7 @@ export const useDeviceStore = defineStore('device', () => {
   // Auto-refresh every 30s
   onMounted(() => {
     fetchDevices()
+    fetchHiddenDevices()
     setupListeners()
     refreshTimer = window.setInterval(fetchDevices, 30000)
   })
@@ -165,13 +207,20 @@ export const useDeviceStore = defineStore('device', () => {
     manualDevices,
     adding,
     addError,
+    hiddenDevices,
+    showHiddenModal,
     fetchDevices,
     refresh,
     setDefault,
     rename,
     hide,
+    unhide,
+    fetchHiddenDevices,
+    openHiddenModal,
+    closeHiddenModal,
     selectDevice,
     fetchManualDevices,
+    removeManualAddress,
     openAddModal,
     closeAddModal,
     addDevice,

@@ -44,6 +44,12 @@ const chrome = findShell()
 const child = spawn(chrome, [
   `--remote-debugging-port=${PORT}`,
   `--user-data-dir=${profile}`,
+  // --no-sandbox / --disable-gpu 不是可选项：在容器、受限沙箱、无显示环境里
+  // Chrome 会报 `sandbox initialization failed: Operation not permitted` →
+  // `GPU process isn't usable. Goodbye.` 直接 FATAL 退出，脚本只看到
+  // 「CDP 未就绪 / Target crashed」，看着像被测页面坏了（v2.4.1 发布轮就是这么误判的）。
+  // 这两条只影响浏览器自身的启动方式，不动任何判据。
+  '--no-sandbox', '--disable-gpu',
   '--no-first-run', '--no-default-browser-check',
   '--window-size=420,760',
   'about:blank',

@@ -137,6 +137,7 @@ class CommandHandler:
             "remove_device": self._remove_device,
             "add_device": self._add_device,
             "get_manual_devices": self._get_manual_devices,
+            "remove_manual_device": self._remove_manual_device,
             "hide_device": self._hide_device,
             "unhide_device": self._unhide_device,
             "get_hidden_devices": self._get_hidden_devices,
@@ -409,6 +410,26 @@ class CommandHandler:
     def _get_manual_devices(self, params: dict) -> list:
         return self.config.manual_devices
 
+    def _remove_manual_device(self, params: dict) -> None:
+        """把一条手动添加的地址从持久化列表里摘掉
+
+        只删「下次开机要自动重连」的那条地址，**不动**已经发现的设备——
+        `remove_device` 那条路是「删设备连带删地址」，语义相反：
+        地址填错、或不想再自动连，但设备本身还想留着时，只能走这里。
+        此前 `Config.remove_manual_device()` 全仓零调用点，填错的地址永久留着。
+        """
+        target = (params.get("target") or params.get("address") or "").strip()
+        if not target:
+            raise ValueError("要删除的地址不能为空")
+        before = len(self.config.manual_devices)
+        self.config.remove_manual_device(target)
+        if len(self.config.manual_devices) == before:
+            # 幂等：列表里本来就没有（可能已被 remove_device 连带删过），不报错也不落盘
+            logger.debug(f"Manual device entry already absent: {target}")
+            return
+        self.config.save()
+        logger.info(f"Manual device entry removed: {target}")
+
     def _hide_device(self, params: dict) -> None:
         """隐藏设备 - 加入隐藏列表，SSDP 仍能发现但不推送给前端"""
         device_id = params["id"]
@@ -422,8 +443,39 @@ class CommandHandler:
         self.config.save()
 
     def _get_hidden_devices(self, params: dict) -> list:
-        """获取隐藏设备列表"""
-        return self.config.hidden_devices
+        """隐藏设备列表（带可辨识信息，供界面管理与一键取消隐藏）
+
+        配置里只存 UDN 字符串。直接把它交给界面，用户看到的是一串
+        `uuid:9870173c-…`，既不知道该恢复哪台、也不知道那是不是本机自己
+        （本机作为渲染端会被自己的 SSDP 发现，隐藏它是正常状态），
+        所以这里按 UDN 回查发现表补名字与在离线。
+        隐藏过的设备此刻未必在线（甚至可能已报废），查不到就退回 UDN 尾段。
+        """
+        self_usn = (self.config.get_usn() or "").strip()
+        self_udn = f"uuid:{self_usn}"          # 与 :107 的 device_usn 同一算法
+        out = []
+        for udn in self.config.hidden_devices:
+            device = self.ssdp.get_device(udn)
+            if device:
+                out.append({
+                    "udn": udn,
+                    "name": device.display_name,
+                    "ip": device.ip,
+                    "device_type": device.device_type,
+                    "online": device.status != "offline",
+                })
+            else:
+                out.append({
+                    "udn": udn,
+                    "name": udn.split(":")[-1][:8],
+                    "ip": "",
+                    "device_type": "unknown",
+                    "online": False,
+                })
+            # is_self：这台就是本程序自己的渲染端。界面上要标出来，
+            # 否则用户把它恢复出来会看见「HanCast 投给 HanCast」而以为出了 bug
+            out[-1]["is_self"] = udn in (self_usn, self_udn)
+        return out
 
     # ── 投屏控制 ──
 
@@ -1017,10 +1069,22 @@ class CommandHandler:
         }
 
     def _fetch_github_release(self, api_url: str, current_version: str, timeout: int = 2) -> Optional[dict]:
-        """从 GitHub/Gitee releases API 获取最新版本"""
+        """从 GitHub/Gitee releases API 获取最新版本
+
+        走统一 HTTP 客户端而不是裸 requests：设置里配了代理的用户，裸 requests
+        只认环境变量代理，程序内代理形同不存在，表现为「能投屏但永远查不到更新」。
+        """
         headers = {"Accept": "application/vnd.github.v3+json"}
-        resp = requests.get(api_url, headers=headers, timeout=timeout)
-        resp.raise_for_status()
+        from .utils import httpclient
+        session = httpclient.make_session()
+        try:
+            resp = session.get(api_url, headers=headers, timeout=timeout)
+            resp.raise_for_status()
+        finally:
+            try:
+                session.close()
+            except Exception:
+                pass
         data = resp.json()
 
         tag = data.get("tag_name", "")

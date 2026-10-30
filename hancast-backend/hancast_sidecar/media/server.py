@@ -137,7 +137,9 @@ def player_safe_suffix(url: str, mime: str = "") -> str:
     上面那台 TCL 就是先看后缀、后缀不像媒体就连魔数都不读，所以给一个
     与容器相符的后缀（MP4 给 `.mp4`）比统一甩 `.ts` 稳，`.ts` 只作未知类型的兜底。
     """
-    if _looks_like_playlist("", url):
+    # 第二个参数是 mime：不给它，带 mpegurl 类型但路径无后缀的播放列表会被
+    # 兜底成 .ts，代理出去就是「一个假装成 TS 的 m3u8」，电视照旧播不了
+    if _looks_like_playlist(mime, url):
         return ".m3u8"
     seg = urlparse(url).path.rsplit("/", 1)[-1]
     m = _SEG_EXT_RE.search(seg)

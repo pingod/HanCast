@@ -1,6 +1,6 @@
 # Macast-Han 已知问题与解决方案
 
-**最后更新**: 2026-10-28
+**最后更新**: 2026-10-30
 
 ---
 
@@ -98,7 +98,7 @@
 ### COMP-005: TCL 电视只按 URL 后缀决定拉不拉流 → 无后缀直链「投不上」
 - **平台**: 全平台（发出投屏侧；接收端 = 只认后缀的渲染器，实测 TCL 85T8G Max）
 - **发现日期**: 2026-10-28
-- **状态**: 🟡 工作区已修，**未发版**（未 bump 版本 / 未打 tag / 未重装 `/Applications`）
+- **状态**: 🟢 已解决并发布（v2.4.0，2026-10-29；后缀门 + 交付代理，本机已装到 2.4.3）
 - **描述**: 抖音分享文案解析出直链、`Created cast session` 也打了，但 TCL 电视一次画面都没有；
   同一时刻投给局域网另一台 Linux HanCast（mpv 接收端）能正常播。全程 0 ERROR/WARNING——
   因为旧的出站 `_send_action` 成功只打 debug 级，面板默认 INFO 看不到。
@@ -120,6 +120,21 @@
   现场文案 → 交付 `http://192.168.1.5:<port>/proxy/…mp4` → 裸 SOAP 投 TCL → `Proxy response: status=206`、
   电视 `Dur=00:04:55` 且 `AbsTime` 1→13 秒前进 ⇒ 投得动了。
 - **待办（发布轮）**: `npm run version:set` bump、打 tag、重建装机，CHANGELOG 已留「未发布 — 2026-10-28」节。
+
+### COMP-006: 后端测试套件会覆盖用户真实 hancast_setting.json（跑一次测试污染一次配置）
+- **平台**: 全平台（开发/CI）
+- **发现日期**: 2026-10-30（v2.4.4 开工时顺带发现）
+- **状态**: 🟢 已解决（v2.4.4 工作区，已发版）
+- **描述**: 本机 `~/Library/Application Support/HanCast/hancast_setting.json` 被写坏几十轮：
+  `default_device` 变成 `"test-id"`、多了 `test_key:"test_value"`，用户真实选择被覆盖。
+- **根因**: `hancast-backend/tests/test_commands.py` 的 `setUp` 直接构造 `CommandHandler()`，
+  `tearDown` 调 `cleanup()` → `config.save()` 写回真实路径；而 `utils/config.py` 的 `SETTING_DIR`、
+  `identity.py`、`logger.py` 的 `LOG_DIR` 都是 **import 时**定值，所以事后 patch `config.SETTING_DIR` 无效。
+- **解决方案**: `tests/conftest.py` 在 import 任何 `hancast_sidecar` 模块之前把
+  `HOME`/`USERPROFILE`/`APPDATA`/`LOCALAPPDATA` 重定向到一次性临时目录（`tempfile.mkdtemp`），
+  并在三道启动自检里断言配置目录确实落在临时 HOME 下；新增 `tests/test_config_isolation.py` 钉死。
+- **验证方法**: `pytest tests/test_config_isolation.py` 5 passed；全量 563 passed；跑完再查真实
+  `hancast_setting.json` 的 mtime 不再变化。现场已清理被污染的 `default_device`/`test_key`（备份在 /tmp）。
 
 ## 解决方案模板
 

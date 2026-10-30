@@ -1,4 +1,4 @@
-<!-- 最后校对：2026-10-29，对应版本 v2.4.3（package.json:4）。数字与 文件:行号 引用由 tools/check-doc-freshness.py 机械核对 -->
+<!-- 最后校对：2026-10-30，对应版本 v2.4.4（package.json:4）。数字与 文件:行号 引用由 tools/check-doc-freshness.py 机械核对 -->
 
 <p align="center">
   <a href="README.md"><img src="https://img.shields.io/badge/README-CN-blue?style=flat-square&logo=github" alt="中文"></a>
@@ -267,7 +267,7 @@ resources by `scripts/sync-sidecar.cjs`.
 | Capture | FFmpeg (external dependency) + WASAPI / Audio Tap | Screen & window capture, HLS segmentation |
 
 The frontend calls **67** Rust commands via Tauri `invoke()` (`generate_handler!`,
-`src-tauri/src/lib.rs:1457-1525`); Rust talks to the Python Sidecar over stdin/stdout JSON
+`src-tauri/src/lib.rs:1494-1565`); Rust talks to the Python Sidecar over stdin/stdout JSON
 (**62** commands registered Sidecar-side; **8** events reach the frontend = 6 from Python + 2 from the
 shell, plus `browser_request` which stops at the shell). Full contract:
 [docs/HanCast-Frontend-API.md](docs/HanCast-Frontend-API.md). `python3 tools/check-doc-freshness.py`

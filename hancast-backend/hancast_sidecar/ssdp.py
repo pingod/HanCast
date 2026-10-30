@@ -76,6 +76,10 @@ def list_network_interfaces() -> List[Dict]:
 class Sock:
     """Per-interface multicast socket"""
 
+    # 类级默认值：测试里用 Sock.__new__ 造实例（不跑 __init__）时也要有这两个标志
+    send_failed = False
+    disabled = False
+
     def __init__(self, ip):
         self.ip = ip
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -83,6 +87,9 @@ class Sock:
         self.interface = socket.inet_aton(self.ip)
         # 组播被系统阻断时 send 会持续失败，每实例只告警一次避免 30s 一轮刷屏
         self.send_failed = False
+        # 组播被彻底阻断的接口（VPN/Tailscale/虚拟网卡）每 30s 重试一次毫无意义：
+        # 失败一次就停用这个接口，别让 Errno 65 每轮都去撞一遍
+        self.disabled = False
         try:
             self.sock.setsockopt(
                 socket.IPPROTO_IP, socket.IP_MULTICAST_IF, self.interface)
@@ -99,6 +106,8 @@ class Sock:
         失败原因（多为组播被系统策略阻断，Errno 65/101）只在首次打印，
         否则每 30s × 6 条 NOTIFY 会把日志刷满。
         """
+        if self.disabled:
+            return False
         try:
             self.sock.sendto(
                 response.format(self.ip).encode(), destination)
@@ -108,7 +117,8 @@ class Sock:
                 self.send_failed = True
                 logger.warning(
                     "failure sending out data: from %s to %s: %s"
-                    "（同类失败不再重复告警）", self.ip, destination, msg)
+                    "（该接口组播不可用，本次运行不再重试）", self.ip, destination, msg)
+            self.disabled = True
             return False
 
     def close(self):
@@ -235,8 +245,19 @@ class SSDPService:
                     addrs = netifaces.ifaddresses(iface_name)
                     if netifaces.AF_INET in addrs:
                         for addr in addrs[netifaces.AF_INET]:
-                            if 'addr' in addr and 'netmask' in addr:
-                                interfaces.append((addr['addr'], addr['netmask']))
+                            if 'addr' not in addr or 'netmask' not in addr:
+                                continue
+                            # 点对点隧道（VPN/Tailscale 的 /32）与链路本地地址没法参与
+                            # 局域网组播：留着它们只会在每轮 NOTIFY 里刷 Errno 65
+                            if addr['netmask'] == '255.255.255.255':
+                                logger.debug(
+                                    f"SSDP 跳过点对点接口 {iface_name}({addr['addr']}/{addr['netmask']})")
+                                continue
+                            if addr['addr'].startswith('169.254.'):
+                                logger.debug(
+                                    f"SSDP 跳过链路本地地址 {iface_name}({addr['addr']})")
+                                continue
+                            interfaces.append((addr['addr'], addr['netmask']))
                 except ValueError:
                     continue
         except ImportError:

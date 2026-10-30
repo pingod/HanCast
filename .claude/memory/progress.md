@@ -8,6 +8,24 @@
 
 验证：媒体/主题 73 项、播控原 20 项及封面新增 1 项、真实 App 生命周期 2 项；类型检查及 Vite 构建通过。浏览器验 346×472 / 434×634 / 800×900、中英设置、日志/屏幕/控制器弹窗、解析/暂停/停止/清空（项目内置 mock，不是真机投屏）。未跑全量测试、未打三平台包、未提交或发布。界面截图在 `docs/images/ui-native-{light,dark}.png`。
 
+## 2026-10-30 发布轮：v2.4.4（补齐两条单向门 + 测试隔离 + 卫生类 + 后缀门真 bug）
+
+用户：m04982「还有哪里可以优化和场景增强」→ m05073「全部做下，顺序你自己决定」。本轮先做清单首段 + 开工时发现的重问题。
+
+**代码**
+- 新增 `src/components/HiddenDevicesModal.vue`（组件 21 个）+ `stores/device.ts` 的 `hiddenDevices`/`showHiddenModal`/`fetchHiddenDevices`/`openHiddenModal`/`closeHiddenModal`/`unhide`/`removeManualAddress`；`DeviceList.vue` 底部「已隐藏 N 台 · 管理」。
+- 壳层 + Sidecar 新增 3 条命令：`unhide_device`、`get_hidden_devices`（返回富化 `{udn,name,ip,device_type,online,is_self}`）、`remove_manual_device`（幂等）。命令总数 68→71，Sidecar 注册 63→64。
+- 严重坑：`tests/test_commands.py` 的 setUp/tearDown 会写用户真实 `hancast_setting.json`（本机被污染几十轮）。修法 `tests/conftest.py` 在 import 前重定向 HOME/USERPROFILE/APPDATA/LOCALAPPDATA 到临时目录 + 三道自检；新增 `test_config_isolation.py`。详见 issues COMP-006。
+- 卫生：SSDP 组播不可用网卡一次性禁用（不再每 30s 刷 Errno 65）+ 跳过点对点/链路本地网卡；MPV `quit` 不可用降 debug；检查更新改走 `httpclient.make_session()`（代理用户能查到更新）。
+- 真 bug：`media/server.py` `player_safe_suffix` 里 `_looks_like_playlist("", url)` 丢 mime ⇒ mpegurl 无后缀被兜成 `.ts`；改为传 mime。
+- 验收脚本：`tools/verify-params-ui.mjs` spawn 补 `--no-sandbox --disable-gpu`；新增 `tools/verify-tv-url-suffix.py`。
+
+**验证**：后端全量 `pytest` **563 passed**；`npm run build`（vue-tsc+vite）通过；`verify-cast-ui.cjs` 30/30；`verify-playlist-advance.cjs` 10/10；`verify-tv-url-suffix.py` ALL PASS；`build-rule-packs.py --check` 4 包同步；两道文档闸门 FAIL 0/可疑 0。
+
+**文档**：全仓行号按 diff equal 段重映射；locale 引用 `zh-CN.json:346→357`；模块行数表校准（commands 1257、ssdp 1343、mpv 662、media/server 706，并顺带修 parser 163→214、jsruntime 761→845）；Frontend-API §0 统计表 71/61/70/64、§2.1 补 3 条命令、§6.10 重写、§7 快速表 67→71 行；Frontend-Spec §4 组件 20→21、device.ts 179→228、locale 358→369；19 份校对戳 → 2026-10-30/v2.4.4；CHANGELOG 新增 v2.4.4 节。
+
+**未做**：真机只验 macOS 本机 + Linux 装端；Windows（Host win）离线待补装；publish 前需真机 TCL 实投（DEC-006 边界③）。
+
 ## 2026-10-28 发布轮：v2.4.0（已发布 + 已装 macOS/Linux ✅）
 
 v2.3.24 → **2.4.0**（minor，用户选）。合并两笔未发布改动：投 TCL「投不上」的后缀门修复 + 本地文件「整个文件夹」投屏 / 播放队列。`npm run version:set -- 2.4.0`；提交 `64a815c`；tag `v2.4.0`；Release 已 publish（draft=false，2026-10-28T11:21:19Z，body 已写）。收尾 CHANGELOG 验收证据提交 `a5eb00f`。

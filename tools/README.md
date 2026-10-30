@@ -2,11 +2,11 @@
 
 > 这份文档回答：`tools/` 下这些脚本各自验什么、怎么跑、需要什么环境，以及新增脚本要守哪些约定。
 >
-> 最后校对：2026-10-29，对应版本 v2.4.3（分类表按当前工作区重数；新增 §1.8 文档体检）
+> 最后校对：2026-10-30，对应版本 v2.4.4（分类表按当前工作区重数；新增 §1.8 文档体检）
 
 `tools/` 里放的是**可重复运行的验收 / 探针脚本**，不是一次性的 `/tmp` 手搓脚本。它们必须自适应当前机器——设备名、网卡、产物路径、参数条数都从现场现读，不写死。用法上的两条铁律：**修 bug 之前先跑它复现，修完之后再用它证明**。「证明」的对象是判据（退出码 / PASS-FAIL 行），不是截图，也不是「我点了一下看起来对」。
 
-当前分类表收录 **56 个顶层脚本 + 1 个目录型验收包**（`browser-channel-livecheck/`，4 个文件合写成 §1.7 的一行）。口径为当前工作区（含 v2.3.23 新加的 `check-doc-freshness.py`）：顶层 `.py/.sh/.cmd/.ps1/.mjs/.cjs` 共 56 个，全部进分类表；两份文档体检脚本单独立在 §1.8，用法与放行口径见 [docs/README.md](../docs/README.md) §4。历史 v2.3.19 已提交快照为 50 个分类脚本，`git ls-files` 在新增脚本提交前不会包含它们；目录和 `__pycache__/` 不计入脚本数。
+当前分类表收录 **57 个顶层脚本 + 1 个目录型验收包**（`browser-channel-livecheck/`，4 个文件合写成 §1.7 的一行）。口径为当前工作区（含 v2.3.23 新加的 `check-doc-freshness.py`、v2.4.4 新加的 `verify-tv-url-suffix.py`）：顶层 `.py/.sh/.cmd/.ps1/.mjs/.cjs` 共 57 个，全部进分类表；两份文档体检脚本单独立在 §1.8，用法与放行口径见 [docs/README.md](../docs/README.md) §4。历史 v2.3.19 已提交快照为 50 个分类脚本，`git ls-files` 在新增脚本提交前不会包含它们；目录和 `__pycache__/` 不计入脚本数。
 
 ---
 
@@ -37,6 +37,7 @@
 | `verify-ssdp-cast-gate.py` | 投屏目标准入（v2.3.13 的真机验收）：同时起两台替身——声明 AVTransport 的「电视」必须进列表，不提供该服务的「路由器」（MediaServer 描述 + XML 注释）必须被挡在门外并在日志留下「不列入投屏目标」理由 | `hancast-backend/.venv/bin/python tools/verify-ssdp-cast-gate.py --source --timeout 90`（就地跑**仓库源码**的发现链路，打 tag 前用；需要 1900 空闲）<br>`python3 tools/verify-ssdp-cast-gate.py`（读**已装产物**的 sidecar 日志，证明修复真进了打包版；v2.3.12 产物上这一步是 FAIL，即本次缺陷的复现）<br>`… --ports 49311 49312`<br>`… --serve tv\|router --port N`（只当替身，主流程内部调用） | 替身 LOCATION 同样必须写 `127.0.0.1` 以绕开 `_is_own_location` 自通告过滤；`--source` 要后端 venv（import `hancast_sidecar.ssdp`）；单测侧的等价契约在 `hancast-backend/tests/test_ssdp_cast_service_gate.py` |
 | `verify-dlna-stop-chain.py` | 真机验证停止链路：用 CI 打进 `.app` 的 sidecar 把测试视频推给 Windows renderer，再从 renderer 自己那边确认 `TransportState` 真从 `PLAYING` 变回 `STOPPED`（只看本机状态会骗人） | `python3 tools/verify-dlna-stop-chain.py` | 仅 macOS 打包产物（`APP = /Applications/HanCast.app/Contents/MacOS`）；**必须先整体退出 HanCast**（sidecar 空载要占 8080）；`.tmp-win/hc_media/test.mp4` 存在（docstring 给了用 .app 自带 ffmpeg 生成的命令）；局域网里要有一台在跑的 Windows renderer（默认认 `display_name` 含 `AMD-YES` 或 IP `192.168.1.68`） |
 | `verify-dlna-volume-chain.py` | 离线验证音量键链路（手机作控制端 → RenderingControl → MPV）：直接给 `DLNAProtocol.call()` 喂 SOAP 信封，用假 renderer / 截获的 IPC 命令做判据 | `hancast-backend/.venv/bin/python tools/verify-dlna-volume-chain.py` | **不需要真机**；必须用后端 venv 的解释器（系统 `python3` 没有 `requests`/`lxml`）；判据全部 PASS 才退出 0 |
+| `verify-tv-url-suffix.py` | 投屏直链**后缀门**的纯函数矩阵（v2.4.4）：电视只按 URL 末段后缀决定拉不拉流（DIDL `protocolInfo` 被无视，见 `docs/故障排查.md` §12 / 2026-10-28 TCL 85T8G Max 真机结论），所以交付前必须保证直链后缀落在播放器白名单里，否则改走本机代理。本脚本钉死白名单（mp4 / 代理 `.ts` / `.m3u8` / 带查询 / 大写 / `seg.png.ts`）、黑名单（抖音无后缀目录式 / 无后缀带查询 / 尾部斜杠 / `.php` / 无路径）、`player_safe_suffix` 各形态回填，以及「回填的后缀必须自己也过白名单」 | `python3 tools/verify-tv-url-suffix.py` | **不需要真机、不联网**；只用标准库，纯函数断言，全部 PASS 退出 0 |
 
 ### 1.3 屏幕投屏 — macOS
 
@@ -178,7 +179,7 @@ ssh administrator@192.168.1.68 "schtasks /delete /tn <TASK> /f"      # 收尾
 - `verify-linux-window-opacity.sh` — 默认打的是**装好的** `/usr/bin/HanCast`（`HC_BIN` 可指向解包产物），判据是合成器屏幕上的像素，跑 `npm run tauri dev` 等于没跑——透明窗口那套只在 bundle 里才成立。
 - `verify-ffmpeg-detect.ps1` — 打的是 `%LOCALAPPDATA%\HanCast\hancast-sidecar.exe`（Nuitka 冻结产物）。源码级那三层判定由 `tests/test_ffmpeg_deps.py` / `test_ffmpeg_download_e2e.py` 管，这个脚本存在的理由正是「产物里 `bundle.resources` 到底有没有把 ffmpeg 带进去、装好的 sidecar 在真机上认不认得到系统那份」——跑源码等于没跑。
 
-反过来，这些是**源码级**的，不需要产物：`verify-dlna-volume-chain.py`、`verify-dshow-parse-offline.py`、`verify-sidecar-utf8-protocol.py`、`verify-params-ui.mjs`、`verify-error-wrap-ui.mjs`、`verify-watch-page-sound.mjs`（真实 Chromium 但页面是源码 `www/index.html`——产物层由 `accept-macos-artifact.sh` 的逐文件 sha256 兜）、`ssdp_probe.py`、`dump-cgwindowlist.py`、`rust-check.sh`、`build-rule-packs.py`。另有一类**联网但仍跑工作树代码**的：`share_resolve_probe.py`、`probe-hls-antileech.py`、`probe-ts-skin-offset.py`、`probe-dyrs-*.sh`、`verify-proxy-live.py`、`verify-rule-pack-live.py`、`verify-github-mirror-live.py`——后两个读的是 `rule-packs/dist/` 那份 zip 与真实解析管线，但都不碰 `/Applications/HanCast.app`，所以不能当产物验收用。
+反过来，这些是**源码级**的，不需要产物：`verify-dlna-volume-chain.py`、`verify-tv-url-suffix.py`、`verify-dshow-parse-offline.py`、`verify-sidecar-utf8-protocol.py`、`verify-params-ui.mjs`、`verify-error-wrap-ui.mjs`、`verify-watch-page-sound.mjs`（真实 Chromium 但页面是源码 `www/index.html`——产物层由 `accept-macos-artifact.sh` 的逐文件 sha256 兜）、`ssdp_probe.py`、`dump-cgwindowlist.py`、`rust-check.sh`、`build-rule-packs.py`。另有一类**联网但仍跑工作树代码**的：`share_resolve_probe.py`、`probe-hls-antileech.py`、`probe-ts-skin-offset.py`、`probe-dyrs-*.sh`、`verify-proxy-live.py`、`verify-rule-pack-live.py`、`verify-github-mirror-live.py`——后两个读的是 `rule-packs/dist/` 那份 zip 与真实解析管线，但都不碰 `/Applications/HanCast.app`，所以不能当产物验收用。
 
 ### 2.3 必须在 .68 Windows 测试机上跑的脚本
 

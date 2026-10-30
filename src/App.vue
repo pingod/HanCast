@@ -11,6 +11,7 @@ import GuardConfirmModal from '@/components/GuardConfirmModal.vue'
 import UpdateModal from '@/components/UpdateModal.vue'
 import LogsPanel from '@/components/LogsPanel.vue'
 import AddDeviceModal from '@/components/AddDeviceModal.vue'
+import HiddenDevicesModal from '@/components/HiddenDevicesModal.vue'
 
 const settingsStore = useSettingsStore()
 const themeStore = useThemeStore()
@@ -49,6 +50,7 @@ onUnmounted(() => {
   <!-- 日志面板 / 手动添加设备：设置页和设备列表都要能打开，挂全局 -->
   <LogsPanel />
   <AddDeviceModal />
+  <HiddenDevicesModal />
 </template>
 
 <style>
