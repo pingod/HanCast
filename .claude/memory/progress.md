@@ -19,6 +19,8 @@
 - **数字**：`#[tauri::command]` 74→**79**（`lib.rs:1595-1675`）、Sidecar 67→**72**（`commands.py:143-250`）、`commands.ts` 导出 73→**78**、locale 375→**395**；`commands.py` 1492 行、`lib.rs` 1678、`commands.ts` 1635、tests 39 文件 9813 行。
 - **验证**：后端全量 **586 passed**（新增 `test_remote_control.py` 68、`test_subtitles.py` 76）；`npm run build` 通过；`tools/verify-cast-ui.cjs` **30/30**（队列桩补齐新 API + 修 `window.setInterval` 桩环境崩溃）；两道文档闸门绿（audit 3920 处可疑 0；freshness FAIL 0/WARN 0、数字 13 处一致）。
 - **文档**：CHANGELOG v2.4.6 节；故障排查新增 §5.7 + §11 三行 + §2 索引；架构总览行数表加 subtitles.py/remote/server.py；Frontend-API §0/§7（79 行）/§2 新增 5 条命令；Frontend-Spec §8.3 locale 395；全仓校对戳 2026-10-31/v2.4.6。
+- **发布**：提交 `46d2ee0`（43 files）→ tag `v2.4.6` → 推 main；CI run 41163007137 全绿。dmg `HanCast_2.4.6_aarch64.dmg` 85,600,687 字节、sha256 `a1fe8f71…55b8` 与 GitHub 一致、`hdiutil verify` VALID；`install-macos-artifact.sh 2.4.6` 装好；`accept-macos-artifact.sh 2.4.6` **89 PASS / 0 FAIL / 0 SKIP**。产物上实测：`start_remote_control` 起 `http://<ip>:8899/r/<token>/`，页面 200、`api/state` 200、`stop_remote_control` success；`subtitle_status` idle；`cast_failure_list` 正常。
+- **未 publish**：Release 仍 draft（用户 m06236「后面再统一测」；DEC-006 边界③需真机验收）。真机投屏/字幕真机内封、Linux/Windows 装端均未做（TCL 192.168.1.13、Windows 192.168.1.68 离线）。
 
 ## 2026-10-31 发布轮：v2.4.5（出站可观测 + 投屏失败台账 + probe_url 预检）
 

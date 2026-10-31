@@ -36,6 +36,12 @@
 - 新增 `tests/test_remote_control.py`（68 行，起真的 HTTP 服务打 token/状态/指令）与 `tests/test_subtitles.py`（76 行，命令拼装/容器选择/产物复用，有 ffmpeg 时跑真 remux）；后端全量 **586 passed**。
 - `tools/verify-cast-ui.cjs` **30/30**：队列桩补齐新 store API（`setPlayingId`/`setStopAfterCurrent`/`setPlayMode`/`appendFolder`），`CastController` 的秒级 tick 用 `setInterval` 且随卸载清理（原来写成 `window.setInterval`，桩环境没有 `window`，会抛 `window.setInterval is not a function` 并泄漏计时器）。
 
+### 装端验收（2026-10-31，macOS arm64）
+- dmg `HanCast_2.4.6_aarch64.dmg` 85,600,687 字节，sha256 `a1fe8f71cb4292fff0bfdbefe359d46279c0a4896090ccc7a86adb710caa55b8` 与 GitHub 声明一致，`hdiutil verify` VALID。
+- `tools/install-macos-artifact.sh 2.4.6` 装好（adhoc，`Identifier=com.han.hancast`，原 2.4.5 移到 `/tmp/HanCast_pre_245_112758.app`）；`tools/accept-macos-artifact.sh 2.4.6` → **89 PASS / 0 FAIL / 0 SKIP**。
+- 新能力在装好的产物上实测：`remote_status` 返回 `{running:false}`；`start_remote_control` 起页并给 `http://<ip>:8899/r/<token>/`，页面 200、`api/state` 200、`stop_remote_control` success；`subtitle_status` 返回 `idle`；`cast_failure_list` 落在临时 HOME 的 `cast_failures.json`。
+- **未做**：真机投屏与外挂字幕真机内封（TCL `192.168.1.13`、Windows `192.168.1.68` 均离线）、Linux/Windows 装端（主机离线）；按用户「后面再统一测」暂留 draft。
+
 ### 发布
 - 版本 `npm run version:set -- 2.4.6`；发布提交见 tag `v2.4.6` 及其后一次 `docs:` 提交（装端验收记录）。
 

@@ -244,7 +244,7 @@ Rust 侧另发 2 条（`update-available`、`autostart-changed`），**前端合
 
 ### Tauri 命令列表（节选，完整清单以 `src-tauri/src/lib.rs` 的 `generate_handler!`（lib.rs:1595-1675，**79 条**）为准）
 
-Sidecar 侧的注册表是 **72 条**（`commands.py:143-250`；v2.4.6 新增 `start_remote_control`/`remote_control_status`/`subtitle_apply`/`subtitle_status`，v2.4.5 新增 `cast_failure_list`/`cast_failure_clear`/`probe_url`，v2.4.4 新增 `remove_manual_device`，v2.4.1 起有文件夹投屏 `list_folder_media`）——差的那几条由 Rust 自己实现（窗口、剪贴板、开机自启、
+Sidecar 侧的注册表是 **72 条**（`commands.py:143-250`；v2.4.6 新增 `start_remote_control`/`stop_remote_control`/`remote_status`/`subtitle_apply`/`subtitle_status`，v2.4.5 新增 `cast_failure_list`/`cast_failure_clear`/`probe_url`，v2.4.4 新增 `remove_manual_device`，v2.4.1 起有文件夹投屏 `list_folder_media`）——差的那几条由 Rust 自己实现（窗口、剪贴板、开机自启、
 Store 版判定、日志导出等），不下发 Python；`exit` 由 Sidecar 主循环拦下（`main.py:126-128`）。
 Rust 命令名与 Sidecar `cmd` 名不一定同名（例如 Rust 的 `plugin_list` 下发的是 Sidecar 的规则包命令），
 逐条对应关系见 docs/HanCast-Frontend-API.md。
