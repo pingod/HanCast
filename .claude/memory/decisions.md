@@ -72,6 +72,13 @@
   - 校对戳跟着版本走：bump 当轮把全仓 md 的戳一并盖到新号（`tools/check-doc-freshness.py` 的 `--max-lag 0` 就是这么要求的）。
 - **验证**: 首轮按此执行的是 v2.3.24（入站 SOAP 信封容错 + `test_ghmirror` 桩修复），流程见 docs/构建与发布.md §5。
 
+### DEC-006 执行补充（2026-10-30，v2.4.4）
+- 用户明确：**v2.4.4 保持 draft，等真机投屏一次成功后再 publish**（DEC-006 边界③照旧执行）。
+- 用户明确：**Linux(192.168.1.68) / Windows(win) 上线后自动装 2.4.4**。已建周期任务（this-session 提醒，每 2 小时）：
+  探测可达 → 下载对应 v2.4.4 资产（draft 资产必须走 API asset id + Range 分块，`gh` 需要
+  `HTTPS_PROXY=http://127.0.0.1:9565`）→ 安装并做装端验收；同时若扫到渲染端则做一次真实投屏，
+  成功则补 CHANGELOG 后 publish。无变化时只回一句「无变化」，不打扰。
+
 ## 待决策事项
 
 ### PENDING-001: Python HTTP 框架

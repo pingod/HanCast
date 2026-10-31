@@ -49,9 +49,10 @@
 - `tools/install-macos-artifact.sh 2.4.4` 装好（`CFBundleShortVersionString=2.4.4`，`Signature=adhoc`、`Identifier=com.han.hancast`，非 linker-signed），`tools/accept-macos-artifact.sh 2.4.4` → **88 PASS / 0 FAIL / 1 SKIP**（SKIP = FFmpeg 下载源需代理，本机直连超时，属环境限制）。
 - 产物内 4 份本轮改动的 sidecar 源码 sha256 与仓库逐字节一致（`commands.py`/`media/server.py`/`ssdp.py`/`renderer/mpv.py`）；启动实装 App 后 `description.xml` 200，另起临时 HOME 的 sidecar 探针实测 `get_hidden_devices` / `remove_manual_device` / `unhide_device` 三条新命令均 `success: true`。
 
-### 未闭合
-- **Linux（192.168.1.68）与 Windows（`Host win`）当前都离线**（ssh 22/10086 与 ping 全超时），本轮无法装端；上线后补装。
-- **没有真机投屏一次**：局域网此刻扫不到任何渲染端（TCL/Linux 均不在线），DEC-006 边界③要求的「真投一次」缺失 ⇒ **Release 保持 draft，未 publish**。`player_safe_suffix` 的修复由纯函数矩阵证明，电视端真实播放仍待实投确认。
+### 发布决定与未闭合
+- **用户决定（2026-10-31）**：不等 Linux / Windows 主机，直接发布 v2.4.4（`gh release edit v2.4.4 --draft=false`）。原定「真机投一次再 publish」的 DEC-006 边界③由用户本人在此版明确豁免——局域网当时扫不到任何渲染端（TCL/Linux 都离线），无法实投。
+- **Linux（192.168.1.68）与 Windows（`Host win`）仍未装端**（ssh 22/10086 与 ping 全超时，多轮复查一致）；用户已表示不再等待，后续两台机器上线时按需补装即可。
+- `player_safe_suffix` 的修复由纯函数矩阵 + 装端侧代理链路证明，电视端真实播放仍建议用户下次投 TCL 时留意确认。
 
 ---
 
