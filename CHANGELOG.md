@@ -32,6 +32,12 @@
 ### 验证
 - 后端全量 `pytest` **577 passed**（新增 `test_cast_failures.py` 214 行，覆盖台账读写 / 上限 / 保留期 + `probe_url`）；`npm run build` 通过；两道文档闸门绿（`audit-doc-refs.py` 可疑 0、`check-doc-freshness.py` FAIL 0/WARN 0）。
 
+### 装端验收（2026-10-31，macOS arm64）
+- dmg `HanCast_2.4.5_aarch64.dmg` 85,669,428 字节，sha256 `fc123f3a644b8bb7bb5bd56c3ba37ef12793351dc9335e71bb32e4c641007030` 与 GitHub 声明一致，`hdiutil verify` VALID。
+- `tools/install-macos-artifact.sh 2.4.5` 装好（adhoc，`Identifier=com.han.hancast`）；`tools/accept-macos-artifact.sh 2.4.5` → **88 PASS / 1 FAIL / 0 SKIP**。唯一 FAIL 是 `SSDP 心跳通道: 窗口内一次 multicast 都没有（1 通道 broadcast）`——采样窗口恰好落在本机网卡组播暂时不可用后的广播兜底期（`hancast.log` 10:36:23 `[Errno 65] No route to host（该接口组播不可用，本次运行不再重试）`），20 秒后日志即恢复 `SSDP multicast memberships: 4`、`通道 multicast`；v2.4.5 未触碰 SSDP，属环境/采样时序，非回归。
+- 新命令在装好的产物上实测：`probe_url` 返回 `ok=false` + 连接错误（符合预期）、`cast_failure_list` / `cast_failure_clear` 均 success 且落在临时 HOME 的 `cast_failures.json`；产物内 `media/cast_failures.py` 的 sha256 与仓库一致。
+- **未做**：真机投屏（TCL `192.168.1.13`、Windows `192.168.1.68` 均离线）、Linux/Windows 装端（主机离线）。
+
 ### 发布
 - 见 tag `v2.4.5` 指向的提交。
 

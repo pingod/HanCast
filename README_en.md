@@ -304,7 +304,7 @@ HanCast/
 ├── hancast-backend/            # Python Backend (Sidecar)
 │   └── hancast_sidecar/
 │       ├── main.py             # Sidecar entry (stdin/stdout JSON loop)
-│       ├── commands.py         # Command router (registry of 62 commands lives here)
+│       ├── commands.py         # Command router (registry of 67 commands lives here)
 │       ├── params.py           # 32 background parameters
 │       ├── ssdp.py             # SSDP discovery (broadcast fallback when multicast fails)
 │       ├── protocol/
@@ -342,7 +342,7 @@ paths and states the maintenance rules. Frequently used:
 |----------|-------------|
 | [docs/架构总览.md](docs/架构总览.md) | Process layout, ports/threads/on-disk state, invariants |
 | [docs/开发指南.md](docs/开发指南.md) | Setup, run modes, test discipline, debugging, release rules |
-| [docs/HanCast-Frontend-API.md](docs/HanCast-Frontend-API.md) | Full contract of 67 invoke commands and 8 events |
+| [docs/HanCast-Frontend-API.md](docs/HanCast-Frontend-API.md) | Full contract of 74 invoke commands and 8 events |
 | [docs/HanCast-Frontend-Spec.md](docs/HanCast-Frontend-Spec.md) | Components / stores / views, styling, i18n |
 | [docs/故障排查.md](docs/故障排查.md) | Symptom-indexed: devices not found, cast won't start, won't stop, no audio… |
 | [docs/屏幕投屏.md](docs/屏幕投屏.md) · [docs/投屏确认.md](docs/投屏确认.md) | Behaviour contracts of the two subsystems |
