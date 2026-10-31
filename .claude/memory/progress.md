@@ -20,6 +20,7 @@
 - **文档**：CHANGELOG v2.4.5 节；故障排查 §5.6（出站可观测/台账/判据）+ §11 两行 + §2 索引；架构总览行数表加 `media/cast_failures.py`；Frontend-API §0/§7（74 行）/§2 新增命令；Frontend-Spec §8.3 locale 375；全仓 `文件:行号` 按 diff 重映射（脚本 `/tmp/remap_v245.py` + `/tmp/remap_v245b.py`），全仓校对戳 2026-10-31/v2.4.5。
 - **发布**：提交 `c783437`（39 files, +1212/−363）→ tag `v2.4.5` → 推 main；CI run 41159185441 全绿（macos 10m54s / linux 17m36s / windows 13m48s）。dmg sha256 `fc123f3a…07030` 已校验、`hdiutil verify` VALID；`install-macos-artifact.sh 2.4.5` 装好；`accept-macos-artifact.sh 2.4.5` **88 PASS / 1 FAIL / 0 SKIP**（唯一 FAIL = SSDP 心跳采样窗口落在网卡组播暂不可用的广播兜底期，20s 后自行恢复 multicast，非回归）。新命令在产物上实测 probe_url / cast_failure_list / cast_failure_clear 均正常。docs 跟进提交 `e16c51b`（装端记录 + README_en 计数）。
 - **未 publish**：Release 仍 draft（DEC-006 边界③：需真机投一次；TCL 192.168.1.13、Windows 192.168.1.68 均离线）。Linux/Windows 装端亦未做（主机离线）。
+- **用户决定（m06231，2026-10-31）**：选「等真机投一次再公开」——保留 draft，等 TCL/Windows 上线真机投一次确认后再 `gh release edit v2.4.5 --draft=false`。
 
 ## 2026-10-30 发布轮：v2.4.4（补齐两条单向门 + 测试隔离 + 卫生类 + 后缀门真 bug）
 
