@@ -8,6 +8,18 @@
 
 验证：媒体/主题 73 项、播控原 20 项及封面新增 1 项、真实 App 生命周期 2 项；类型检查及 Vite 构建通过。浏览器验 346×472 / 434×634 / 800×900、中英设置、日志/屏幕/控制器弹窗、解析/暂停/停止/清空（项目内置 mock，不是真机投屏）。未跑全量测试、未打三平台包、未提交或发布。界面截图在 `docs/images/ui-native-{light,dark}.png`。
 
+## 2026-10-31 发布轮：v2.4.6（队列持久化 + 播完即停/睡眠定时 + 手机遥控器页 + 外挂字幕内封）
+
+用户说「你先把所有开发任务做完，后面再统一测吧」——把优化清单剩下的三批（原 v2.4.6/2.4.7/2.4.8）一次做完，一个补丁版发布（2.4→2.5 属 minor，DEC-006 要求先问，故以补丁号走）。
+
+- **投屏队列**：`src/stores/playlist.ts` 重写（390 行），`localStorage['hancast.playlist.queue']`；新增 `appendItems`/`appendFolder`/`setPlayingId`/`stopAfterCurrent`/`setStopAfterCurrent`；`MediaInput.vue` 队列面板加「追加文件夹」。
+- **播完即停 / 睡眠定时**：`cast.ts` 收到 `stopped` 且到结尾时若 `stopAfterCurrent` 就停队列；`CastController.vue` 开关 + 睡眠下拉（15/30/60/90/取消），deadline 持久化，秒级 tick 用 `setInterval` 并随卸载清理。
+- **手机遥控器页**：新增 `remote/server.py`（343 行），每会话一次性 token `/r/<token>/`，页面 + `api/state` + `api/cmd`，token 不符 404；命令 `start_remote_control`/`stop_remote_control`/`remote_status`。
+- **外挂字幕内封**：新增 `media/subtitles.py`（173 行），`-c copy` 不重编码、mp4→`mov_text`、其它→`srt`，产物按内容哈希缓存 `subtitle_cache/`；命令 `subtitle_apply`/`subtitle_status`；`CastController.vue`「💬 字幕」按钮，完成后重投同设备并从原进度继续。
+- **数字**：`#[tauri::command]` 74→**79**（`lib.rs:1595-1675`）、Sidecar 67→**72**（`commands.py:143-250`）、`commands.ts` 导出 73→**78**、locale 375→**395**；`commands.py` 1492 行、`lib.rs` 1678、`commands.ts` 1635、tests 39 文件 9813 行。
+- **验证**：后端全量 **586 passed**（新增 `test_remote_control.py` 68、`test_subtitles.py` 76）；`npm run build` 通过；`tools/verify-cast-ui.cjs` **30/30**（队列桩补齐新 API + 修 `window.setInterval` 桩环境崩溃）；两道文档闸门绿（audit 3920 处可疑 0；freshness FAIL 0/WARN 0、数字 13 处一致）。
+- **文档**：CHANGELOG v2.4.6 节；故障排查新增 §5.7 + §11 三行 + §2 索引；架构总览行数表加 subtitles.py/remote/server.py；Frontend-API §0/§7（79 行）/§2 新增 5 条命令；Frontend-Spec §8.3 locale 395；全仓校对戳 2026-10-31/v2.4.6。
+
 ## 2026-10-31 发布轮：v2.4.5（出站可观测 + 投屏失败台账 + probe_url 预检）
 
 清单第二批（第一批 v2.4.4）。动因 COMP-005：出站整条链路只有 DEBUG，电视不拉流时面板默认 INFO 无痕。

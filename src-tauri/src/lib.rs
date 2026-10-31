@@ -571,6 +571,62 @@ fn write_clipboard(app: tauri::AppHandle, text: String) -> Result<(), String> {
 
 // ── Cast control ──
 
+/// 把外挂字幕封进当前视频容器，并让同一台电视重投（带字幕）
+#[tauri::command]
+async fn subtitle_apply(
+    sidecar: State<'_, SidecarManager>,
+    device_id: String,
+    subtitle_path: String,
+) -> Result<serde_json::Value, String> {
+    sidecar
+        .send_command(
+            "subtitle_apply",
+            serde_json::json!({ "device_id": device_id, "subtitle_path": subtitle_path }),
+        )
+        .await
+}
+
+/// 查询字幕内封任务进度
+#[tauri::command]
+async fn subtitle_status(
+    sidecar: State<'_, SidecarManager>,
+    device_id: String,
+) -> Result<serde_json::Value, String> {
+    sidecar
+        .send_command("subtitle_status", serde_json::json!({ "device_id": device_id }))
+        .await
+}
+
+/// 启动手机遥控器页（局域网浏览器打开即用）
+#[tauri::command]
+async fn start_remote_control(
+    sidecar: State<'_, SidecarManager>,
+) -> Result<serde_json::Value, String> {
+    sidecar
+        .send_command("start_remote_control", serde_json::json!({}))
+        .await
+}
+
+/// 关闭手机遥控器页
+#[tauri::command]
+async fn stop_remote_control(
+    sidecar: State<'_, SidecarManager>,
+) -> Result<serde_json::Value, String> {
+    sidecar
+        .send_command("stop_remote_control", serde_json::json!({}))
+        .await
+}
+
+/// 查询手机遥控器页是否在跑、地址是什么
+#[tauri::command]
+async fn remote_status(
+    sidecar: State<'_, SidecarManager>,
+) -> Result<serde_json::Value, String> {
+    sidecar
+        .send_command("remote_status", serde_json::json!({}))
+        .await
+}
+
 #[tauri::command]
 async fn start_cast(
     sidecar: State<'_, SidecarManager>,
@@ -1572,6 +1628,11 @@ pub fn run() {
             read_clipboard,
             write_clipboard,
             start_cast,
+            subtitle_apply,
+            subtitle_status,
+            start_remote_control,
+            stop_remote_control,
+            remote_status,
             stop_cast,
             pause_cast,
             resume_cast,

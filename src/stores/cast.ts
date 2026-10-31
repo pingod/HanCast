@@ -49,6 +49,94 @@ export const useCastStore = defineStore('cast', () => {
    * 下一次新的投屏（startCast）时清掉。
    */
   const userStoppedDevices = new Set<string>()
+
+  // ── 睡眠定时 ──
+  // 到点自动停掉所有投屏（睡前看剧）。deadline 写 localStorage，关掉程序再开也还算数。
+  const SLEEP_KEY = 'hancast.cast.sleepDeadline'
+  const sleepDeadline = ref<number>(0)
+  const sleepMinutes = ref<number>(0)
+  let sleepTimer: ReturnType<typeof setTimeout> | null = null
+
+  function clearSleepTimer() {
+    if (sleepTimer) {
+      clearTimeout(sleepTimer)
+      sleepTimer = null
+    }
+  }
+
+  function forgetSleepState() {
+    clearSleepTimer()
+    sleepDeadline.value = 0
+    sleepMinutes.value = 0
+    try {
+      localStorage.removeItem(SLEEP_KEY)
+    } catch {
+      // storage 不可用就算了，定时器本身还在内存里跑
+    }
+  }
+
+  async function fireSleepTimer() {
+    forgetSleepState()
+    // 到点：把还在播的设备全停掉（走 stopCast，失败照常发系统通知）
+    if (activeDeviceIds.value.length) {
+      try {
+        await stopCast()
+      } catch (err) {
+        console.error('Sleep timer stop failed:', err)
+      }
+    }
+  }
+
+  function armSleepTimer(deadline: number, minutes: number) {
+    sleepDeadline.value = deadline
+    sleepMinutes.value = minutes
+    clearSleepTimer()
+    try {
+      localStorage.setItem(SLEEP_KEY, JSON.stringify({ deadline }))
+    } catch {
+      // 忽略：内存里的 sleepTimer 仍然有效
+    }
+    const ms = deadline - Date.now()
+    if (ms <= 0) {
+      void fireSleepTimer()
+      return
+    }
+    sleepTimer = setTimeout(() => {
+      void fireSleepTimer()
+    }, ms)
+  }
+
+  /** 设置睡眠定时（分钟；<=0 表示关闭） */
+  function setSleepTimer(minutes: number) {
+    if (!minutes || minutes <= 0) {
+      forgetSleepState()
+      return
+    }
+    armSleepTimer(Date.now() + minutes * 60000, minutes)
+  }
+
+  /** 睡眠定时的剩余秒数（UI 倒计时用；0 表示没开） */
+  function sleepRemainingSeconds(): number {
+    if (!sleepDeadline.value) return 0
+    return Math.max(0, Math.round((sleepDeadline.value - Date.now()) / 1000))
+  }
+
+  // 恢复上次没走完的睡眠定时（例如程序被关掉又打开）
+  try {
+    const rawSleep = localStorage.getItem(SLEEP_KEY)
+    if (rawSleep) {
+      const obj = JSON.parse(rawSleep)
+      if (obj && typeof obj.deadline === 'number' && obj.deadline > Date.now()) {
+        const mins = Math.max(1, Math.round((obj.deadline - Date.now()) / 60000))
+        armSleepTimer(obj.deadline, mins)
+      } else {
+        localStorage.removeItem(SLEEP_KEY)
+      }
+    }
+  } catch {
+    // 读不出来就当没设过
+  }
+
   let pollTimer: ReturnType<typeof setInterval> | null = null
   let pollInFlight = false
   let pollEpoch = 0
@@ -475,6 +563,8 @@ export const useCastStore = defineStore('cast', () => {
     loading.value = true
     stopWarning.value = null
     dismissError()
+    // 手动停止说明这一轮结束了，睡眠定时一并作废（定时器自己触发的也走这里）
+    if (sleepDeadline.value) forgetSleepState()
     // Include pending first casts, which do not have a session yet.
     const ids = deviceId ? [deviceId] : [...new Set([
       ...Object.keys(sessions.value),
@@ -490,7 +580,7 @@ export const useCastStore = defineStore('cast', () => {
       queueAdvancing.delete(id)
     })
     // 手动停止队列播放也要把队列的「当前项」清掉，免得下次事件误判仍在队列中
-    usePlaylistStore().playingId = null
+    usePlaylistStore().setPlayingId(null)
     const names = ids.map((id) => sessions.value[id]?.device_name ?? id)
     let failed: string[] = []
     let reasons: string[] = []
@@ -727,7 +817,7 @@ export const useCastStore = defineStore('cast', () => {
     if (!isCastOpCurrent(deviceId, castOp)) return false
     const session = sessions.value[deviceId]
     if (session && session.status === 'error') return false
-    playlist.playingId = item.id
+    playlist.setPlayingId(item.id)
     if (isQueueStart) {
       useHistoryStore().record({
         deviceId,
@@ -763,6 +853,8 @@ export const useCastStore = defineStore('cast', () => {
     // 换集进行中（上一次 advance 起的 castQueueItem 还没落地）时设备会报中途 STOPPED，
     // 此时不能再触发一次换集，否则两集交叉把队列打乱。
     if (queueAdvancing.has(deviceId)) return true
+    // 「播完即停」：这一集看完就停，不自动续下一集
+    if (playlist.stopAfterCurrent) return false
 
     const next = playlist.nextItem()
     if (!next) {
@@ -771,10 +863,10 @@ export const useCastStore = defineStore('cast', () => {
     }
     // 先占位，防设备连发多条 STOPPED 造成重复起播
     queueAdvancing.add(deviceId)
-    playlist.playingId = next.id
+    playlist.setPlayingId(next.id)
     void castQueueItem(deviceId, next)
       .then((ok) => {
-        if (!ok) playlist.playingId = null
+        if (!ok) playlist.setPlayingId(null)
       })
       .finally(() => {
         // 留一个短窗口吞掉换集瞬间的 STOPPED，避免和 setAVTransportURI 的 Stop+Set 打架
@@ -974,6 +1066,12 @@ export const useCastStore = defineStore('cast', () => {
     setVolume,
     setMute,
     dismissError,
+
+    // Sleep timer
+    sleepDeadline,
+    sleepMinutes,
+    setSleepTimer,
+    sleepRemainingSeconds,
 
     // Autostart prompt actions
     closeAutostartPrompt: () => { showAutostartPrompt.value = false },

@@ -13,6 +13,8 @@ export type PlayMode = 'sequential' | 'shuffle' | 'repeat-one'
 
 /** 顺序记忆落盘：{ [folder]: 有序的 uri 列表 } */
 const ORDER_KEY = 'hancast.playlist.order'
+/** 队列本体落盘：关掉程序再打开还在，不用重新挑一遍文件夹 */
+const QUEUE_KEY = 'hancast.playlist.queue'
 
 function loadOrderMap(): Record<string, string[]> {
   try {
@@ -33,6 +35,50 @@ function saveOrderMap(map: Record<string, string[]>) {
   }
 }
 
+/** 落盘的队列形状。只存本地文件项——分享链的直链带签名、几小时就过期，存下来只会给用户一堆点不动的条目 */
+interface PersistedQueue {
+  items: QueueItem[]
+  selected: string[]
+  folder: string
+  playMode: PlayMode
+  stopAfterCurrent: boolean
+}
+
+function loadQueue(): PersistedQueue | null {
+  try {
+    const raw = localStorage.getItem(QUEUE_KEY)
+    if (!raw) return null
+    const obj = JSON.parse(raw)
+    if (!obj || !Array.isArray(obj.items)) return null
+    const items = obj.items.filter(
+      (it: any): it is QueueItem =>
+        !!it && typeof it.id === 'string' && !!it.media &&
+        typeof it.media.uri === 'string' && it.media.media_type === 'file',
+    )
+    if (items.length === 0) return null
+    return {
+      items,
+      selected: Array.isArray(obj.selected) ? obj.selected.filter((s: any) => typeof s === 'string') : [],
+      folder: typeof obj.folder === 'string' ? obj.folder : '',
+      playMode: (['sequential', 'shuffle', 'repeat-one'].includes(obj.playMode)
+        ? obj.playMode : 'sequential') as PlayMode,
+      stopAfterCurrent: obj.stopAfterCurrent === true,
+    }
+  } catch {
+    return null
+  }
+}
+
+function saveQueue(q: PersistedQueue) {
+  try {
+    // 只持久化本地文件项：url 直链会过期，存了也会变成死条目
+    const items = q.items.filter((it) => it.media.media_type === 'file')
+    localStorage.setItem(QUEUE_KEY, JSON.stringify({ ...q, items }))
+  } catch {
+    // 写不进去就只在内存里活着，队列是便利功能
+  }
+}
+
 /** 稳定的项 id：同一文件在同一队列里恒等，便于拖拽/删除定位 */
 function makeId(uri: string, index: number): string {
   let h = 0
@@ -43,18 +89,30 @@ function makeId(uri: string, index: number): string {
 }
 
 export const usePlaylistStore = defineStore('playlist', () => {
+  const restored = loadQueue()
+
   /** 当前队列（已按用户排序） */
-  const items = ref<QueueItem[]>([])
+  const items = ref<QueueItem[]>(restored?.items ?? [])
   /** 勾选参与播放的项 id 集合 */
-  const selected = ref<Set<string>>(new Set())
+  const selected = ref<Set<string>>(
+    restored
+      ? new Set(
+          restored.selected.length
+            ? restored.selected.filter((id) => restored.items.some((it) => it.id === id))
+            : restored.items.map((it) => it.id),
+        )
+      : new Set(),
+  )
   /** 正在投的是哪一项（用于控制器显示「第 n / N」与高亮） */
   const playingId = ref<string | null>(null)
   /** 队列来源文件夹，用于顺序记忆 */
-  const folder = ref<string>('')
+  const folder = ref<string>(restored?.folder ?? '')
   const loading = ref(false)
   const error = ref<string | null>(null)
 
-  const playMode = ref<PlayMode>('sequential')
+  const playMode = ref<PlayMode>(restored?.playMode ?? 'sequential')
+  /** 播完当前这一项就停，不自动续下一集（睡前看完一集就够用） */
+  const stopAfterCurrent = ref<boolean>(restored?.stopAfterCurrent ?? false)
 
   /** 参与播放的项（按队列顺序、已勾选） */
   const playableItems = computed(() =>
@@ -67,12 +125,24 @@ export const usePlaylistStore = defineStore('playlist', () => {
   )
   const hasQueue = computed(() => items.value.length > 0)
 
+  /** 把当前队列整体写盘（每次变更后调用） */
+  function persist() {
+    saveQueue({
+      items: items.value,
+      selected: Array.from(selected.value),
+      folder: folder.value,
+      playMode: playMode.value,
+      stopAfterCurrent: stopAfterCurrent.value,
+    })
+  }
+
   function reset() {
     items.value = []
     selected.value = new Set()
     playingId.value = null
     folder.value = ''
     error.value = null
+    persist()
   }
 
   function isSelected(id: string) {
@@ -84,14 +154,26 @@ export const usePlaylistStore = defineStore('playlist', () => {
     if (next.has(id)) next.delete(id)
     else next.add(id)
     selected.value = next
+    persist()
   }
 
   function selectAll() {
     selected.value = new Set(items.value.map((it) => it.id))
+    persist()
   }
 
   function selectNone() {
     selected.value = new Set()
+    persist()
+  }
+
+  function setPlayingId(id: string | null) {
+    playingId.value = id
+  }
+
+  function setStopAfterCurrent(v: boolean) {
+    stopAfterCurrent.value = v
+    persist()
   }
 
   /** 把顺序记忆写进 localStorage（当前文件夹） */
@@ -122,7 +204,7 @@ export const usePlaylistStore = defineStore('playlist', () => {
     return ordered
   }
 
-  /** 选文件夹：拉清单 → 用记忆顺序重排 → 全选 */
+  /** 选文件夹：拉清单 → 用记忆顺序重排 → 全选（替换现有队列） */
   async function loadFolder(folderPath: string) {
     loading.value = true
     error.value = null
@@ -136,6 +218,7 @@ export const usePlaylistStore = defineStore('playlist', () => {
       if (items.value.length === 0) {
         error.value = 'empty'
       }
+      persist()
     } catch (err) {
       error.value = String(err)
       items.value = []
@@ -145,7 +228,51 @@ export const usePlaylistStore = defineStore('playlist', () => {
     }
   }
 
-  /** 拖拽排序：把 from 移到 to 位置（Vue Draggable 的 oldIndex/newIndex） */
+  /** 把一批媒体追加到现有队列尾（不打断当前队列/正在播放的那一项） */
+  function appendItems(list: MediaInfo[]) {
+    if (!list.length) return 0
+    const existing = new Set(items.value.map((it) => it.media.uri))
+    const base = items.value.length
+    const added: QueueItem[] = []
+    let n = 0
+    for (const m of list) {
+      if (!m || !m.uri || existing.has(m.uri)) continue
+      existing.add(m.uri)
+      added.push({ id: makeId(m.uri, base + n), media: m })
+      n++
+    }
+    if (added.length) {
+      items.value = [...items.value, ...added]
+      const sel = new Set(selected.value)
+      for (const it of added) sel.add(it.id)
+      selected.value = sel
+      persist()
+    }
+    return added.length
+  }
+
+  /** 追加一个文件夹（不动现有队列：投完当前文件夹可以直接接着放另一个文件夹） */
+  async function appendFolder(folderPath: string) {
+    loading.value = true
+    error.value = null
+    try {
+      const listing = await listFolderMedia(folderPath)
+      const files = listing.files ?? []
+      if (!folder.value) {
+        folder.value = listing.folder || folderPath
+      }
+      const added = appendItems(files)
+      if (items.value.length === 0) error.value = 'empty'
+      return added
+    } catch (err) {
+      error.value = String(err)
+      return 0
+    } finally {
+      loading.value = false
+    }
+  }
+
+  /** 拖拽排序：把 from 移到 to 位置 */
   function moveItem(fromIndex: number, toIndex: number) {
     if (fromIndex === toIndex) return
     if (fromIndex < 0 || fromIndex >= items.value.length) return
@@ -155,6 +282,7 @@ export const usePlaylistStore = defineStore('playlist', () => {
     arr.splice(toIndex, 0, moved)
     items.value = arr
     rememberOrder()
+    persist()
   }
 
   /** 上移/下移（键盘可达的排序手段） */
@@ -174,10 +302,12 @@ export const usePlaylistStore = defineStore('playlist', () => {
     selected.value = next
     if (playingId.value === id) playingId.value = null
     rememberOrder()
+    persist()
   }
 
   function setPlayMode(mode: PlayMode) {
     playMode.value = mode
+    persist()
   }
 
   /**
@@ -232,6 +362,7 @@ export const usePlaylistStore = defineStore('playlist', () => {
     loading,
     error,
     playMode,
+    stopAfterCurrent,
     playableItems,
     total,
     playingIndex,
@@ -241,7 +372,11 @@ export const usePlaylistStore = defineStore('playlist', () => {
     toggleSelected,
     selectAll,
     selectNone,
+    setPlayingId,
+    setStopAfterCurrent,
     loadFolder,
+    appendItems,
+    appendFolder,
     moveItem,
     moveUp,
     moveDown,

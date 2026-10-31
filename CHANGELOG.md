@@ -1,6 +1,6 @@
 # Changelog
 
-> 最后校对：2026-10-31，对应版本 v2.4.5（`package.json:4`）
+> 最后校对：2026-10-31，对应版本 v2.4.6（`package.json:4`）。
 
 本文件记录 HanCast 的版本历史。口径说明：
 
@@ -8,6 +8,36 @@
 - 版本号唯一来源是 **`package.json` 的 `version`**（`scripts/sync-version.cjs:4,17`），`npm run version:set <x.y.z>` 把它刷进 7 处契约点：`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`（本地包那条，v2.3.8 起收进来——此前每版都靠人肉补）、`hancast-backend/pyproject.toml`、`hancast_sidecar/utils/config.py:39`、`src/api/commands.ts`（mock）、`src/stores/settings.ts`。`scripts/check-version.cjs` 自称以 `tauri.conf.json` 为源（口径相反），但全仓无人调用，是未接线的孤儿脚本——判定以 `sync-version.cjs` 为准。详见 [docs/构建与发布.md](docs/构建与发布.md) §1。
 - 下表「提交」列即 `git tag <版本>` 指向的提交；细节以 `git show <提交>` 为准，本文只留用户可感知的变化。
 - 新加版本时**同一次提交**里补这里，并按 [docs/README.md](docs/README.md) §4 的约定同步对应文档。
+
+---
+
+## v2.4.6 — 2026-10-31
+
+用户说「你先把所有开发任务做完，后面再统一测吧」——于是把优化清单剩下的三批（原计划 v2.4.6/2.4.7/2.4.8）一次做完，以一个补丁版发布。四块新能力：投屏队列、播完即停/睡眠定时、手机遥控器页、外挂字幕内封。
+
+### 投屏队列（追加 + 跨重启持久化）
+- `src/stores/playlist.ts` 重写（390 行）：新增 `appendItems` / `appendFolder`（追加到现有队列而不是替换）、`setPlayingId`、`stopAfterCurrent` / `setStopAfterCurrent`；每次变更写 `localStorage['hancast.playlist.queue']`，重启后恢复队列与「播完即停」开关。
+- `MediaInput.vue`（1926 行）队列面板加「追加文件夹」入口（原来只能整批替换）。
+
+### 播完即停 / 睡眠定时
+- `src/stores/cast.ts`：`cast_state_changed` 收到 `stopped` 且进度到结尾时，若 `stopAfterCurrent` 为真则停掉队列（不自动下一集）。
+- `CastController.vue`（1103 行）加「播完即停」开关与睡眠定时下拉（15/30/60/90 分钟、取消）；定时到点调 `stopCast`，持久化 deadline，重启后仍生效。
+
+### 手机遥控器页
+- 新增 `hancast-backend/hancast_sidecar/remote/server.py`（343 行）：局域网 HTTP 服务，路径带**每会话一次性 token** `/r/<token>/`（`remote/server.py:258` 打印地址），提供页面、`api/state`、`api/cmd`；token 不匹配一律 404。aiohttp 起不来/端口全忙有明确日志。
+- 命令 `start_remote_control` / `stop_remote_control` / `remote_status`（`commands.py:143-250` 注册表）；前端 `CastController.vue` 加「📱 遥控器」按钮，显示二维码可选地址。
+
+### 外挂字幕内封
+- 新增 `media/subtitles.py`（173 行）：`ffmpeg -i 视频 -i 字幕 -map 0:v -map 0:a -map 1:0 -c copy -c:s mov_text|srt`，mp4 容器用 mov_text、其它用 mkv+srt；**视频不重编码**（-c copy），临时文件保留真实扩展名（`.part.mp4`，否则 ffmpeg 选不到封装器）。产物按「视频+字幕」内容哈希缓存在 `<配置目录>/subtitle_cache/`，同一对文件复用。
+- 命令 `subtitle_apply` / `subtitle_status`；`CastController.vue` 加「💬 字幕」按钮，选文件→后台 remux（带进度）→**重投同一台电视并从原进度继续**。
+
+### 数字与测试
+- `#[tauri::command]` 74→79（`lib.rs:1595-1675`）、Sidecar 注册 67→72（`commands.py:143-250`）、`src/api/commands.ts` 导出 73→78、locale 键 375→395。
+- 新增 `tests/test_remote_control.py`（68 行，起真的 HTTP 服务打 token/状态/指令）与 `tests/test_subtitles.py`（76 行，命令拼装/容器选择/产物复用，有 ffmpeg 时跑真 remux）；后端全量 **586 passed**。
+- `tools/verify-cast-ui.cjs` **30/30**：队列桩补齐新 store API（`setPlayingId`/`setStopAfterCurrent`/`setPlayMode`/`appendFolder`），`CastController` 的秒级 tick 用 `setInterval` 且随卸载清理（原来写成 `window.setInterval`，桩环境没有 `window`，会抛 `window.setInterval is not a function` 并泄漏计时器）。
+
+### 发布
+- 版本 `npm run version:set -- 2.4.6`；发布提交见 tag `v2.4.6` 及其后一次 `docs:` 提交（装端验收记录）。
 
 ---
 
@@ -23,7 +53,7 @@
 - 新增 Sidecar 命令 `cast_failure_list` / `cast_failure_clear`；后台日志面板新增「投屏失败台账」区（`components/LogsPanel.vue`，中英文案 `logs.castFailures*`）。
 
 ### 直链有效性预检 + 历史自动重解
-- 新增 Sidecar 命令 `probe_url`（`commands.py:826`）：探直链是否还在（过期 / 被 CDN 判废提前暴露）。前端 `MediaInput.vue:601` 在历史条目重投前调用；历史里的 url 条目重投时自动回来源页重解（提示文案 `media.historyDead` / `media.historyDeadHint`）。
+- 新增 Sidecar 命令 `probe_url`（`commands.py:998`）：探直链是否还在（过期 / 被 CDN 判废提前暴露）。前端 `MediaInput.vue:601` 在历史条目重投前调用；历史里的 url 条目重投时自动回来源页重解（提示文案 `media.historyDead` / `media.historyDeadHint`）。
 
 ### 行号与硬数字
 - 命令总数 71 → **74**（`lib.rs:1539-1615`），Sidecar 注册表 64 → **67**（`commands.py:131-227`），`src/api/commands.ts` 导出 70 → **73**，locale 369 → **375** 键。
@@ -238,7 +268,7 @@
 **新功能：本地文件支持投「整个文件夹」+ 播放队列（2026-10-28，同一轮未发布改动）。**
 
 - **入口**：媒体输入区拖放区多一个「📁 选文件夹」按钮（`src/components/MediaInput.vue`）。选中目录 → 弹出队列编辑面板。
-- **后端**：新增命令 `list_folder_media`（壳层 `src-tauri/src/lib.rs:284`，Sidecar `hancast_sidecar/commands.py:728`，实现 `hancast_sidecar/media/parser.py:27` 的 `MediaParser.list_folder`）。**自然序**（`第2集` 在 `第10集` 前）、只列当前层、跳过子目录/隐藏文件/`._` 资源叉/不支持扩展名、**不探时长**（避免上百集串行 ffprobe 卡死界面）。命令总数 67→68（壳层）/ 62→63（Sidecar 注册表）。
+- **后端**：新增命令 `list_folder_media`（壳层 `src-tauri/src/lib.rs:284`，Sidecar `hancast_sidecar/commands.py:900`，实现 `hancast_sidecar/media/parser.py:27` 的 `MediaParser.list_folder`）。**自然序**（`第2集` 在 `第10集` 前）、只列当前层、跳过子目录/隐藏文件/`._` 资源叉/不支持扩展名、**不探时长**（避免上百集串行 ffprobe 卡死界面）。命令总数 67→68（壳层）/ 62→63（Sidecar 注册表）。
 - **前端**：新增 `src/stores/playlist.ts`（Pinia store 第 10 个成员，v2.4.2 起共 11 个 store），管队列状态、勾选子集、拖拽/上下移排序、顺序记忆（localStorage `hancast.playlist.order`，同一文件夹下次复原）、播放模式（顺序/随机/单曲循环）。
 - **续播**：`cast.ts` 监听 `cast_state_changed`，设备报 STOPPED 且当前 URI 是本队列项时 `advancePlaylistIfActive` 自动投下一项；换集期间用 `queueAdvancing` Set + 1.5s 窗口吞掉 `Stop` 造成的 STOPPED 抖动，防重复起播。控制器（`CastController.vue`）在队列投屏时显示上一集/第 i/n 集/下一集按钮。
 - **i18n**：中英各加一组 `media.*` 队列文案，清掉几个脚手架期写下的未引用 key，两语言各 346 键（原 324）。
@@ -252,7 +282,7 @@
 **v2.3.22 的 macOS 通知仍然不弹横幅。** 这版做三件事：把 UN 的调用挪到主线程、把授权状态与投递错误落进日志、让每条通知有唯一 identifier。装完必须复验，判据写在下面。
 
 - **对照实验先做，排掉了整条系统链路的问题**：同一时刻 `osascript -e 'display notification …'` 的横幅**正常弹出**（截图取证），所以不是勿扰、不是通知通道坏了；系统设置里 HanCast 是「允许通知 on + 桌面/通知中心/锁屏全勾 + 提醒样式=临时」；把焦点交给 Finder、让 HanCast 不在前台时再触发，仍然 `presented=0`；Info.plist 里也没有 `LSUIElement`。剩下的嫌疑集中在**调用线程与授权状态**这两处。
-- **改动一 · 排到主线程**：`notify_os` 现在收 `AppHandle` 并 `run_on_main_thread` 之后再调 UN（`src-tauri/src/lib.rs:991`）。UN 的授权弹窗要挂在主的 run loop 上，从 Tauri 命令的工作线程直接调，系统会当成「这个 App 不允许通知」。
+- **改动一 · 排到主线程**：`notify_os` 现在收 `AppHandle` 并 `run_on_main_thread` 之后再调 UN（`src-tauri/src/lib.rs:1047`）。UN 的授权弹窗要挂在主的 run loop 上，从 Tauri 命令的工作线程直接调，系统会当成「这个 App 不允许通知」。
 - **改动二 · 让它自己说话**：`src-tauri/src/macos_notify.rs` 新增 `log()`，把 `requestAuthorization` 的 `granted`/错误、`getNotificationSettings` 的 `authorizationStatus`/`alertSetting`/`notificationCenterSetting`、以及 `addNotificationRequest` 的 completion 错误，写成与 Python 侧**同一份 `hancast.log`、同一行格式**（`[时间] hancast.notify INFO: …`），所以后台日志面板直接读得到。上一版把 add 的 handler 传成 `None`，等于把唯一的直接证据丢掉了——这轮不再猜。
 - **改动三 · 唯一 identifier**：`req.iden` 原本固定成 `hancast-cast`，实测**后一条会顶掉前一条**（通知中心里只剩最新一条，取证时也看到记录数不增反减）。改成 `hancast-cast-<毫秒时间戳>`。
 - **判据（真机，别靠眼睛）**：`~/Library/Group Containers/group.com.apple.usernoted/db2/db` 里按 `identifier='com.han.hancast'` 查 `record`，看 `presented` 是否为 1；`delivered_date` 是 Mac 绝对时间，要 `+978307200` 才是 unix 秒；正对照是同机走新 API 的 App（`presented=1` 共 21 条）。触发方式：本机起一个假渲染端（描述文件给最小 UPnP + **AVTransport**，`POST /control` 一律回 500 并 sleep 3s 留时序窗口），手动添加后点投屏。
@@ -278,8 +308,8 @@
 
 - **实测证据（不是推测）**：装好 2.3.21 后往那台 TCL 投被拒，重复五次，`usernoted` 库里躺着五条 `com.han.hancast` 记录——标题 `投屏失败`、正文 `unknown tcl_mt5879_cn：…HTTP 500…请在电视上打开「多屏互动/无线投屏/DLNA」…`（内容完全对，说明链路走到了最后一米），但 **`presented` 全为 0**，屏幕上也没有横幅。同机正对照：走新 API 的 App 是 21 条 `presented=1`，而这段时间系统自己的横幅（屏幕访问提示）正常弹出——**不是勿扰、不是样式设置**（HanCast 在系统设置里是「允许通知 on + 桌面/通知中心/锁屏全勾 + 提醒样式=临时」）。
 - **根因**：`tauri-plugin-notification` 在 macOS 上落到 `notify-rust 4.18` → `mac-notification-sys 0.6.15`，用的是 **`NSUserNotificationCenter`**（macOS 11 起废弃；当前 macOS 只把它存进通知中心，不再呈现）。载荷里那句 `scat.id = "LEGACY"` 就是这条路的签名。**升级插件没用**——已查 2.7.0 的依赖仍是 `notify-rust ^4.18`。
-- **修法一 · 壳层直发**：新增 `#[tauri::command] notify_os`（`src-tauri/src/lib.rs:991`），macOS 走 `UNUserNotificationCenter`（新模块 `src-tauri/src/macos_notify.rs`：授权只在第一次真要发时问一次、被拒不重试不报错；`RcBlock` 传空 completion handler）。依赖 `objc2 0.6` / `objc2-foundation 0.3` / `objc2-user-notifications 0.3` / `block2 0.6`，**与 tauri 自己在用的同一套版本**（锁里 objc2 就是 0.6.4），不引第二份运行时。**非 macOS 一律回 `Err`**，前端 catch 之后退回插件那条路——Linux 的 DBus（他那台由 quickshell 接收）与 Windows 的 Toast 保留原样。
-- **修法二 · 不依赖系统通知的兜底**：`raiseIfHidden()`（`src/api/commands.ts:1556`）在窗口不可见时 `show()+setFocus()`，把那条红字直接摆到用户眼前；**只在真不可见时做**，避免用户正在别的程序里打字被抢焦点。为此加 capability `core:window:allow-is-visible`。这条同时也是「投屏失败必须让用户看见」这条约束里唯一与 OS 通知实现无关的保证。
+- **修法一 · 壳层直发**：新增 `#[tauri::command] notify_os`（`src-tauri/src/lib.rs:1047`），macOS 走 `UNUserNotificationCenter`（新模块 `src-tauri/src/macos_notify.rs`：授权只在第一次真要发时问一次、被拒不重试不报错；`RcBlock` 传空 completion handler）。依赖 `objc2 0.6` / `objc2-foundation 0.3` / `objc2-user-notifications 0.3` / `block2 0.6`，**与 tauri 自己在用的同一套版本**（锁里 objc2 就是 0.6.4），不引第二份运行时。**非 macOS 一律回 `Err`**，前端 catch 之后退回插件那条路——Linux 的 DBus（他那台由 quickshell 接收）与 Windows 的 Toast 保留原样。
+- **修法二 · 不依赖系统通知的兜底**：`raiseIfHidden()`（`src/api/commands.ts:1600`）在窗口不可见时 `show()+setFocus()`，把那条红字直接摆到用户眼前；**只在真不可见时做**，避免用户正在别的程序里打字被抢焦点。为此加 capability `core:window:allow-is-visible`。这条同时也是「投屏失败必须让用户看见」这条约束里唯一与 OS 通知实现无关的保证。
 - **契约变化**：`#[tauri::command]` **66 → 67**（`generate_handler!` 现读 `lib.rs:1533-1608`）；壳层就地执行的命令 **9 → 10**（新增 `notify_os`）；转发 Sidecar 的仍是 57 条。
 - **验证**：`cargo check` 通过（同时证明 `core:window:allow-is-visible` 是合法 capability 标识、objc2 绑定签名可用：`requestWithIdentifier_content_trigger` 参数顺序是 id→content→trigger，`requestAuthorization…` 的 handler 非空所以必须给 block）；`vue-tsc` + `vite build` 通过；`tools/verify-cast-ui.cjs` 23 条仍全绿（该 harness 把 `notify()` 整个 stub 掉，所以它证明的是「五条失败出口都会调用它」，不涉及 OS 呈现）。**真机端到端复验在装完 2.3.22 之后做**：同一台电视重投被拒 + 窗口收进托盘，看横幅弹不弹、窗口带不带得回来。
 - **文档同轮修订**：AGENTS.md（**安全约束第 5 条**改写：macOS 不得用插件发通知 + 窗口兜底 + 实测数字、Rust 依赖块加 objc2 家族、命令计数与 `generate_handler!` 行号重锚、版本行）；docs/架构总览.md（进程图 66 → 67、命令归属 9 → 10）；docs/HanCast-Frontend-API.md（§2 新增 `notify_os` 一行、快速参考表 66 → 67 条并加第 67 行、壳层本地执行计数、头部校对标明「本轮只补这一条链路，其余沿用 2.3.13 取证」）；docs/HanCast-Frontend-Spec.md（capability 清单加 `allow-is-visible`、cast.ts 失败出口补窗口前置、版本行）。
@@ -293,13 +323,13 @@
 一轮只补一件事：**投屏失败的原因要送到用户眼前，而不是只留在看不见的那块屏上**。用户可感知面——窗口收进托盘后往电视投被拒，桌面会弹一条系统通知「投屏失败 / 设备名：电视返回的原文」。没有新能力、没有视觉改动。覆盖的是**五条失败出口**（媒体投屏两条 + 屏幕投屏三条），不是只修用户撞到的那一条。
 
 - **现象与真因**：2026-10-24 用户报「投 TCL 怎么没反应」，实际电视回的是 `HTTP 500 …请在电视上打开「多屏互动/无线投屏/DLNA」`。这条原因 v2.3.20 已经放进首页红条（`src/stores/cast.ts` 的 `lastError`），**但 HanCast 平时收在托盘里**——窗口不在前台时那条红字没人看得见，于是错误「产生了、没送达」。修的是投递，不是采集。
-- **五条失败出口进系统通知**：媒体投屏 ① `startCast` 抛错 → `notify.castFailed`（`src/stores/cast.ts:443`）；② 停止未送达（`stop_cast` 的 `control_failed`）→ `notify.stopNotDelivered`（`:478-479`）。屏幕投屏 ③ `start` 被拒或抛错、④ `stop` 未送达、⑤ **会话中途自己死了**（状态事件带 `error`）——三者统一经 `alertScreen()`（`src/stores/screencast.ts:61-67`）发出，调用点在 `:189-211`、`:212-249`、`:285-300`。正文原样带 Sidecar 给的失败原因，前端不改写、不翻译。
+- **五条失败出口进系统通知**：媒体投屏 ① `startCast` 抛错 → `notify.castFailed`（`src/stores/cast.ts:531`）；② 停止未送达（`stop_cast` 的 `control_failed`）→ `notify.stopNotDelivered`（`:478-479`）。屏幕投屏 ③ `start` 被拒或抛错、④ `stop` 未送达、⑤ **会话中途自己死了**（状态事件带 `error`）——三者统一经 `alertScreen()`（`src/stores/screencast.ts:197-203`）发出，调用点在 `:189-211`、`:212-249`、`:285-300`。正文原样带 Sidecar 给的失败原因，前端不改写、不翻译。
   ②与④是同一类坑的另一半：「本机停了、电视还在播」原本也只有红条说得出；⑤ 覆盖「投着投着采集进程退出」这种用户已经走开的场景。同一条 `error` 会被终止与停止各递一次，**按文本去重只弹第一条**（`:45` 的 `lastAlertedError`）；只投给浏览器（没有电视）时正文就是原因本身，不硬凑设备名。
-- **接线四处**：npm `@tauri-apps/plugin-notification@~2.4.0`（`package.json:20`）/ Rust `tauri-plugin-notification = "2.4"`，锁到 **2.4.0**（`src-tauri/Cargo.toml:26`）/ `.plugin(tauri_plugin_notification::init())`（`src-tauri/src/lib.rs:1191`，紧挨着插件链、带一句「窗口收进托盘时红条没人看得见」的为什么）/ capability `notification:default`（`src-tauri/capabilities/default.json:22`）。三平台后端由 `notify-rust 4.18.2` 分派，`Cargo.lock:2259-2268` 可见 `mac-notification-sys`（macOS）+ `zbus`（Linux DBus）+ `tauri-winrt-notification`（Windows Toast）。
+- **接线四处**：npm `@tauri-apps/plugin-notification@~2.4.0`（`package.json:20`）/ Rust `tauri-plugin-notification = "2.4"`，锁到 **2.4.0**（`src-tauri/Cargo.toml:26`）/ `.plugin(tauri_plugin_notification::init())`（`src-tauri/src/lib.rs:1247`，紧挨着插件链、带一句「窗口收进托盘时红条没人看得见」的为什么）/ capability `notification:default`（`src-tauri/capabilities/default.json:22`）。三平台后端由 `notify-rust 4.18.2` 分派，`Cargo.lock:2259-2268` 可见 `mac-notification-sys`（macOS）+ `zbus`（Linux DBus）+ `tauri-winrt-notification`（Windows Toast）。
   **版本配对是这轮唯一的返工**：第一次打的 tag 在三平台 `Tauri bundle` 步骤全部失败——`Found version mismatched Tauri packages … tauri (v2.11.5) : @tauri-apps/api (v2.12.4)` 与 `tauri-plugin-notification (v2.4.0) : @tauri-apps/plugin-notification (v2.7.0)`。根因是 npm 侧插件会拽着 `@tauri-apps/api` 往上涨（`plugin-notification@2.7.0` 要求 `api ^2.12.0`），而 `package.json` 里 `"@tauri-apps/api": "^2.0.0"` 这种宽范围让它在装依赖时飘到 2.12.4，`Cargo.lock` 的 `tauri` 却仍是 2.11.5。`cargo check`、`vue-tsc`、`vite build` **没有一个会报这件事**，只有 `tauri build` 在 bundle 阶段拒。所以把 `@tauri-apps/api` 收成 `~2.11.1`、通知插件收成 `~2.4.0`（Rust 侧 `2.4`）——**成对改**才对，单改一边照样失败；这条铁律写进 AGENTS.md 的 Rust 依赖块下面。
 - **`src/api/commands.ts:1555-1561` 的三条设计约束**：**权限惰性申请**（只在真要发通知时 `requestPermission()`，投屏路径绝不因申请权限而等待或失败）；**被拒不缓存**（`notifyGranted` 在返回 false 时清空，用户后来在系统设置里放开后，下一次失败还能再问一次）；**动态 `import()`**（浏览器 dev 与没装该插件的旧壳层直接 no-op，界面里那条红条作为兜底仍然存在）。
 - **i18n 从 `main.ts` 拆出**（新增 `src/i18n.ts`，19 行；`main.ts` 改成 `import { i18n } from './i18n'`）：store 层也要取文案，反向 import `main.ts` 会把 `main → App → store → main` 绕成循环依赖；`tt()` 是非组件环境的取文案出口。**这不只是通知这一处用到**——以后任何 store 里的用户可读错误都得走它。
-- **设备名从哪来**：`deviceLabel()`（`cast.ts:69-73`）先查本机会话、再查设备表、最后退回 device id——首次投屏失败时本地还没有会话，只有设备表里有名字。
+- **设备名从哪来**：`deviceLabel()`（`cast.ts:160-164`）先查本机会话、再查设备表、最后退回 device id——首次投屏失败时本地还没有会话，只有设备表里有名字。
 - **文案**：zh/en 各 **+3 条 key**（321 → **324**，两侧键集零差异）。
 - **测试**：`tools/verify-cast-ui.cjs` 21 → **23**，fixture 现在**同时装配真实的 `cast.ts` 与真实的 `screencast.ts`**（此前只装前者）。新增两条：媒体侧断言「投屏失败发 `notify.castFailed`」「停止未送达发 `notify.stopNotDelivered`」「成功一条都不发」；屏幕侧断言被拒 / 抛错 / 未送达 / 终止事件各发一条、**重复 error 只弹一次**、面板里那句话仍留着。标题、正文里的原因原文、设备名前缀与「浏览器目标不硬凑设备名」都 checked。**变异验过**：删掉 `start()` 里那行 `alertScreen` 后该用例转红（还原用 md5 比过，防的是「测试看着绿但其实什么也没依赖」）。本轮裁剪跑：`vue-tsc` + `vite build` 通过、`cargo check` 通过——后者顺带证明 `notification:default` 是合法 capability 标识（Tauri 构建期校验 capability，写错直接 fail），并且 `sendNotification` 在 `dist/assets/` 里独立成 chunk（动态导入被 Vite 正确切开）。**没跑全量，按既定口径。**
 - **文档同轮修订**：AGENTS.md（前端与 Rust 两张依赖表各一行、结构树补 `src/i18n.ts`、**安全约束新增第 5 条**：投屏失败必须进系统通知、权限只能惰性申请且不得阻断投屏、macOS linker-signed 每版换签名身份所以通知授权可能要重给，原第 5 条「规则包沙箱」顺延为 6、项目概述的版本号从滞后的 2.3.19 更正）；docs/HanCast-Frontend-Spec.md（依赖表两行、capability 清单、§8.1 记录 i18n 位置迁移的理由、store 间耦合从「唯一一处」更正为两处、`cast.ts` 与 `screencast.ts` 两行都补上失败出口，且两行的**全部** `:NNN-NNN` 区间按新行号重锚——`screencast.ts` 行数 327 → 现读 349、key 计数 321 → 324 与命名空间 16 → 17）；docs/README.md（索引里 Frontend-Spec 行数按现读 `wc -l` 重锚）；docs/开发指南.md（i18n 等键数从滞后的 278 更正为现读 324）。
@@ -338,7 +368,7 @@ Linux 装端第三轮，治用户报的两件事：**「linux 上的电脑投屏
 - **修法二 · 拿不到 helper 就失败，绝不退回 x11grab**（`screencast/capture.py:81-107`）：退回等于把这条原始故障再发一遍。前端同步把「开始投屏」置灰，并把 `capture.reason` 写在用户正看着的位置（`src/components/ScreenCastPanel.vue`），三种原因（不在 Wayland 会话 / helper 缺失 / `pactl` 缺失）分开说。helper 定位顺序 sidecar 同级 → `resource_dir` → 包上一级，**且必须真 exec 一次 `list`** 才算可用（`wlgrab.py:124` 逐候选聚合死因，不再只回一句「找不到」）——这是 v2.3.17「随包 mpv 谎报就绪」的同一条教训。
 - **修法三 · Linux 音频补齐**：「页面不可用」的真因是 `_list_audio_devices()` 在 Linux **直接返回空表**，界面上两个下拉是空的，不是控件坏了。现在走三层拼装（新增 `screencast/pulse.py`，148 行）：`pactl --format=json list sources` 作权威清单、可读名从 **`pw-dump` 的 `node.description`** 补（PipeWire 在 pactl 的 JSON 里把 `description` 写成字符串 `"(null)"`，只信 pactl 就得到一排 `(null)`）、`pactl info` 的 Default Source/Sink 决定「（当前出声）」标在谁身上。系统声音 = `<sink>.monitor`。
 - **打包接线三层，每一层都真的执行一次**：① CI 新步骤 `Build Wayland capture helper (Linux)`（`build.yml:259-280`）在 `linux` 矩阵里 `cargo build --release --locked` → 拷进 `src-tauri/hancast-wlgrab` → `ldd` → **`env -u WAYLAND_DISPLAY` 真 exec 一次 `list`**，要求退出码 **3** 且输出含「连不上 Wayland」（能干净地拒绝就证明二进制可执行、动态库齐全）；② `scripts/check-resources.cjs:223` 新增 `checkLinuxWlgrab()`：helper 必须是**带执行位的文件**且 `tauri.linux.conf.json` 的 `resources` 列出它（`:31-43`）；③ deb 装端冒烟追加 `test -x /usr/lib/HanCast/hancast-wlgrab`（`build.yml:314-315`）并**第二条协议命令 `list_screen_sources`**，要求返回含 `"capture"`（`build.yml:335-341`）——`wlgrab.py` / `pulse.py` 是函数内延迟 import，Nuitka 漏收时第一条 `get_settings` 照样绿。Arch 容器（`scripts/build-arch-pkg.cjs`）在 `pacman -U` 实装后跑同两条命令。
-- **测试**：新增 `hancast-backend/tests/test_screencast_wayland.py`（507 行，**30 条**）覆盖 Wayland 门（不在会话 / helper 探不到 / 起不来 / 帧尺寸非法四种失败文案各一条）、`HDR` 优先于 mode、rawvideo 命令形状、双路 `pulse` + `amix`、monitor 与麦克风的静音与缺失判定。生产侧 `_spawn(cmd, use_stdin=…, stdin_stream=…)` 比测试桩宽，`tests/test_screencast.py:398,523` 与 `tests/test_params_commands.py:97` 的 `fake_spawn` 签名同步加宽；两处早期新用例先失败，查明是**生产代码把逐候选死因吞了**，改的是 `wlgrab.py` 而不是放松断言。本轮裁剪跑：`uv run python -m pytest tests/test_screencast_wayland.py tests/test_screencast.py tests/test_params_commands.py` → **108 passed**（未跑全量，按既定口径）。
+- **测试**：新增 `hancast-backend/tests/test_screencast_wayland.py`（507 行，**30 条**）覆盖 Wayland 门（不在会话 / helper 探不到 / 起不来 / 帧尺寸非法四种失败文案各一条）、`HDR` 优先于 mode、rawvideo 命令形状、双路 `pulse` + `amix`、monitor 与麦克风的静音与缺失判定。生产侧 `_spawn(cmd, use_stdin=…, stdin_stream=…)` 比测试桩宽，`tests/test_screencast.py:398,523` 与 `tests/test_params_commands.py:99` 的 `fake_spawn` 签名同步加宽；两处早期新用例先失败，查明是**生产代码把逐候选死因吞了**，改的是 `wlgrab.py` 而不是放松断言。本轮裁剪跑：`uv run python -m pytest tests/test_screencast_wayland.py tests/test_screencast.py tests/test_params_commands.py` → **108 passed**（未跑全量，按既定口径）。
 - **验收判据（真机线，打 tag 之前做完）**：新增仓库脚本 `tools/verify-linux-wayland-cast.py`（368 行），按**产品代码路径** `FfmpegCapture.start_hls` 真起一次会话 → `PASS=14 FAIL=0 SKIP=0`（2026-10-18 00:07，CachyOS 真机）：helper 可用、`wl:DP-2`/`wl:DP-3` 在列、`desktop` 标题如实写主显示器、麦克风 3 条 + 系统声音 3 条 monitor、rawvideo 命令形状、双路 pulse + amix、**分片亮度 95.1 / 105.5（多次落在 59.6–105.5，对照修复前 16.03）**、**10/10 分片带 aac 流**、播测试音时 monitor RMS **−16.3 dB**（空闲 HDMI monitor **−91 dB**）、停止后无残留 `hancast-wlgrab` 进程、`running` 归位。两条判据坑写进脚本与文档：量亮度**不能拿 `seg000.ts`**（`delete_segments` + `hls_list_size=6` 早裁掉了，得在会话存活期间抄当下完整分片）；`astats` 的 `RMS level dB` 行带 `[Parsed_astats_0 @ 0x…] ` 前缀，`startswith` 永远匹配不到。探针 `HOME`/`XDG_*` 全指一次性沙箱，**不写用户真实的 `hancast_setting.json`**、不启停 GUI。
 - **文档同轮修订**：AGENTS.md（技术栈屏幕抓取行、结构树 `linux-capture/` + `wlgrab.py` + `pulse.py`、Python 服务表新增 hancast-wlgrab 行、构建顺序 4b 步与手工准备第 3 条、Linux `bundle.resources` 清单、CI「Linux 装端冒烟」扩写 + 「CI 证明不了画面」警示、最后校对 v2.3.19）；docs/故障排查.md（§2 症状索引两行 + 新增 **§6.7**，含对照表与两条探针坑）；docs/屏幕投屏.md（§3.4 / §4.6 / §7.12–§7.14 机制与失败文案）；docs/构建与发布.md（§2.2 构建顺序加 helper 一步、§3.2 资源表加 helper 行、§3.3 Preflight 加第 7/8 条、§4.2 步骤表加 **13b** 并重锚 14–27、§4.3–§4.5 与 §7.1 逐条重锚、新增 **§6.8**）；tools/README.md（计数 49→50 / 55→56、§1.1 与 §2.1 各一行）。本轮另一件必须记账的事：`.github/workflows/build.yml` 因为插入 helper 步骤整体长了 **47 行**，`tools/audit-doc-refs.py` **只验「文件存在 + 行号在范围内」**，四十来条 `build.yml:NNN` 引用因此「行号还在、指的行已经不是那回事」而静默通过——已用 `difflib` 对 `git show HEAD:` 与工作区做逐块对齐后全部重锚。
 - **版本与契约点**：`npm run version:set -- 2.3.19` 刷 7 处（`tauri.conf.json` / `Cargo.toml` / `Cargo.lock` / `pyproject.toml` / `config.py` / `commands.ts` / `settings.ts`），`hancast-backend/uv.lock` 的 editable 版本随 `uv sync` 跟到 2.3.19（非 SSOT 契约点，如实记录）。
@@ -484,7 +514,7 @@ GitHub CI 现在能打出 Arch 装得上的包：Linux 矩阵项在 tauri bundle
 - **检测链**（新增 `hancast-backend/hancast_sidecar/utils/ffmpeg_deps.py`，524 行；`status()` 在 `:189-252`）：**手动指定 → 系统已装 → 本程序下载的那份**。② 是 `PATH` + 平台常见目录（`search_dirs()` `:104-117`），Windows 额外往 winget 包目录里下钻一层 `bin/`（`_walk_dirs()` `:120-139`）；③ 落在 `<SETTING_DIR>/bin/`（`managed_dir()` `:51-53`，命中则 `source="downloaded"`）。三层共同的判据是**真的跑一次 `-version`**（`read_version()` `:142-162`）——「文件在」不等于「能用」，装坏的 exe、平台不匹配的构建都会被跳过继续往下找，配置里失效的手填路径同样降级（`ffmpeg_manager.py:425-427`），不会把功能锁死。
 - **ffprobe 是可选依赖**（`REQUIRED=("ffmpeg",)`、`OPTIONAL=("ffprobe",)` `:43-44`）：macOS 那条 ffmpeg-static 产物本来就只有一个二进制，缺 ffprobe 只影响本地文件的时长探测（`media/parser.py` 用 `probe_path() or "ffprobe"`）。手动指定 ffmpeg 而系统里没有 ffprobe 时，会自动取**同目录**那份当搭档（`:219-225`）——gyan/BtbN 这类包就是两个二进制同目录分发。
 - **命令面**：Rust `#[tauri::command]` 62 → **66**（`lib.rs:1455-1522`）、Sidecar 注册 55 → **59**（`commands.py:110-199`）、`commands.ts` 导出 **65**。新增 `ffmpeg_status`（检测报告，同时是弹窗的数据源）、`ffmpeg_download_start`、`ffmpeg_download_status`、`open_ffmpeg_dir`。最后一条是「就地执行但要先问 Sidecar」：它下发 `ffmpeg_status` 拿 `managed_dir` 再调系统文件管理器（`lib.rs:899-926`），**路径不接受前端传入**——否则等于开放「用资源管理器打开任意路径」；它只 spawn 不 wait，因为 `xdg-open` 会活到文件管理器被关闭为止，等它等于把一个按钮按死在命令循环里，而 `explorer` 常返回非 0 却照样开窗，退出码本来就不是判据。
-- **下载走后台任务表 + 前端 1s 轮询**（`screencast.ts:114-128`、`:143-157`），理由与解析异步化同一条：归档几百 MB，而 Rust 侧 `COMMAND_TIMEOUT = 60s`（`src-tauri/src/sidecar.rs:18`）等不起。阶段 ∈ `connecting / downloading / extracting / verifying / done / failed`，进度带 `received/total/percent/speed/elapsed`；源按 `(sys_platform, machine)` 选（`_SOURCES` `:264-296`：win32/amd64 → gyan `ffmpeg-release-essentials.zip`，win32/arm64 → BtbN，darwin → ffmpeg-static `.gz`，linux → johnvansickle `tar.xz`）；`MAX_ARCHIVE_BYTES = 512MB`（`:32`）拦 Content-Length 撒谎的响应；解压只按 **basename** 匹配想要的名、不照归档里的路径落盘、`chmod 0o755`，归档无论如何用完即删；收尾必须 `verifying` 再跑一次 `-version`，跑不起来报的是「下载并解包成功，但这个 ffmpeg 跑不起来……多半是当前平台用不了这份构建」而不是假成功。
+- **下载走后台任务表 + 前端 1s 轮询**（`screencast.ts:202-216`、`:143-157`），理由与解析异步化同一条：归档几百 MB，而 Rust 侧 `COMMAND_TIMEOUT = 60s`（`src-tauri/src/sidecar.rs:18`）等不起。阶段 ∈ `connecting / downloading / extracting / verifying / done / failed`，进度带 `received/total/percent/speed/elapsed`；源按 `(sys_platform, machine)` 选（`_SOURCES` `:264-296`：win32/amd64 → gyan `ffmpeg-release-essentials.zip`，win32/arm64 → BtbN，darwin → ffmpeg-static `.gz`，linux → johnvansickle `tar.xz`）；`MAX_ARCHIVE_BYTES = 512MB`（`:32`）拦 Content-Length 撒谎的响应；解压只按 **basename** 匹配想要的名、不照归档里的路径落盘、`chmod 0o755`，归档无论如何用完即删；收尾必须 `verifying` 再跑一次 `-version`，跑不起来报的是「下载并解包成功，但这个 ffmpeg 跑不起来……多半是当前平台用不了这份构建」而不是假成功。
 - **失败给用户看底层异常原文**：`format_error()`（`:308-324`）沿 `__cause__`/`__context__` 逐层收集、去重、用 ` ← ` 连接（最多 3 段），所以弹窗里是 `连接下载源失败（https://…）— ConnectionError: …` 这种能据以判断的句子，不是一句「下载失败」。
 - **UI（截图里的功能全部落地）**：当时新增的第 20 个组件 `src/components/FfmpegDepsModal.vue`（418 行）——缺失清单、按平台的**可复制**安装命令（Windows `winget install --id Gyan.FFmpeg -e` / `choco install ffmpeg -y`，macOS `brew install ffmpeg` / `port install ffmpeg`，Linux `apt install ffmpeg` / `dnf install ffmpeg`，`install_commands()` `:178-188`）、手动指定路径、重新检测、打开安装目录、「下载并继续」+ 进度条与实时速度、失败原文。两个入口：`ScreenCastPanel.vue:43-50`（面板加载后 `ffmpeg.ok=false` 自动弹一次，`depsPrompted` 保证关掉不追着弹）与 `:198-201`（错误条里的「打开依赖」按钮）。下载 `done` → 弹窗自动关 → 投屏闸门随即放开；旧的「手填 ffmpeg 路径」输入框由弹窗接管（手填本身还在，`onSetManual` 走 `set_ffmpeg_path`）。
 - **dev mock 补上缺失态**：`src/api/commands.ts:256-267` 新增 `?mockFfmpeg=missing|fail` 两条开关。此前 mock 无条件报「本机已装」，浏览器模式下永远走不到报错分支——这类功能根本没法在 dev 里验收。

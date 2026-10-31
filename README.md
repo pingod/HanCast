@@ -1,4 +1,4 @@
-<!-- 最后校对：2026-10-31，对应版本 v2.4.5（package.json:4）。数字与 文件:行号 引用由 tools/check-doc-freshness.py 机械核对 -->
+<!-- 最后校对：2026-10-31，对应版本 v2.4.6（package.json:4）。数字与 文件:行号 引用由 tools/check-doc-freshness.py 机械核对 -->
 
 <p align="center">
   <a href="README.md"><img src="https://img.shields.io/badge/README-CN-blue?style=flat-square&logo=github" alt="中文"></a>
@@ -251,9 +251,9 @@ Sidecar 由 `npm run build:sidecar`（Nuitka）先行产出，再由 `scripts/sy
 | 播放器 | MPV (外部依赖) | 接收投屏播放、IPC 控制 |
 | 采集 | FFmpeg (外部依赖) + WASAPI/Audio Tap | 屏幕/窗口采集与 HLS 切片 |
 
-前端通过 Tauri `invoke()` 调用 Rust 命令（**74 条**，`generate_handler!` 见
-`src-tauri/src/lib.rs:1524-1598`），Rust 通过 stdin/stdout JSON 与 Python Sidecar 通信
-（Sidecar 侧注册 **67 条**；回推前端的事件 **8 条** = Python 6 条 + 壳层 2 条，Sidecar 另有
+前端通过 Tauri `invoke()` 调用 Rust 命令（**79 条**，`generate_handler!` 见
+`src-tauri/src/lib.rs:1580-1659`），Rust 通过 stdin/stdout JSON 与 Python Sidecar 通信
+（Sidecar 侧注册 **72 条**；回推前端的事件 **8 条** = Python 6 条 + 壳层 2 条，Sidecar 另有
 `browser_request` 只到壳层）。完整契约见 [docs/HanCast-Frontend-API.md](docs/HanCast-Frontend-API.md)。
 数字口径以代码为准，`python3 tools/check-doc-freshness.py` 会逐项核对。
 
@@ -280,7 +280,7 @@ HanCast/
 │
 ├── src-tauri/                  # Rust Tauri 壳层
 │   ├── src/
-│   │   ├── lib.rs              # Tauri 命令定义（74 条，清单见 generate_handler!）
+│   │   ├── lib.rs              # Tauri 命令定义（79 条，清单见 generate_handler!）
 │   │   ├── sidecar.rs          # SidecarManager（Rust ↔ Python）
 │   │   └── macos_notify.rs     # macOS 系统通知（UNUserNotificationCenter，须主线程）
 │   ├── mpv/                    # 外部播放器（构建前放这里；FFmpeg 不随包）
@@ -289,7 +289,7 @@ HanCast/
 ├── hancast-backend/            # Python 后端（Sidecar）
 │   └── hancast_sidecar/
 │       ├── main.py             # Sidecar 入口（stdin/stdout JSON 循环）
-│       ├── commands.py         # 命令路由（67 条注册表见该文件）
+│       ├── commands.py         # 命令路由（72 条注册表见该文件）
 │       ├── params.py           # 32 项后台参数登记表
 │       ├── ssdp.py             # SSDP 设备发现（组播失败回退子网广播）
 │       ├── protocol/
@@ -326,7 +326,7 @@ HanCast/
 |------|------|
 | [docs/架构总览.md](docs/架构总览.md) | 三进程分层、端口/线程/落盘状态、架构不变量 |
 | [docs/开发指南.md](docs/开发指南.md) | 环境、跑法、测试口径、调试、提交与发版规矩 |
-| [docs/HanCast-Frontend-API.md](docs/HanCast-Frontend-API.md) | 74 条 invoke 命令与 8 个事件的全量契约 |
+| [docs/HanCast-Frontend-API.md](docs/HanCast-Frontend-API.md) | 79 条 invoke 命令与 8 个事件的全量契约 |
 | [docs/HanCast-Frontend-Spec.md](docs/HanCast-Frontend-Spec.md) | 组件 / store / 视图、样式与 i18n 约定 |
 | [docs/故障排查.md](docs/故障排查.md) | 按症状索引：发现不了、推不上去、停不下来、没声音…… |
 | [docs/屏幕投屏.md](docs/屏幕投屏.md) · [docs/投屏确认.md](docs/投屏确认.md) | 两个子系统的行为契约 |

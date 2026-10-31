@@ -20,6 +20,7 @@ from .renderer.mpv import MPVRenderer
 from .media.parser import MediaParser
 from .media.server import MediaServer
 from .media.share_resolver import ShareResolver
+from .media import subtitles as subtitle_tools
 from .media.rules.tasks import PluginTaskRunner
 from .models.device import Device
 from .models.cast import CastState
@@ -32,6 +33,7 @@ from .utils import ghmirror
 from .utils import browser_channel
 from .utils import protocol_io
 from .screencast import ScreenCastManager
+from .remote import RemoteControlServer
 
 import requests
 
@@ -126,6 +128,16 @@ class CommandHandler:
         # 设备投屏确认 (Device Guard)
         self.device_guard = DeviceGuard(self.config)
         self.device_guard._on_confirm_request = self._on_guard_confirm_request
+
+        # 字幕内封任务 {device_id: {status, progress, message, path}}
+        self._subtitle_tasks: Dict[str, dict] = {}
+
+        # 手机遥控器页（局域网浏览器打开，按需启动）
+        self.remote_server = RemoteControlServer(
+            get_state=self._remote_sessions_state,
+            action=self._remote_action,
+            local_ip=self._get_local_ip,
+        )
 
         # 注册命令
         self._commands: Dict[str, callable] = {
@@ -222,6 +234,15 @@ class CommandHandler:
             "cast_failure_list": self._cast_failure_list,
             "cast_failure_clear": self._cast_failure_clear,
             "probe_url": self._probe_url,
+
+            # 外挂字幕内封
+            "subtitle_apply": self._subtitle_apply,
+            "subtitle_status": self._subtitle_status,
+
+            # 手机遥控器
+            "start_remote_control": self._start_remote_control,
+            "stop_remote_control": self._stop_remote_control,
+            "remote_status": self._remote_status,
 
             # 日志查看（排错）
             "get_logs": self._get_logs,
@@ -714,6 +735,157 @@ class CommandHandler:
         else:
             self.protocol.set_mute(muted)
             self.cast_state.is_muted = muted
+
+    # ── 外挂字幕内封 ──
+
+    @staticmethod
+    def _hms_to_seconds(text: str) -> float:
+        try:
+            parts = [float(x) for x in str(text).split(":")]
+        except (TypeError, ValueError):
+            return 0.0
+        if len(parts) == 3:
+            return parts[0] * 3600 + parts[1] * 60 + parts[2]
+        if len(parts) == 2:
+            return parts[0] * 60 + parts[1]
+        return parts[0] if parts else 0.0
+
+    def _session_local_path(self, session) -> Optional[str]:
+        """从会话的播放地址反查本机文件路径（只支持本地文件，网络流不 remux）"""
+        media = session.cast_state.media
+        uri = getattr(media, "uri", "") if media else ""
+        if not uri:
+            return None
+        if uri.startswith("http://") or uri.startswith("https://"):
+            from urllib.parse import urlparse
+            path = urlparse(uri).path
+            if path.startswith("/media/"):
+                return self.media_server._served.get(path)
+            return None
+        return uri if os.path.isfile(uri) else None
+
+    def _subtitle_apply(self, params: dict) -> dict:
+        device_id = params.get("device_id")
+        subtitle_path = params.get("subtitle_path", "")
+        if not device_id:
+            raise ValueError("缺少 device_id")
+        session = self.device_sessions.get(device_id)
+        if session is None:
+            raise ValueError("这台设备当前没有投屏会话，先投一个本地视频再挂字幕")
+        video_path = self._session_local_path(session)
+        if not video_path:
+            raise ValueError("当前播放的不是本地文件（或已失效），无法内封字幕")
+
+        prev = self._subtitle_tasks.get(device_id)
+        if prev and prev.get("status") == "running":
+            raise ValueError("上一件字幕任务还在进行中，请稍等")
+
+        duration = self._hms_to_seconds(session.cast_state.duration)
+        task = {"status": "running", "progress": 0.0, "message": "",
+                "path": "", "subtitle": subtitle_path, "ts": time.time()}
+        self._subtitle_tasks[device_id] = task
+
+        def _progress(pct: float):
+            task["progress"] = round(pct, 1)
+
+        def _run():
+            try:
+                out_path = subtitle_tools.remux(video_path, subtitle_path, duration, _progress)
+                task["path"] = out_path
+                # 用新文件重投同一台电视，并从原进度接着放
+                ext = os.path.splitext(out_path)[1].lower()
+                mime = "video/mp4" if ext == ".mp4" else "video/x-matroska"
+                pos = session.cast_state.position
+                with self._cast_lock:
+                    self._start_cast({"device_id": device_id,
+                                      "media_uri": out_path, "mime_type": mime})
+                new_session = self.device_sessions.get(device_id)
+                if new_session is not None and pos and pos != "00:00:00":
+                    try:
+                        new_session.seek(pos)
+                    except Exception as e:
+                        logger.warning(f"[Subtitles] 重投后跳回原进度失败: {e}")
+                task["status"] = "done"
+                task["progress"] = 100.0
+            except Exception as e:
+                logger.warning(f"[Subtitles] 内封失败: {e}")
+                task["status"] = "error"
+                task["message"] = str(e)
+
+        threading.Thread(target=_run, name="hancast-subtitle", daemon=True).start()
+        return {"ok": True, "status": "running"}
+
+    def _subtitle_status(self, params: dict) -> dict:
+        device_id = params.get("device_id")
+        task = self._subtitle_tasks.get(device_id) if device_id else None
+        if not task:
+            return {"status": "idle", "progress": 0.0, "message": "", "path": ""}
+        return dict(task)
+
+    # ── 手机遥控器 ──
+
+    def _remote_sessions_state(self) -> dict:
+        """给遥控器页的状态快照：当前聚焦会话 + 全部会话列表"""
+        sessions = []
+        for did, s in self.device_sessions.items():
+            st = s.cast_state
+            sessions.append({
+                "device_id": did,
+                "device_name": getattr(s.device, "display_name", "") or did,
+                "status": st.status,
+                "position": st.position,
+                "duration": st.duration,
+                "volume": st.volume,
+                "is_muted": st.is_muted,
+                "title": (st.media.title if st.media else "") or "",
+            })
+        focus = self.cast_state.device_id
+        if sessions and not any(x["device_id"] == focus for x in sessions):
+            focus = sessions[0]["device_id"]
+        current = next((x for x in sessions if x["device_id"] == focus), None)
+        return {"session": current, "sessions": sessions, "focus": focus}
+
+    @staticmethod
+    def _hms(seconds: int) -> str:
+        seconds = max(0, int(seconds))
+        return f"{seconds // 3600:02d}:{(seconds % 3600) // 60:02d}:{seconds % 60:02d}"
+
+    def _remote_action(self, action: str, value) -> dict:
+        """遥控器页发来的控制指令 → 复用既有投屏命令（都已串行化）"""
+        state = self._remote_sessions_state()
+        did = state.get("focus")
+        if action == "play":
+            self._resume_cast({"device_id": did})
+        elif action == "pause":
+            self._pause_cast({"device_id": did})
+        elif action == "stop":
+            return self._stop_cast({"device_id": did} if did else {})
+        elif action == "seek":
+            pos = value
+            if isinstance(pos, (int, float)):
+                pos = self._hms(int(pos))
+            self._seek_cast({"device_id": did, "position": str(pos)})
+        elif action == "volume":
+            self._set_volume({"device_id": did, "volume": max(0, min(100, int(value)))})
+        elif action == "mute":
+            self._set_mute({"device_id": did, "muted": bool(value)})
+        else:
+            raise ValueError(f"未知的遥控指令: {action}")
+        return {"action": action, "device_id": did}
+
+    def _start_remote_control(self, params: dict) -> dict:
+        if not self.remote_server.running:
+            if not self.remote_server.start(port=8899):
+                raise RuntimeError("遥控器页启动失败（端口被占用？）")
+        return {"ok": True, "url": self.remote_server.url, "port": self.remote_server.port}
+
+    def _stop_remote_control(self, params: dict) -> dict:
+        self.remote_server.stop()
+        return {"ok": True}
+
+    def _remote_status(self, params: dict) -> dict:
+        return {"running": self.remote_server.running, "url": self.remote_server.url,
+                "port": self.remote_server.port}
 
     # ── 媒体解析 ──
 

@@ -1,4 +1,4 @@
-<!-- 最后校对：2026-10-31，对应版本 v2.4.5（package.json:4）。数字与 文件:行号 引用由 tools/check-doc-freshness.py 机械核对 -->
+<!-- 最后校对：2026-10-31，对应版本 v2.4.6（package.json:4）。数字与 文件:行号 引用由 tools/check-doc-freshness.py 机械核对 -->
 
 <p align="center">
   <a href="README.md"><img src="https://img.shields.io/badge/README-CN-blue?style=flat-square&logo=github" alt="中文"></a>
@@ -266,9 +266,9 @@ resources by `scripts/sync-sidecar.cjs`.
 | Player | MPV (external dependency) | Receiver playback, IPC control |
 | Capture | FFmpeg (external dependency) + WASAPI / Audio Tap | Screen & window capture, HLS segmentation |
 
-The frontend calls **67** Rust commands via Tauri `invoke()` (`generate_handler!`,
-`src-tauri/src/lib.rs:1524-1598`); Rust talks to the Python Sidecar over stdin/stdout JSON
-(**62** commands registered Sidecar-side; **8** events reach the frontend = 6 from Python + 2 from the
+The frontend calls **79** Rust commands via Tauri `invoke()` (`generate_handler!`,
+`src-tauri/src/lib.rs:1595-1675`); Rust talks to the Python Sidecar over stdin/stdout JSON
+(**72** commands registered Sidecar-side; **8** events reach the frontend = 6 from Python + 2 from the
 shell, plus `browser_request` which stops at the shell). Full contract:
 [docs/HanCast-Frontend-API.md](docs/HanCast-Frontend-API.md). `python3 tools/check-doc-freshness.py`
 re-checks every one of these numbers against the code.
@@ -295,7 +295,7 @@ HanCast/
 │
 ├── src-tauri/                  # Rust Tauri Shell
 │   ├── src/
-│   │   ├── lib.rs              # Tauri commands (67; see generate_handler! for the list)
+│   │   ├── lib.rs              # Tauri commands (79; see generate_handler! for the list)
 │   │   ├── macos_notify.rs     # macOS notifications via UNUserNotificationCenter (main thread!)
 │   │   └── sidecar.rs          # SidecarManager (Rust ↔ Python)
 │   ├── mpv/                    # External player binary (placed before build; FFmpeg is not bundled)
@@ -304,7 +304,7 @@ HanCast/
 ├── hancast-backend/            # Python Backend (Sidecar)
 │   └── hancast_sidecar/
 │       ├── main.py             # Sidecar entry (stdin/stdout JSON loop)
-│       ├── commands.py         # Command router (registry of 67 commands lives here)
+│       ├── commands.py         # Command router (registry of 72 commands lives here)
 │       ├── params.py           # 32 background parameters
 │       ├── ssdp.py             # SSDP discovery (broadcast fallback when multicast fails)
 │       ├── protocol/
@@ -342,7 +342,7 @@ paths and states the maintenance rules. Frequently used:
 |----------|-------------|
 | [docs/架构总览.md](docs/架构总览.md) | Process layout, ports/threads/on-disk state, invariants |
 | [docs/开发指南.md](docs/开发指南.md) | Setup, run modes, test discipline, debugging, release rules |
-| [docs/HanCast-Frontend-API.md](docs/HanCast-Frontend-API.md) | Full contract of 74 invoke commands and 8 events |
+| [docs/HanCast-Frontend-API.md](docs/HanCast-Frontend-API.md) | Full contract of 79 invoke commands and 8 events |
 | [docs/HanCast-Frontend-Spec.md](docs/HanCast-Frontend-Spec.md) | Components / stores / views, styling, i18n |
 | [docs/故障排查.md](docs/故障排查.md) | Symptom-indexed: devices not found, cast won't start, won't stop, no audio… |
 | [docs/屏幕投屏.md](docs/屏幕投屏.md) · [docs/投屏确认.md](docs/投屏确认.md) | Behaviour contracts of the two subsystems |

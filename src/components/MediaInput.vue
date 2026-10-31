@@ -539,6 +539,23 @@ async function openFolderPicker() {
   }
 }
 
+/** 追加一个文件夹到现有队列尾（不打断正在播放的那一项） */
+async function appendFolderPicker() {
+  pickerError.value = null
+  try {
+    const { open } = await import('@tauri-apps/plugin-dialog')
+    const dir = await open({ directory: true, multiple: false })
+    if (dir && typeof dir === 'string') {
+      const added = await playlist.appendFolder(dir)
+      showQueuePanel.value = true
+      if (playlist.error === 'empty') pickerError.value = t('media.queueEmpty')
+      else if (added === 0) pickerError.value = t('media.queueAppendNoNew')
+    }
+  } catch (err: any) {
+    pickerError.value = String(err?.message ?? err)
+  }
+}
+
 // 队列拖拽排序
 function onQueueDragStart(index: number) {
   queueDragIndex.value = index
@@ -998,6 +1015,14 @@ function clearHistory(deviceId: string) {
         </div>
 
         <div class="queue-panel__toolbar">
+          <button
+            class="queue-panel__chip queue-panel__chip--append"
+            type="button"
+            :title="t('media.queueAppendHint')"
+            @click="appendFolderPicker"
+          >
+            ＋ {{ t('media.queueAppend') }}
+          </button>
           <button class="queue-panel__chip" type="button" @click="playlist.selectAll()">
             {{ t('media.queueSelectAll') }}
           </button>

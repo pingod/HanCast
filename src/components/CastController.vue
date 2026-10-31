@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { useCastStore } from '@/stores/cast'
 import { useDeviceStore } from '@/stores/device'
 import { usePlaylistStore } from '@/stores/playlist'
+import { startRemoteControl, writeClipboardText, subtitleApply, subtitleStatus } from '@/api/commands'
 
 const { t } = useI18n()
 const castStore = useCastStore()
@@ -36,6 +37,137 @@ const mediaMimeType = computed(() => {
   }
   return mime
 })
+// ── 播放选项：播完即停 / 睡眠定时 ──
+const nowTick = ref(Date.now())
+let sleepTickTimer: number | null = null
+onMounted(() => {
+  sleepTickTimer = setInterval(() => { nowTick.value = Date.now() }, 1000) as unknown as number
+})
+onUnmounted(() => {
+  if (sleepTickTimer) { clearInterval(sleepTickTimer); sleepTickTimer = null }
+  if (subTimer) { clearInterval(subTimer); subTimer = null }
+})
+function onToggleStopAfter(e: Event) {
+  playlist.setStopAfterCurrent((e.target as HTMLInputElement).checked)
+}
+function onSleepChange(e: Event) {
+  castStore.setSleepTimer(Number((e.target as HTMLSelectElement).value))
+}
+/** 睡眠倒计时文案（没设定时器时为空，整行不渲染） */
+const sleepText = computed(() => {
+  const deadline = castStore.sleepDeadline
+  if (!deadline) return ''
+  const s = Math.max(0, Math.round((deadline - nowTick.value) / 1000))
+  const mm = Math.floor(s / 60)
+  const ss = s % 60
+  return t('cast.sleepRemaining', { time: `${mm}:${String(ss).padStart(2, '0')}` })
+})
+
+// ── 外挂字幕内封 ──
+const subOpen = ref(false)
+const subBusy = ref(false)
+const subProgress = ref(0)
+const subError = ref('')
+const subMsg = ref('')
+let subTimer: number | null = null
+function currentDeviceId(): string {
+  return castStore.focusedDeviceId ?? castStore.castState.device_id ?? ''
+}
+async function openSubtitle() {
+  subOpen.value = true
+  subError.value = ''
+  subMsg.value = ''
+  subProgress.value = 0
+  await refreshSubStatus()
+}
+async function pickSubtitle() {
+  try {
+    const { open } = await import('@tauri-apps/plugin-dialog')
+    const f = await open({
+      multiple: false,
+      filters: [{ name: '字幕文件', extensions: ['srt', 'ass', 'ssa', 'vtt'] }],
+    })
+    if (typeof f === 'string' && f) await applySubtitle(f)
+  } catch (err: any) {
+    subError.value = String(err?.message ?? err)
+  }
+}
+async function applySubtitle(path: string) {
+  subError.value = ''
+  subBusy.value = true
+  try {
+    const id = currentDeviceId()
+    if (!id) throw new Error(t('cast.subtitleFailed'))
+    await subtitleApply(id, path)
+    startSubPoll()
+  } catch (err: any) {
+    subBusy.value = false
+    subError.value = String(err?.message ?? err) || t('cast.subtitleFailed')
+  }
+}
+function startSubPoll() {
+  if (subTimer) clearInterval(subTimer)
+  void refreshSubStatus()
+  subTimer = window.setInterval(() => { void refreshSubStatus() }, 800)
+}
+async function refreshSubStatus() {
+  const id = currentDeviceId()
+  if (!id) return
+  try {
+    const s = await subtitleStatus(id)
+    subProgress.value = s.progress ?? 0
+    if (s.status === 'running') {
+      subBusy.value = true
+      subMsg.value = t('cast.subtitleWorking', { p: Math.round(s.progress || 0) })
+    } else {
+      subBusy.value = false
+      if (subTimer) { clearInterval(subTimer); subTimer = null }
+      if (s.status === 'done') subMsg.value = t('cast.subtitleDone')
+      else if (s.status === 'error') subError.value = s.message || t('cast.subtitleFailed')
+    }
+  } catch {
+    /* 轮询失败就下次再试 */
+  }
+}
+function closeSubtitle() {
+  subOpen.value = false
+  if (subTimer) { clearInterval(subTimer); subTimer = null }
+}
+
+// ── 手机遥控器 ──
+const remoteOpen = ref(false)
+const remoteUrl = ref('')
+const remoteLoading = ref(false)
+const remoteError = ref('')
+const remoteCopied = ref(false)
+async function openRemote() {
+  remoteError.value = ''
+  remoteCopied.value = false
+  remoteLoading.value = true
+  remoteOpen.value = true
+  try {
+    const r = await startRemoteControl()
+    if (r.ok && r.url) remoteUrl.value = r.url
+    else remoteError.value = t('cast.remoteFailed')
+  } catch (err: any) {
+    remoteError.value = String(err?.message ?? err) || t('cast.remoteFailed')
+  } finally {
+    remoteLoading.value = false
+  }
+}
+async function copyRemoteUrl() {
+  if (!remoteUrl.value) return
+  try {
+    await writeClipboardText(remoteUrl.value)
+    remoteCopied.value = true
+  } catch {
+    /* 复制失败就让用户手动选文本 */
+  }
+}
+function closeRemote() {
+  remoteOpen.value = false
+}
+
 const isImage = computed(() => mediaMimeType.value.startsWith('image/'))
 const isPlayable = computed(() => mediaMimeType.value.startsWith('video/') || mediaMimeType.value.startsWith('audio/'))
 
@@ -305,6 +437,25 @@ onMounted(async () => {
               </button>
             </div>
 
+            <!-- 播放选项：播完即停 + 睡眠定时 -->
+            <div class="ctrl__opts">
+              <label v-if="playlist.hasQueue" class="ctrl__opt-check" :title="t('cast.stopAfterCurrent')">
+                <input type="checkbox" :checked="playlist.stopAfterCurrent" @change="onToggleStopAfter" />
+                <span>{{ t('cast.stopAfterCurrent') }}</span>
+              </label>
+              <label class="ctrl__opt-sleep">
+                <span class="ctrl__opt-label">{{ t('cast.sleepTimer') }}</span>
+                <select class="ctrl__opt-select" :value="String(castStore.sleepMinutes)" @change="onSleepChange">
+                  <option value="0">{{ t('cast.sleepOff') }}</option>
+                  <option value="15">{{ t('cast.sleepMin', { n: 15 }) }}</option>
+                  <option value="30">{{ t('cast.sleepMin', { n: 30 }) }}</option>
+                  <option value="60">{{ t('cast.sleepMin', { n: 60 }) }}</option>
+                  <option value="90">{{ t('cast.sleepMin', { n: 90 }) }}</option>
+                </select>
+              </label>
+            </div>
+            <div v-if="sleepText" class="ctrl__opt-hint">{{ sleepText }}</div>
+
             <!-- Quality (shown only when the rule pack offers 2+ tiers) -->
             <div v-if="qualityOptions" class="ctrl__quality">
               <span class="ctrl__quality-label">{{ t('cast.quality') }}</span>
@@ -364,8 +515,50 @@ onMounted(async () => {
             <button class="ctrl__stop" @click="castStore.stopCast(castStore.focusedDeviceId ?? undefined)" :disabled="castStore.loading">
               {{ t('cast.stop') }}
             </button>
+
+            <!-- 字幕 / 手机遥控器 -->
+            <div class="ctrl__extra-row">
+              <button class="ctrl__remote-btn" type="button" @click="openSubtitle">
+                💬 {{ t('cast.subtitle') }}
+              </button>
+              <button class="ctrl__remote-btn" type="button" @click="openRemote">
+                📱 {{ t('cast.remoteTitle') }}
+              </button>
+            </div>
           </template>
 
+        </div>
+      </div>
+    </Transition>
+
+    <!-- 字幕内封弹窗 -->
+    <Transition name="fade">
+      <div v-if="subOpen" class="ctrl-overlay" @click.self="closeSubtitle">
+        <div class="ctrl-modal ctrl-remote">
+          <div class="ctrl-remote__title">💬 {{ t('cast.subtitle') }}</div>
+          <p class="ctrl-remote__hint">{{ t('cast.subtitleHint') }}</p>
+          <div v-if="subBusy" class="ctrl-sub__bar"><i :style="{ width: subProgress + '%' }"></i></div>
+          <p v-if="subMsg" class="ctrl-remote__hint">{{ subMsg }}</p>
+          <div v-if="subError" class="ctrl__error">{{ subError }}</div>
+          <button class="ctrl__stop" :disabled="subBusy" @click="pickSubtitle">{{ t('cast.subtitlePick') }}</button>
+          <button class="ctrl__remote-btn" type="button" @click="closeSubtitle">{{ t('common.close') }}</button>
+        </div>
+      </div>
+    </Transition>
+
+    <!-- 手机遥控器弹窗 -->
+    <Transition name="fade">
+      <div v-if="remoteOpen" class="ctrl-overlay" @click.self="closeRemote">
+        <div class="ctrl-modal ctrl-remote">
+          <div class="ctrl-remote__title">📱 {{ t('cast.remoteTitle') }}</div>
+          <p class="ctrl-remote__hint">{{ t('cast.remoteHint') }}</p>
+          <p v-if="remoteLoading" class="ctrl-remote__hint">{{ t('cast.remoteStarting') }}</p>
+          <div v-else-if="remoteError" class="ctrl__error">{{ remoteError }}</div>
+          <template v-else>
+            <div class="ctrl-remote__url" @click="copyRemoteUrl" :title="t('cast.remoteCopy')">{{ remoteUrl }}</div>
+            <p class="ctrl-remote__hint">{{ remoteCopied ? t('cast.remoteCopied') : t('cast.remoteCopy') }}</p>
+          </template>
+          <button class="ctrl__stop ctrl__wide" @click="closeRemote">{{ t('common.close') }}</button>
         </div>
       </div>
     </Transition>
@@ -562,6 +755,119 @@ onMounted(async () => {
   font-variant-numeric: tabular-nums;
   min-width: 56px;
   text-align: center;
+}
+
+/* ── 字幕 / 遥控器按钮行 ── */
+.ctrl__extra-row {
+  display: flex;
+  gap: 8px;
+  width: calc(100% - 24px);
+  margin: 4px 12px 10px;
+}
+.ctrl__extra-row .ctrl__remote-btn {
+  margin: 0;
+  width: auto;
+  flex: 1;
+}
+.ctrl-sub__bar {
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg-input);
+  overflow: hidden;
+}
+.ctrl-sub__bar > i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  transition: width .2s ease;
+}
+
+/* ── 手机遥控器 ── */
+.ctrl__remote-btn {
+  margin: 4px 12px 10px;
+  width: calc(100% - 24px);
+  padding: 8px 0;
+  border: 1px solid var(--border-color);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  border-radius: 8px;
+  font-size: 12px;
+  font-family: var(--font);
+  cursor: pointer;
+}
+.ctrl__remote-btn:hover { color: var(--accent); border-color: var(--accent); }
+.ctrl-remote { padding: 16px 14px; gap: 8px; }
+.ctrl-remote__title { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+.ctrl-remote__hint { margin: 0; font-size: 12px; color: var(--text-secondary); text-align: center; line-height: 1.5; }
+.ctrl-remote__url {
+  width: 100%;
+  padding: 10px 8px;
+  border: 1px dashed var(--accent);
+  border-radius: 8px;
+  font-size: 12px;
+  font-family: ui-monospace, Menlo, monospace;
+  color: var(--accent);
+  text-align: center;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+  user-select: all;
+}
+.ctrl-remote .ctrl__stop.ctrl__wide { margin: 6px 0 0; width: 100%; }
+
+/* ── 播放选项（播完即停 / 睡眠定时） ── */
+.ctrl__opts {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 4px 12px 2px;
+  width: 100%;
+  flex-wrap: wrap;
+}
+.ctrl__opt-check {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+.ctrl__opt-check input {
+  margin: 0;
+  cursor: pointer;
+}
+.ctrl__opt-sleep {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.ctrl__opt-label {
+  white-space: nowrap;
+}
+.ctrl__opt-select {
+  font-size: 12px;
+  font-family: var(--font);
+  color: var(--text-primary);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 6px;
+  cursor: pointer;
+  outline: none;
+}
+.ctrl__opt-select:focus-visible {
+  outline: 2px solid var(--border-focus);
+}
+.ctrl__opt-hint {
+  padding: 0 12px 4px;
+  font-size: 11px;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
 }
 
 /* ── Quality (rule-pack supplied tiers) ── */

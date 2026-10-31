@@ -188,10 +188,16 @@ async function fixture(locale = 'en-US') {
   // 计数器必须写成 state 属性再用 `this.x += 1`，否则测试读不到。
   imports['@/stores/playlist'] = { usePlaylistStore: pinia.defineStore('playlist', () => ({
     hasQueue: false, items: [], playingId: null, playingIndex: 0, total: 0,
-    nextCalls: 0, resetCalls: 0, nextValue: null,
+    nextCalls: 0, resetCalls: 0, nextValue: null, stopAfterCurrent: false,
+    folder: '', playMode: 'order',
     nextItem() { this.nextCalls += 1; return this.nextValue },
     manualNext: () => null,
     manualPrev: () => null,
+    setPlayingId(id) { this.playingId = id },
+    setStopAfterCurrent(v) { this.stopAfterCurrent = v },
+    setPlayMode(m) { this.playMode = m },
+    appendFolder() { return Promise.resolve(0) },
+    appendItems() { return 0 },
     reset() { this.resetCalls += 1; this.hasQueue = false; this.items = [] },
   })) }
   // cast.ts 投屏成功后会写「投屏历史」（按设备记账）。这里用记调用的桩：

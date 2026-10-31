@@ -200,7 +200,7 @@ const MOCK_DEVICES: Device[] = [
 const MOCK_SETTINGS: AppSettings = {
   usn: 'hancast-uuid-001',
   friendly_name: 'HanCast',
-  version: '2.4.5',
+  version: '2.4.6',
   media_port: 8080,
   default_device: null,
   network_interface: '',
@@ -548,6 +548,16 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
     case 'cast_failure_clear':
       mockCastFailures.length = 0
       return mockCastLedger() as T
+    case 'subtitle_apply':
+      return { ok: true, status: 'running' } as T
+    case 'subtitle_status':
+      return { status: 'idle', progress: 0, message: '', path: '' } as T
+    case 'start_remote_control':
+      return { ok: true, url: 'http://192.168.1.5:8899/r/demo-token/', port: 8899 } as T
+    case 'stop_remote_control':
+      return { ok: true } as T
+    case 'remote_status':
+      return { running: false, url: '', port: 0 } as T
     case 'probe_url':
       return { ok: true, status: 200, ms: 12, final_url: String(args?.url ?? '') } as T
     case 'plugin_check_updates': {
@@ -665,8 +675,8 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
     case 'check_update':
       return {
         has_update: false,
-        current: '2.4.5',
-        latest: '2.4.5',
+        current: '2.4.6',
+        latest: '2.4.6',
         url: '',
         body: '',
         source: 'github',
@@ -1172,6 +1182,40 @@ export async function probeUrl(url: string, timeout = 1.0): Promise<ProbeResult>
   const resp = await invoke<ProbeResult>('probe_url', { url, timeout })
   return { ok: resp.ok === true, status: resp.status ?? 0, ms: resp.ms ?? 0,
            final_url: resp.final_url, error: resp.error }
+}
+
+/** 外挂字幕内封任务状态 */
+export interface SubtitleTask { status: 'idle' | 'running' | 'done' | 'error'; progress: number; message: string; path: string }
+
+/** 把字幕文件封进当前视频并重投同一台设备 */
+export async function subtitleApply(deviceId: string, subtitlePath: string): Promise<{ ok: boolean; status: string }> {
+  const invoke = await initInvoke()
+  return await invoke<{ ok: boolean; status: string }>('subtitle_apply', { deviceId, subtitlePath })
+}
+
+export async function subtitleStatus(deviceId: string): Promise<SubtitleTask> {
+  const invoke = await initInvoke()
+  const r = await invoke<SubtitleTask>('subtitle_status', { deviceId })
+  return { status: (r?.status as any) ?? 'idle', progress: r?.progress ?? 0, message: r?.message ?? '', path: r?.path ?? '' }
+}
+
+/** 启动手机遥控器页：返回局域网地址（手机浏览器直接打开） */
+export interface RemoteControlInfo { ok: boolean; url: string; port: number; running?: boolean }
+export async function startRemoteControl(): Promise<RemoteControlInfo> {
+  const invoke = await initInvoke()
+  const r = await invoke<RemoteControlInfo>('start_remote_control', {})
+  return { ok: r?.ok !== false, url: r?.url ?? '', port: r?.port ?? 0 }
+}
+
+export async function stopRemoteControl(): Promise<void> {
+  const invoke = await initInvoke()
+  await invoke('stop_remote_control', {})
+}
+
+export async function remoteStatus(): Promise<RemoteControlInfo> {
+  const invoke = await initInvoke()
+  const r = await invoke<RemoteControlInfo>('remote_status', {})
+  return { ok: r?.running === true, url: r?.url ?? '', port: r?.port ?? 0 }
 }
 
 function normalizeLedger(resp: FailureLedger): FailureLedger {

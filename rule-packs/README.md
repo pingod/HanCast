@@ -2,7 +2,7 @@
 
 > 这个目录回答一个问题：**官方解析规则包的「源 / 产物 / 索引」三件套是怎么组织的、怎么打包发布、用户机器上怎么装到**。写规则包的 API 细节不在这里。
 >
-> 最后校对：2026-10-31，对应版本 v2.4.5（`package.json:4`。本轮只重跑闸门：引用行号与「4 个官方包 / 32 项后台参数」的实测口径都还成立）
+> 最后校对：2026-10-31，对应版本 v2.4.6（`package.json:4`。本轮只重跑闸门：引用行号与「4 个官方包 / 32 项后台参数」的实测口径都还成立）
 
 ---
 
@@ -295,7 +295,7 @@ RAW_BASE = "https://raw.githubusercontent.com/pingod/HanCast/main/rule-packs/dis
 | 2 | `onCheckUpdates()` | `PluginSettings.vue:132-150` | 置 `checking`，成功后把结果拆进 `packUpdates` / `packAvailable` / `indexUrl` |
 | 3 | `pluginCheckUpdates(indexUrl = '')` | `src/api/commands.ts:950-963` | `invoke('plugin_check_updates', { indexUrl: indexUrl \|\| null })`；留空即走后台参数 |
 | 4 | Rust command `plugin_check_updates` | `src-tauri/src/lib.rs:361-372` | 纯转发：`sidecar.send_command("plugin_check_updates", {"index_url": …})` |
-| 5 | sidecar 命令表 | `hancast-backend/hancast_sidecar/commands.py:145` | 注册到 `CommandHandler` |
+| 5 | sidecar 命令表 | `hancast-backend/hancast_sidecar/commands.py:157` | 注册到 `CommandHandler` |
 | 6 | `_plugin_check_updates()` | `commands.py:742-746` | 先 `mgr.refresh()`（指纹变了就热重载），再 `mgr.check_updates(index_url)` |
 | 7 | `PluginManager.check_updates()` | `jsplugins.py:371-386` | 拉索引 → 对上本地 `self._plugins` → 分两堆：本机没装的进 `available`（`:381-382`），索引版本更高的进 `updates`（带 `current`，`:383-384`）；返回 `{index_url, updates, available, installed}` |
 | 8 | `fetch_index()` | `jsplugins.py:331-369` | `requests` GET 索引，超时取 `rules.index_timeout_s`，UA 用 `_IMPORT_UA`（`:52`）；HTTP ≥400 / 非法 JSON / 网络异常都翻成 `PluginError`（`:349-355`）；坏条目静默丢掉（`:358-364`） |
