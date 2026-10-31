@@ -367,5 +367,11 @@
   "media.historyCastNow": "Cast to this device again",
   "media.historyTimes": "casted {n}x",
   "media.historyClearAll": "Clear all history",
-  "media.historyFolderMissing": "This record has no folder path; please pick the folder again"
+  "media.historyFolderMissing": "This record has no folder path; please pick the folder again",
+  "logs.castFailuresTitle": "Cast failures",
+  "logs.castFailuresHint": "When the TV does nothing, check here first: which device, which step failed, and the raw error. Outbound action logs are above.",
+  "logs.castFailuresEmpty": "No cast failures recorded yet",
+  "logs.castFailuresClear": "Clear",
+  "media.historyDead": "Link expired",
+  "media.historyDeadHint": "This direct link expired; casting will re-resolve from the source page first"
 }

@@ -1,12 +1,12 @@
 # HanCast Python Sidecar
 
-> 最后校对：2026-10-30，对应版本 v2.4.4（`package.json:4`）。深度内容见 [../docs/README.md](../docs/README.md)。
+> 最后校对：2026-10-31，对应版本 v2.4.5（`package.json:4`）。深度内容见 [../docs/README.md](../docs/README.md)。
 
 `hancast-backend/` 是 HanCast 的 Python 后端，以 **Sidecar 子进程**形式被 Tauri 壳层拉起，
 通过 stdin/stdout 的行分隔 JSON 与 Rust 通信。它负责 DLNA/SSDP、媒体服务、mpv 渲染、
 屏幕投屏采集，以及粘贴链接的站点解析。
 
-版本：与主程序同步（当前 v2.4.4，`hancast_sidecar/utils/config.py:39`；由 `npm run version:set` 统一刷入），
+版本：与主程序同步（当前 v2.4.5，`hancast_sidecar/utils/config.py:39`；由 `npm run version:set` 统一刷入），
 Python `>= 3.11`（`pyproject.toml:13`）。
 
 > 深入内容不在此文：分层与端口/线程/落盘状态见 [../docs/架构总览.md](../docs/架构总览.md)，
@@ -20,7 +20,7 @@ Python `>= 3.11`（`pyproject.toml:13`）。
 hancast-backend/
 ├── hancast_sidecar/
 │   ├── main.py          # 入口：UTF-8 stdio 包裹 → ready 事件 → 命令主循环
-│   ├── commands.py      # 命令路由与 Sidecar 侧服务装配（注册 64 条，注册表 `commands.py:131-224`）
+│   ├── commands.py      # 命令路由与 Sidecar 侧服务装配（注册 67 条，注册表 `commands.py:131-227`）
 │   ├── params.py        # 后台参数登记表 PARAM_SPECS（32 项）
 │   ├── ssdp.py          # SSDP 发现（M-SEARCH / NOTIFY alive+byebye / 陈旧摘除；准入=描述声明 AVTransport）
 │   ├── protocol/        # dlna.py（SOAP 控制与描述）、server.py（UPnP HTTP 服务）
@@ -112,7 +112,7 @@ mpv 随包（开发时从 `src-tauri/mpv/` 取，见 [../docs/开发指南.md](.
 | 运行依赖 | `ffmpeg_status` `ffmpeg_download_start` `ffmpeg_download_status`（FFmpeg 检测与按需下载，`utils/ffmpeg_deps.py`） |
 | 投屏确认 | `get_guard_devices` `get_guard_settings` `save_guard_settings` `set_guard_policy` `respond_cast_confirm` `remove_guard_device` |
 | 规则包与失败台账 | `plugin_list` `plugin_import` `plugin_pull` `plugin_check_updates` `plugin_remove` `plugin_set_rule_enabled` `plugin_test`、**三条后台任务出口** `plugin_task_start` `plugin_task_result` `plugin_task_cancel`（v2.3.20 起，慢操作不再同步占住命令通道）、`rule_inventory` `failure_list` `failure_delete` `failure_clear` |
-| 配置与运维 | `get_settings` `save_settings` `get_params` `save_params` `get_logs` `set_log_level` `check_update` `exit`（`exit` 由主循环拦下，`export_logs` **不在注册表里**——它是 Rust 就地实现的 `lib.rs:987`） |
+| 配置与运维 | `get_settings` `save_settings` `get_params` `save_params` `get_logs` `set_log_level` `check_update` `exit`（`exit` 由主循环拦下，`export_logs` **不在注册表里**——它是 Rust 就地实现的 `lib.rs:1017`） |
 
 `grep -rn "emit_event(" hancast_sidecar/` 能数出 **7 个事件名**：`ready`、`device_found`、`device_lost`、
 `cast_state_changed`、`cast_confirm_request`、`screen_cast_state_changed`，外加 `browser_request`

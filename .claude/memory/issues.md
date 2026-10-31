@@ -1,6 +1,6 @@
 # Macast-Han 已知问题与解决方案
 
-**最后更新**: 2026-10-30
+**最后更新**: 2026-10-31
 
 ---
 
@@ -69,6 +69,14 @@
   https://github.com/pingod/HanCast/releases/tag/v2.3.24
 
 ---
+
+### COMP-007: 出站投屏失败无痕（SOAP 出站仅 DEBUG，电视不动时查不到断在哪）
+
+- **状态**: 🟢 已解决（v2.4.5 工作区，未发版）
+- **现象**: 解析成功、点投屏无报错，电视不动；面板默认 INFO 看不到我们发给谁、电视回了什么。COMP-005 因此排查大半天。
+- **根因**: `protocol/dlna.py` 的 `_send_action` 成功只 `logger.debug`；失败散落、无台账。
+- **方案**: ① 出站动作成功收 INFO 一行 `SOAP OUT ← <status> | <action> | <device> | <ms>ms`（`dlna.py:1256-1258`）；② 新增 `media/cast_failures.py` 投屏失败台账 + `cast_failure_list`/`cast_failure_clear` + `LogsPanel` 展示；③ `probe_url`（`commands.py:826`）历史条目重投前预检直链、url 条目自动回来源页重解。
+- **判据**: 面板「投屏失败台账」有条目 = 断在某阶段（connect/set_uri/play/stop/media_ready/cast）；契约测试 `tests/test_cast_failures.py`。
 
 ## 架构风险
 

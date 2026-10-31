@@ -13,7 +13,7 @@ export const useSettingsStore = defineStore('settings', () => {
   const settings = ref<AppSettings>({
     usn: '',
     friendly_name: 'HanCast',
-    version: '2.4.4',
+    version: '2.4.5',
     media_port: 8080,
     default_device: null,
     network_interface: '',

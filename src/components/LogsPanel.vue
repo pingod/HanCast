@@ -4,7 +4,8 @@ import { useI18n } from 'vue-i18n'
 import Modal from '@/components/Modal.vue'
 import CustomSelect from '@/components/CustomSelect.vue'
 import { useLogsStore } from '@/stores/logs'
-import { exportLogs } from '@/api/commands'
+import { exportLogs, castFailureList, castFailureClear } from '@/api/commands'
+import type { CastFailureEntry } from '@/api/commands'
 import type { LogModule } from '@/types/logs'
 
 const { t, locale } = useI18n()
@@ -13,6 +14,43 @@ const logs = useLogsStore()
 const autoTail = ref(true)
 const exported = ref(false)
 const listEl = ref<HTMLElement | null>(null)
+
+// 投屏失败台账（出站）：日志是「流水」，台账是「最近几次投不出去卡在哪」
+const castFails = ref<CastFailureEntry[]>([])
+const castFailTotal = ref(0)
+const castFailsOpen = ref(false)
+const castFailsLoading = ref(false)
+
+async function loadCastFails() {
+  castFailsLoading.value = true
+  try {
+    const l = await castFailureList()
+    castFails.value = l.entries
+    castFailTotal.value = l.total
+  } catch {
+    castFails.value = []
+    castFailTotal.value = 0
+  } finally {
+    castFailsLoading.value = false
+  }
+}
+
+async function clearCastFails() {
+  try {
+    const l = await castFailureClear()
+    castFails.value = l.entries
+    castFailTotal.value = l.total
+  } catch { /* 忽略：清不掉也不影响看日志 */ }
+}
+
+function failTime(at: number): string {
+  const d = new Date(at * 1000)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
+
+// 面板每次打开时刷一次台账（不轮询）
+watch(() => logs.showPanel, (v) => { if (v) loadCastFails() })
 
 const moduleOptions = computed(() => {
   const opts: { value: string; label: string }[] = [{ value: '', label: t('logs.moduleAll') }]
@@ -190,6 +228,38 @@ async function onExport() {
         <span v-if="logs.truncated" class="lg-muted">{{ t('logs.truncated') }}</span>
         <span class="lg-path" :title="logs.path">{{ logs.path }}</span>
       </div>
+
+      <div class="lg-castfail">
+        <div class="lg-castfail-head">
+          <button class="lg-castfail-toggle" @click="castFailsOpen = !castFailsOpen">
+            <span class="lg-castfail-arrow">{{ castFailsOpen ? '▾' : '▸' }}</span>
+            {{ t('logs.castFailuresTitle') }}
+            <span class="lg-castfail-count" v-if="castFailTotal">({{ castFailTotal }})</span>
+          </button>
+          <span class="lg-castfail-actions">
+            <button class="lg-btn" :disabled="castFailsLoading" @click="loadCastFails">
+              {{ castFailsLoading ? t('logs.loading') : t('logs.refresh') }}
+            </button>
+            <button class="lg-btn" v-if="castFails.length" @click="clearCastFails">
+              {{ t('logs.castFailuresClear') }}
+            </button>
+          </span>
+        </div>
+        <p class="lg-castfail-hint">{{ t('logs.castFailuresHint') }}</p>
+        <div v-if="castFailsOpen">
+          <div v-if="!castFails.length" class="lg-empty">{{ t('logs.castFailuresEmpty') }}</div>
+          <div v-for="(f, i) in castFails" :key="i" class="lg-castfail-row">
+            <div class="lg-castfail-top">
+              <span class="lg-ts">{{ failTime(f.at) }}</span>
+              <span class="lg-castfail-dev">{{ f.device_name || f.device_id || '?' }}</span>
+              <span class="lg-castfail-stage">{{ f.stage_label || f.stage }}</span>
+              <span v-if="f.count > 1" class="lg-castfail-n">×{{ f.count }}</span>
+            </div>
+            <div class="lg-castfail-err">{{ f.error }}</div>
+            <div v-if="f.url" class="lg-castfail-url">{{ f.url }}</div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <template #actions>
@@ -357,4 +427,63 @@ async function onExport() {
   white-space: nowrap;
   color: var(--text-tertiary);
 }
+
+.lg-castfail {
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+.lg-castfail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.lg-castfail-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+
+.lg-castfail-arrow { color: var(--text-secondary); }
+
+.lg-castfail-count { color: var(--text-secondary); font-weight: 400; }
+
+.lg-castfail-actions { display: inline-flex; gap: 6px; }
+
+.lg-castfail-hint {
+  margin: 4px 0 6px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.lg-castfail-row {
+  padding: 6px 8px;
+  margin-bottom: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg-input);
+}
+
+.lg-castfail-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.lg-castfail-dev { color: var(--text-primary); font-weight: 600; }
+.lg-castfail-stage { color: var(--warning, #d97706); }
+.lg-castfail-n { color: var(--text-secondary); }
+.lg-castfail-err { margin-top: 3px; font-size: 11px; color: var(--text-primary); word-break: break-all; }
+.lg-castfail-url { margin-top: 2px; font-size: 10px; color: var(--text-secondary); word-break: break-all; }
 </style>

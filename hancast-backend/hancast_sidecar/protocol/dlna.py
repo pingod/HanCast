@@ -20,6 +20,7 @@ from queue import Queue
 from typing import Optional, Dict, List, Callable
 from ..models.device import Device
 from ..utils.platform_info import build_server_info
+from ..media import cast_failures
 
 logger = logging.getLogger("hancast.dlna")
 
@@ -32,6 +33,13 @@ _NO_PROXY = {"http": "", "https": ""}
 # 控制端传进来的参数一律是字符串，且各家写法不统一（Mute 见过 '1'/'true'/'yes'）
 _TRUE_TOKENS = {'1', 'true', 'yes', 'on'}
 _FALSE_TOKENS = {'0', 'false', 'no', 'off', ''}
+
+# 出站动作 → 失败台账的阶段名（media/cast_failures.py 的 STAGES）
+_ACTION_STAGE = {
+    "SetAVTransportURI": "set_uri",
+    "Play": "play",
+    "Stop": "stop",
+}
 
 # ── 入站 SOAP 信封的容错 ──
 # 见 docs/故障排查.md §5.4：部分控制点（2026-10-25 现场抓到一例）会把
@@ -447,6 +455,12 @@ class DLNAProtocol:
             except Exception:
                 pass
             time.sleep(0.3)
+        name = getattr(self._device, 'display_name', '?')
+        logger.warning(f"Media not ready on {name} within {timeout:.0f}s "
+                       f"(TrackDuration 一直 00:00:00)，仍继续发送 Play")
+        cast_failures.record(
+            getattr(self._device, 'id', ''), name, "media_ready",
+            f"等待 {timeout:.0f}s 内电视未开始缓冲（TrackDuration 仍为 00:00:00）")
         return False
 
     def stop(self) -> bool:
@@ -1160,9 +1174,11 @@ class DLNAProtocol:
     def _send_action(self, service: str, action: str, params: dict):
         """发送 SOAP 请求；控制地址不可用时返回 None（调用方按需报错）"""
         if not self._control_url and not self._try_resolve_control_url():
-            logger.warning(
-                f"No control URL for {getattr(self._device, 'display_name', '?')}, "
-                f"skip action: {action}")
+            name = getattr(self._device, 'display_name', '?')
+            logger.warning(f"No control URL for {name}, skip action: {action}")
+            cast_failures.record(
+                getattr(self._device, 'id', ''), name, "connect",
+                f"控制地址解析不出来，{action} 没有发出去")
             return None
 
         logger.debug(f"SOAP OUT → {self._control_url} | {action} | params={params}")
@@ -1199,6 +1215,7 @@ class DLNAProtocol:
             "SOAPAction": f'"{service}#{action}"',
         }
 
+        started = time.time()
         try:
             response = requests.post(
                 self._control_url,
@@ -1213,10 +1230,18 @@ class DLNAProtocol:
             # 707=URI 不可用…），丢掉正文就等于只剩「电视拒绝播放」这种无信息报错
             resp = getattr(e, "response", None)
             fault = (resp.text or "")[:300].replace("\n", " ") if resp is not None else ""
+            elapsed_ms = int((time.time() - started) * 1000)
             logger.error(
-                f"SOAP {action} failed to {self._control_url}: {e} "
+                f"SOAP {action} failed to {self._control_url} after {elapsed_ms}ms: {e} "
                 f"request={xml_data.decode('utf-8', 'replace')[:200]} "
                 f"fault={fault}")
+            # 失败进台账：面板默认 INFO，事后能回看是哪台设备、卡在哪一步
+            cast_failures.record(
+                getattr(self._device, 'id', ''),
+                getattr(self._device, 'display_name', ''),
+                _ACTION_STAGE.get(action, "cast"),
+                f"{e} | {fault}" if fault else str(e),
+                self._control_url or "")
             if resp is not None and resp.status_code >= 500:
                 name = getattr(self._device, "display_name", "设备")
                 raise RendererUnresponsive(
@@ -1225,7 +1250,12 @@ class DLNAProtocol:
                     f"「多屏互动/无线投屏/DLNA」应用或重启电视后重试") from e
             raise
 
-        logger.debug(f"SOAP OUT ← {response.status_code} | {action}")
+        elapsed_ms = int((time.time() - started) * 1000)
+        # 出站动作收成 INFO 一行：过去只有 DEBUG，面板默认 INFO 看不到，
+        # COMP-005（电视不拉流）就只能靠手搓 SOAP 矩阵排查。
+        logger.info(
+            f"SOAP OUT ← {response.status_code} | {action} | "
+            f"{getattr(self._device, 'display_name', '?')} | {elapsed_ms}ms")
         return etree.fromstring(response.content)
 
 

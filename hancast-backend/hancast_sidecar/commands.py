@@ -218,6 +218,11 @@ class CommandHandler:
             "ffmpeg_download_start": self._ffmpeg_download_start,
             "ffmpeg_download_status": self._ffmpeg_download_status,
 
+            # 投屏失败台账 + 地址有效性预检（排错）
+            "cast_failure_list": self._cast_failure_list,
+            "cast_failure_clear": self._cast_failure_clear,
+            "probe_url": self._probe_url,
+
             # 日志查看（排错）
             "get_logs": self._get_logs,
             "set_log_level": self._set_log_level,
@@ -548,7 +553,16 @@ class CommandHandler:
 
         # 获取或创建设备会话（每个设备独立的 DLNAProtocol 实例）
         session = self._get_or_create_session(device_id)
-        session.play(media_uri, mime_type)
+        try:
+            session.play(media_uri, mime_type)
+        except Exception as e:
+            # 具体动作失败（set_uri/play/media_ready）已在 dlna._send_action 里记过，
+            # 这里只兜「动作之外」的意外（会话创建、媒体服务器、元数据构造）
+            from .media import cast_failures
+            cast_failures.record(
+                device_id, getattr(session.device, "display_name", ""), "cast",
+                f"{type(e).__name__}: {e}", media_uri)
+            raise
 
         # 立即推送初始 cast_state_changed 事件到前端
         # 前端依赖此事件识别活跃投屏会话；若仅靠 polling 回调，
@@ -798,6 +812,55 @@ class CommandHandler:
     def _failure_clear(self, params: dict) -> dict:
         from .media import failures
         return {"removed": failures.clear(), **failures.snapshot()}
+
+    # ── 投屏失败台账 + 地址有效性预检 ──
+
+    def _cast_failure_list(self, params: dict) -> dict:
+        from .media import cast_failures
+        return cast_failures.snapshot()
+
+    def _cast_failure_clear(self, params: dict) -> dict:
+        from .media import cast_failures
+        return {"removed": cast_failures.clear(), **cast_failures.snapshot()}
+
+    def _probe_url(self, params: dict) -> dict:
+        """1 秒预算探一次地址是否还活着（历史条目重投前的预检）
+
+        只用 HEAD + Range 取首字节：抖音这类直链几小时就过期，让用户点了才发现
+        死链不如提前把条目灰掉。任何异常都当「探不动」，绝不抛给上层。
+        """
+        url = str(params.get("url") or "").strip()
+        if not url.lower().startswith(("http://", "https://")):
+            return {"ok": False, "status": 0, "ms": 0, "error": "不是 http(s) 地址"}
+        try:
+            budget = float(params.get("timeout") or 1.0)
+        except (TypeError, ValueError):
+            budget = 1.0
+        budget = min(max(budget, 0.3), 5.0)
+        from .utils import httpclient
+        started = time.time()
+        session = httpclient.make_session()
+        try:
+            try:
+                resp = session.head(url, timeout=budget, allow_redirects=True,
+                                    headers={"Range": "bytes=0-0"})
+            except Exception:
+                resp = None
+            # 有些 CDN 不给 HEAD（405/501/空 Content-Length），退回区段 GET 取一个字节
+            if resp is None or resp.status_code in (405, 501) or not resp.headers.get("Content-Length"):
+                resp = session.get(url, timeout=budget, allow_redirects=True, stream=True,
+                                   headers={"Range": "bytes=0-0"})
+                try:
+                    next(iter(resp.iter_content(1)), b"")
+                finally:
+                    resp.close()
+            ms = int((time.time() - started) * 1000)
+            ok = 200 <= resp.status_code < 400
+            return {"ok": ok, "status": resp.status_code, "ms": ms,
+                    "final_url": str(getattr(resp, "url", url) or url)}
+        except Exception as e:
+            ms = int((time.time() - started) * 1000)
+            return {"ok": False, "status": 0, "ms": ms, "error": f"{type(e).__name__}: {e}"}
 
     def _plugin_check_updates(self, params: dict) -> dict:
         """对照官方索引看哪些包有新版本，顺带列出索引里还没装的包

@@ -6,7 +6,7 @@ import { useDeviceStore } from '@/stores/device'
 import { useCastStore } from '@/stores/cast'
 import { usePlaylistStore } from '@/stores/playlist'
 import { useHistoryStore, type HistoryEntry } from '@/stores/history'
-import { readClipboardText } from '@/api/commands'
+import { readClipboardText, resolveShare, probeUrl } from '@/api/commands'
 import type { Device } from '@/types/device'
 import Modal from './Modal.vue'
 
@@ -581,6 +581,43 @@ function cycleMode() {
 const history = useHistoryStore()
 const showHistoryPanel = ref(false)
 
+/**
+ * 直链已死的条目 id。分享链的直链几小时就过期，打开历史时先探一次（1 秒预算），
+ * 把死链灰掉——比让用户点了才发现在那儿转圈好。探不动不算死（宁可让他点一次）。
+ */
+const deadHistoryIds = ref<string[]>([])
+const probingHistory = ref(false)
+
+async function probeHistoryDead() {
+  const targets = history.entries.filter((e) => e.kind === 'url' && e.uri.startsWith('http'))
+  if (!targets.length) { deadHistoryIds.value = []; return }
+  probingHistory.value = true
+  const dead: string[] = []
+  let cursor = 0
+  async function worker() {
+    while (cursor < targets.length) {
+      const e = targets[cursor++]
+      try {
+        const r = await probeUrl(e.uri, 1.0)
+        if (!r.ok) dead.push(e.id)
+      } catch { /* 探不动就当还活着 */ }
+    }
+  }
+  try {
+    await Promise.all([worker(), worker(), worker()])
+  } finally {
+    deadHistoryIds.value = dead
+    probingHistory.value = false
+  }
+}
+
+function isHistoryDead(id: string): boolean {
+  return deadHistoryIds.value.includes(id)
+}
+
+// 打开历史面板时探一次直链是否还有效
+watch(showHistoryPanel, (v) => { if (v) probeHistoryDead() })
+
 /** 按设备分组，最近投过的设备排前面；设备离线也保留（历史是记录，不是在线列表） */
 const historyGroups = computed(() =>
   history.deviceIdsByRecency().map((deviceId) => {
@@ -648,6 +685,24 @@ async function castFromHistory(entry: HistoryEntry) {
     }
     await castQueueFirstTo(entry.deviceId)
     return
+  }
+  // url 条目：直链带签名、几小时就过期，直接拿旧直链投多半撞死。
+  // 先回来源页重解一次（一次预算），解不出来再退回旧直链试一次。
+  if (entry.kind === 'url' && entry.sourceUrl) {
+    try {
+      const info = await resolveShare(entry.sourceUrl, '')
+      if (info.uri) {
+        await castStore.startCast(entry.deviceId, info.uri, {
+          title: info.title || entry.title,
+          mime_type: info.mime_type || entry.mime_type,
+          thumbnail: info.thumbnail ?? entry.thumbnail ?? null,
+          source_url: info.source_url || entry.sourceUrl,
+        })
+        return
+      }
+    } catch {
+      // 重解失败：退回旧直链再试一次，失败会走下方同一处报错
+    }
   }
   await castStore.startCast(entry.deviceId, entry.uri, {
     title: entry.title,
@@ -868,7 +923,12 @@ function clearHistory(deviceId: string) {
             </button>
           </div>
           <ul class="history-panel__list" role="list">
-            <li v-for="entry in group.items" :key="entry.id" class="history-panel__item">
+            <li
+              v-for="entry in group.items"
+              :key="entry.id"
+              class="history-panel__item"
+              :class="{ 'history-panel__item--dead': isHistoryDead(entry.id) }"
+            >
               <button
                 class="history-panel__reuse"
                 type="button"
@@ -881,6 +941,9 @@ function clearHistory(deviceId: string) {
                     {{ entry.title }}
                     <span v-if="(entry.castCount ?? 1) > 1" class="history-panel__times">
                       {{ t('media.historyTimes', { n: entry.castCount }) }}
+                    </span>
+                    <span v-if="isHistoryDead(entry.id)" class="history-panel__dead" :title="t('media.historyDeadHint')">
+                      {{ t('media.historyDead') }}
                     </span>
                   </span>
                   <span class="history-panel__meta">
@@ -1634,6 +1697,17 @@ function clearHistory(deviceId: string) {
 .history-panel__cast-now:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+.history-panel__item--dead .history-panel__reuse {
+  opacity: 0.55;
+}
+.history-panel__dead {
+  margin-left: 4px;
+  padding: 0 4px;
+  font-size: 10px;
+  color: var(--warning, #d97706);
+  border: 1px solid var(--warning, #d97706);
+  border-radius: 4px;
 }
 .history-panel__times {
   margin-left: 4px;

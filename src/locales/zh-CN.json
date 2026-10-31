@@ -367,5 +367,11 @@
   "media.historyCastNow": "直接投回这台设备",
   "media.historyTimes": "投过 {n} 次",
   "media.historyClearAll": "清空全部历史",
-  "media.historyFolderMissing": "这条记录没有文件夹路径，请重新选择文件夹"
+  "media.historyFolderMissing": "这条记录没有文件夹路径，请重新选择文件夹",
+  "logs.castFailuresTitle": "投屏失败台账",
+  "logs.castFailuresHint": "电视没反应时先看这里：哪台设备、卡在哪一步、错误原文。出站动作的 INFO 日志在上方。",
+  "logs.castFailuresEmpty": "还没有投屏失败记录",
+  "logs.castFailuresClear": "清空",
+  "media.historyDead": "直链已失效",
+  "media.historyDeadHint": "这条的直链已过期；点「直接投回」会先从来源页重新解析再投"
 }

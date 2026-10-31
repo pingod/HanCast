@@ -375,6 +375,36 @@ async fn failure_clear(sidecar: State<'_, SidecarManager>) -> Result<serde_json:
     sidecar.send_command("failure_clear", serde_json::json!({})).await
 }
 
+/// 投屏（出站）失败台账
+#[tauri::command]
+async fn cast_failure_list(sidecar: State<'_, SidecarManager>) -> Result<serde_json::Value, String> {
+    sidecar.send_command("cast_failure_list", serde_json::json!({})).await
+}
+
+/// 清空投屏失败台账
+#[tauri::command]
+async fn cast_failure_clear(sidecar: State<'_, SidecarManager>) -> Result<serde_json::Value, String> {
+    sidecar.send_command("cast_failure_clear", serde_json::json!({})).await
+}
+
+/// 1 秒预算探一次地址是否还活着（历史条目重投前预检）
+#[tauri::command]
+async fn probe_url(
+    sidecar: State<'_, SidecarManager>,
+    url: String,
+    timeout: Option<f64>,
+) -> Result<serde_json::Value, String> {
+    sidecar
+        .send_command(
+            "probe_url",
+            serde_json::json!({
+                "url": url,
+                "timeout": timeout.unwrap_or(1.0),
+            }),
+        )
+        .await
+}
+
 /// 规则包的慢操作改走后台任务 + 轮询。
 ///
 /// 之前 `plugin_check_updates` / `plugin_pull` / `plugin_import` 直接在 Sidecar
@@ -1530,6 +1560,9 @@ pub fn run() {
             failure_list,
             failure_delete,
             failure_clear,
+            cast_failure_list,
+            cast_failure_clear,
+            probe_url,
             plugin_check_updates,
             plugin_pull,
             plugin_import,

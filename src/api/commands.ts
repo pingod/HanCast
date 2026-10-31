@@ -125,6 +125,27 @@ function mockLedger(): FailureLedger {
   }
 }
 
+const mockCastFailures: CastFailureEntry[] = [
+  {
+    at: Date.now() / 1000 - 300,
+    device_id: 'mock-tv',
+    device_name: '客厅电视',
+    stage: 'set_uri',
+    stage_label: 'SetAVTransportURI 被拒',
+    error: 'HTTP 500 | 电视端的投屏服务可能已退出',
+    url: 'http://192.168.1.13/control',
+    count: 2,
+  },
+]
+
+function mockCastLedger(): CastFailureLedger {
+  return {
+    path: '/mock/cast_failures.json',
+    entries: [...mockCastFailures],
+    total: mockCastFailures.reduce((s, e) => s + e.count, 0),
+  }
+}
+
 const MOCK_DEVICES: Device[] = [
   {
     id: 'samsung-tv-001',
@@ -179,7 +200,7 @@ const MOCK_DEVICES: Device[] = [
 const MOCK_SETTINGS: AppSettings = {
   usn: 'hancast-uuid-001',
   friendly_name: 'HanCast',
-  version: '2.4.4',
+  version: '2.4.5',
   media_port: 8080,
   default_device: null,
   network_interface: '',
@@ -522,6 +543,13 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
     case 'failure_clear':
       mockFailureHosts.length = 0
       return mockLedger() as T
+    case 'cast_failure_list':
+      return mockCastLedger() as T
+    case 'cast_failure_clear':
+      mockCastFailures.length = 0
+      return mockCastLedger() as T
+    case 'probe_url':
+      return { ok: true, status: 200, ms: 12, final_url: String(args?.url ?? '') } as T
     case 'plugin_check_updates': {
       const installed = new Map(mockPlugins.map((p) => [p.name, p.version]))
       const cmp = (v: string) => v.split('.').map((n) => parseInt(n, 10) || 0)
@@ -637,8 +665,8 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
     case 'check_update':
       return {
         has_update: false,
-        current: '2.4.4',
-        latest: '2.4.4',
+        current: '2.4.5',
+        latest: '2.4.5',
         url: '',
         body: '',
         source: 'github',
@@ -1021,6 +1049,32 @@ export interface FailureLedger {
   total: number
 }
 
+/** 投屏（出站）失败台账的一条：哪台设备、卡在哪一步、错误原文 */
+export interface CastFailureEntry {
+  at: number
+  device_id: string
+  device_name: string
+  stage: string
+  stage_label: string
+  error: string
+  url: string
+  count: number
+}
+
+export interface CastFailureLedger {
+  path: string
+  entries: CastFailureEntry[]
+  total: number
+}
+
+export interface ProbeResult {
+  ok: boolean
+  status: number
+  ms: number
+  final_url?: string
+  error?: string
+}
+
 export async function pluginList(): Promise<PluginInfo[]> {
   const invoke = await initInvoke()
   const resp = await invoke<{ plugins: PluginInfo[] }>('plugin_list', {})
@@ -1095,6 +1149,29 @@ export async function failureDelete(host = '', url = ''): Promise<FailureLedger>
 export async function failureClear(): Promise<FailureLedger> {
   const invoke = await initInvoke()
   return normalizeLedger(await invoke<FailureLedger>('failure_clear', {}))
+}
+
+function normalizeCastLedger(resp: CastFailureLedger): CastFailureLedger {
+  return { path: resp.path ?? '', entries: resp.entries ?? [], total: resp.total ?? 0 }
+}
+
+/** 投屏失败台账（出站） */
+export async function castFailureList(): Promise<CastFailureLedger> {
+  const invoke = await initInvoke()
+  return normalizeCastLedger(await invoke<CastFailureLedger>('cast_failure_list', {}))
+}
+
+export async function castFailureClear(): Promise<CastFailureLedger> {
+  const invoke = await initInvoke()
+  return normalizeCastLedger(await invoke<CastFailureLedger>('cast_failure_clear', {}))
+}
+
+/** 1 秒预算探一次地址是否还活着（历史条目重投前预检） */
+export async function probeUrl(url: string, timeout = 1.0): Promise<ProbeResult> {
+  const invoke = await initInvoke()
+  const resp = await invoke<ProbeResult>('probe_url', { url, timeout })
+  return { ok: resp.ok === true, status: resp.status ?? 0, ms: resp.ms ?? 0,
+           final_url: resp.final_url, error: resp.error }
 }
 
 function normalizeLedger(resp: FailureLedger): FailureLedger {

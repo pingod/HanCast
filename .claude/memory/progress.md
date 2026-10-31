@@ -2,11 +2,22 @@
 
 ## 当前阶段：v2.3.19 工作区前端优化（尚未发布）
 
-**最后更新**: 2026-10-28
+**最后更新**: 2026-10-31
 
 本轮已安全拉取 `origin/feat/js-rule-plugins`，远端无新增，本地比 `origin/main` 多 5 笔既有提交。用户确认“克制精致的原生工具”风格：统一紫色亮暗主题、媒体/设备卡片、设置分组、弹窗边界及键盘操作；保持 Linux 不透明策略。修复解析结果竞态、App 路由切换丢失投屏监听、迟到监听清理、主题缓存、播控错误吞掉、进度锁定/旧轮询回写、视频被当图片加载；去掉无功能的多房同步装饰。
 
 验证：媒体/主题 73 项、播控原 20 项及封面新增 1 项、真实 App 生命周期 2 项；类型检查及 Vite 构建通过。浏览器验 346×472 / 434×634 / 800×900、中英设置、日志/屏幕/控制器弹窗、解析/暂停/停止/清空（项目内置 mock，不是真机投屏）。未跑全量测试、未打三平台包、未提交或发布。界面截图在 `docs/images/ui-native-{light,dark}.png`。
+
+## 2026-10-31 发布轮：v2.4.5（出站可观测 + 投屏失败台账 + probe_url 预检）
+
+清单第二批（第一批 v2.4.4）。动因 COMP-005：出站整条链路只有 DEBUG，电视不拉流时面板默认 INFO 无痕。
+
+- **出站 INFO**：`protocol/dlna.py` `_send_action` 成功分支打 `SOAP OUT ← <status> | <action> | <device> | <ms>ms`（`dlna.py:1256-1258`），请求侧仍 DEBUG（`:1184`）。
+- **投屏失败台账**：新增 `media/cast_failures.py`（132 行，阶段 connect/set_uri/play/stop/media_ready/cast；只写本机 `cast_failures.json`，上限 100 条/保留 14 天）；Sidecar `cast_failure_list`/`cast_failure_clear`；`LogsPanel.vue` 内「投屏失败台账」区（locale `logs.castFailures*`）。
+- **预检 + 自动重解**：Sidecar `probe_url`（`commands.py:826`）；`MediaInput.vue:601` 历史条目重投前探直链；url 条目重投自动回来源页重解（`media.historyDead`/`media.historyDeadHint`）。
+- **数字**：命令 71→74（`lib.rs:1539-1615`）、Sidecar 64→67（`commands.py:131-227`）、`commands.ts` 导出 70→73、locale 369→375；`commands.py` 1320 行、`dlna.py` 1310 行、`lib.rs` 1617、`commands.ts` 1591。
+- **验证**：后端全量 `pytest` **577 passed**（新增 `test_cast_failures.py` 214 行）；`npm run build` 通过；`tools/verify-cast-ui.cjs` 30/30；两道文档闸门绿。
+- **文档**：CHANGELOG v2.4.5 节；故障排查 §5.6（出站可观测/台账/判据）+ §11 两行 + §2 索引；架构总览行数表加 `media/cast_failures.py`；Frontend-API §0/§7（74 行）/§2 新增命令；Frontend-Spec §8.3 locale 375；全仓 `文件:行号` 按 diff 重映射（脚本 `/tmp/remap_v245.py` + `/tmp/remap_v245b.py`），全仓校对戳 2026-10-31/v2.4.5。
 
 ## 2026-10-30 发布轮：v2.4.4（补齐两条单向门 + 测试隔离 + 卫生类 + 后缀门真 bug）
 
@@ -26,7 +37,9 @@
 
 **装端**：CI run 41052359324 macos 首轮 `hdiutil create failed - Resource busy`（runner 抖动），rerun --failed 后全绿；dmg sha256 3d178a1f… 与 GitHub 一致、hdiutil verify VALID；install 2.4.4 成功（adhoc, com.han.hancast），accept 88 PASS/0 FAIL/1 SKIP（SKIP 为 FFmpeg 下载源需代理）；产物内 4 份 sidecar 源 sha256 与仓库一致；实装探针三条新命令 success。
 
-**未做**：Linux(192.168.1.68)/Windows(Host win) 均离线（ssh/ping 全超时）→ 未装端；局域网扫不到渲染端 → 未真机投一次 → **Release 保持 draft 未 publish**（DEC-006 边界③）。
+**发布**：用户 m05719「继续 不用等linux windows了」→ 2026-10-31T01:54:15Z `gh release edit v2.4.4 --draft=false` 已 publish（https://github.com/pingod/HanCast/releases/tag/v2.4.4），DEC-006 边界③的「真机投一次」由用户本人豁免；CHANGELOG 已记录该决定（提交 d53aa22）。
+
+**未做**：Linux(192.168.1.68)/Windows(Host win) 仍未装端（多轮复查 ssh/ping 全超时），用户已表示不再等待，上线时按需补装。
 
 ## 2026-10-28 发布轮：v2.4.0（已发布 + 已装 macOS/Linux ✅）
 

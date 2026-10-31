@@ -3,7 +3,7 @@
 > 旧名 `CLAUDE.md`（Claude Code 私有约定），2026-10-15 改名为跨工具的 `AGENTS.md`；
 > `CLAUDE.md` 现在只留三行指针指向本文件。
 
-> 最后校对：2026-10-30，对应版本 v2.4.4（`package.json:4`）。本轮（v2.4.4）：补齐两条单向门（隐藏设备可恢复、手动地址可删，新增 `HiddenDevicesModal.vue` 与 Sidecar `remove_manual_device`）、测试环境隔离（`tests/conftest.py` 在 import 前重定向 HOME，不再污染用户真实配置）、SSDP 不可用网卡一次性禁用、MPV `quit` 噪声降级、检查更新走统一 HTTP 客户端、修 `player_safe_suffix` 丢 mime 参数的真 bug；上一轮（v2.4.3）：投屏历史从「记录列表」改成能干活（点条目回到投屏流程、行内 ▶ 重投、记本地原始路径/来源页、次数徽标与清空全部）；再上一轮（v2.4.1/2.4.2）：文件夹投屏两处 bug 修复、手动停止不再被自动续投顶回、按设备投屏历史。
+> 最后校对：2026-10-31，对应版本 v2.4.5（`package.json:4`）。本轮（v2.4.5）：出站 SOAP 动作收成 INFO 一行（面板默认 INFO 也看得到）+ 新增投屏失败台账 `media/cast_failures.py`（设备/阶段/错误可回看，`cast_failure_list`/`cast_failure_clear`）、`probe_url` 让历史条目重投前预检直链是否过期、历史里 url 条目重投自动回来源页重解；上一轮（v2.4.4）：补齐两条单向门（隐藏设备可恢复、手动地址可删，新增 `HiddenDevicesModal.vue` 与 Sidecar `remove_manual_device`）、测试环境隔离（`tests/conftest.py` 在 import 前重定向 HOME，不再污染用户真实配置）、SSDP 不可用网卡一次性禁用、MPV `quit` 噪声降级、检查更新走统一 HTTP 客户端、修 `player_safe_suffix` 丢 mime 参数的真 bug；上一轮（v2.4.3）：投屏历史从「记录列表」改成能干活（点条目回到投屏流程、行内 ▶ 重投、记本地原始路径/来源页、次数徽标与清空全部）；再上一轮（v2.4.1/2.4.2）：文件夹投屏两处 bug 修复、手动停止不再被自动续投顶回、按设备投屏历史。
 > 本文件是速览与硬约束；逐模块的深度内容在 **docs/README.md** 的索引里，别在这里找细节。
 
 ## 项目概述
@@ -12,7 +12,7 @@
 
 - **项目名**: HanCast
 - **作者**: lanzeweie@foxmail.com
-- **版本**: 2.4.4（版本 SSOT 是 `package.json` 的 `version`，`scripts/sync-version.cjs:4`；改版本只走 `npm run version:set`，见「版本管理」）
+- **版本**: 2.4.5（版本 SSOT 是 `package.json` 的 `version`，`scripts/sync-version.cjs:4`；改版本只走 `npm run version:set`，见「版本管理」）
 - **性质**: 二次开发（非原项目官方更新）
 - **原始代码**: [xfangfang/Macast](https://github.com/xfangfang/Macast)（原作者 xfangfang，最后更新 2022-01）。仓库里**不含** `Macast-main/`、`Macast-plugins-main/` 这些本地目录，1.x 源码只作为移植参考，见「原始代码复用情况」
 - **目标架构**: Tauri 2.0 前端 + Rust 桥接 + Python Sidecar（+ MPV 接收端播放、FFmpeg 屏幕抓取）
@@ -100,7 +100,7 @@ HanCast/
 │   ├── icons/                   # 应用图标
 │   └── src/
 │       ├── main.rs              # 入口，调用 hancast_lib::run()
-│       ├── lib.rs               # Tauri 应用设置 + 71 个 #[tauri::command]（清单见 generate_handler!，lib.rs:1509-1581）
+│       ├── lib.rs               # Tauri 应用设置 + 74 个 #[tauri::command]（清单见 generate_handler!，lib.rs:1539-1615）
 │       └── sidecar.rs           # Python Sidecar 管理器（stdin/stdout JSON，COMMAND_TIMEOUT=60s）
 │
 ├── hancast-backend/              # Python Sidecar 后端
@@ -109,11 +109,11 @@ HanCast/
 │   ├── README.md                # Sidecar 范围速查（协议信封、三条铁律、命令分组）
 │   ├── hancast_sidecar/
 │   │   ├── main.py              # Sidecar 入口（148 行：UTF-8 stdio、stdin/stdout JSON 循环、双击兜底）
-│   │   ├── commands.py          # CommandHandler — 命令路由（64 条注册表 commands.py:131-224）
+│   │   ├── commands.py          # CommandHandler — 命令路由（67 条注册表 commands.py:131-227）
 │   │   ├── params.py            # 后台参数 PARAM_SPECS（32 项，params.py:41-265）
 │   │   ├── ssdp.py              # SSDP 设备发现（1343 行；投屏准入见 _provides_cast_service）
 │   │   ├── protocol/
-│   │   │   ├── dlna.py          # DLNA 控制端实现（1280 行，AVTransport/RenderingControl SOAP）
+│   │   │   ├── dlna.py          # DLNA 控制端实现（1310 行，AVTransport/RenderingControl SOAP）
 │   │   │   └── server.py        # DLNA 描述服务（Description.xml、SCPD、事件 SUBSCRIBE）
 │   │   ├── renderer/
 │   │   │   ├── base.py          # 渲染器基类
@@ -149,7 +149,7 @@ HanCast/
 │   ├── scripts/
 │   │   ├── build_sidecar.py     # Nuitka 构建脚本 + flatten_dependencies()
 │   │   └── run_sidecar.py       # 独立 Sidecar 运行器
-│   └── tests/                   # 33 个 test_*.py + 2 个 smoke_*.py + conftest.py + data/（清单见 docs/开发指南.md）
+│   └── tests/                   # 34 个 test_*.py + 2 个 smoke_*.py + conftest.py + data/（清单见 docs/开发指南.md）
 │
 ├── rule-packs/                  # 官方规则包源码与产物
 │   ├── hancast-bilibili / hancast-douyin / hancast-template
@@ -239,9 +239,9 @@ Rust 侧另发 2 条（`update-available`、`autostart-changed`），**前端合
 `ready` 两侧都没有订阅者（只作握手痕迹），`cast_error` 是前端遗留的死监听（`src/stores/cast.ts:787`）。
 完整清单与触发时机见 docs/HanCast-Frontend-API.md。
 
-### Tauri 命令列表（节选，完整清单以 `src-tauri/src/lib.rs` 的 `generate_handler!`（lib.rs:1509-1581，**71 条**）为准）
+### Tauri 命令列表（节选，完整清单以 `src-tauri/src/lib.rs` 的 `generate_handler!`（lib.rs:1539-1615，**74 条**）为准）
 
-Sidecar 侧的注册表是 **64 条**（`commands.py:131-224`；v2.4.4 新增 `remove_manual_device`，v2.4.1 起有文件夹投屏 `list_folder_media`）——差的那几条由 Rust 自己实现（窗口、剪贴板、开机自启、
+Sidecar 侧的注册表是 **67 条**（`commands.py:131-227`；v2.4.5 新增 `cast_failure_list`/`cast_failure_clear`/`probe_url`，v2.4.4 新增 `remove_manual_device`，v2.4.1 起有文件夹投屏 `list_folder_media`）——差的那几条由 Rust 自己实现（窗口、剪贴板、开机自启、
 Store 版判定、日志导出等），不下发 Python；`exit` 由 Sidecar 主循环拦下（`main.py:126-128`）。
 Rust 命令名与 Sidecar `cmd` 名不一定同名（例如 Rust 的 `plugin_list` 下发的是 Sidecar 的规则包命令），
 逐条对应关系见 docs/HanCast-Frontend-API.md。
@@ -281,7 +281,7 @@ Rust 命令名与 Sidecar `cmd` 名不一定同名（例如 Rust 的 `plugin_lis
 |------|------|------|
 | DLNA Server | 默认 8080，占用则回退随机 | 描述 XML、SCPDXML、入站 SOAP 处理。端口由 `commands.py:86-90` 传入，冲突回退见 `protocol/server.py:356-363`；**真实端口回灌给 SSDP**（`commands.py:213` `self.ssdp._port = self.dlna_server.get_port()`），否则设备抓到 8080 却取不到描述文件 |
 | SSDP Service | 1900 | UDP 多播，设备发现（NOTIFY + M-SEARCH）；组播被系统阻断时回退子网广播（`ssdp.py:32,416,556-557`），NOTIFY 周期 30s 对齐 `CACHE-CONTROL: max-age=66`（`ssdp.py:6`）。**发现不扫描端口**，且描述必须声明 `AVTransport` 服务才登记（`ssdp.py:1095`、`ssdp.py:1190-1196`，v2.3.13），路由器/NAS 不进列表，判据 `tools/verify-ssdp-cast-gate.py` |
-| Media Server | 0 = 自动选择 | 本地文件 HTTP 服务（Range + 边下边播代理），`config.media_port` 默认 0（`utils/config.py:112-114`、`commands.py:223`） |
+| Media Server | 0 = 自动选择 | 本地文件 HTTP 服务（Range + 边下边播代理），`config.media_port` 默认 0（`utils/config.py:112-114`、`commands.py:228`） |
 | Screencast HTTP | 默认 8765 | 观看页 + HLS 供流（`screencast/httpd.py:32,84`），观看链接带每会话新生成的短随机段 `/r/<session_id>` |
 | MPV Renderer | IPC | 通过 named pipe (Windows) / unix socket (Linux/macOS) 控制 MPV。定位顺序：手动指定 → 随包 → 系统 PATH（`utils/mpv_manager.py:31-67`）；**随包候选必须先真跑一次 `--version`**，跑不起来就让位系统 mpv——随包那份是 Ubuntu runner 的构建，Arch/CachyOS 上 13 条 soname 缺失（`libavcodec.so.60` 等，全清单见 docs/故障排查.md §10.7）（v2.3.17，判据见 docs/故障排查.md §10.7） |
 | FFmpeg | 子进程 | 屏幕抓取切片成 HLS，由 `screencast/ffmpeg_manager.py` 拼装命令；**不随包**，可执行文件由 `utils/ffmpeg_deps.py` 在运行时定位（手动路径 → 本机 PATH/常见安装目录 → 本程序下载的 `<配置目录>/bin/`） |
@@ -684,13 +684,13 @@ docs/构建与发布.md §6 与各专题文档，不要凭脚本退出码 0 就�
 | 来源 | 值 | 作用 |
 |------|----|------|
 | `src-tauri/tauri.conf.json` `app.windows[0]` | 434×634，min 346×472，max 800×900，`decorations:false`、`transparent:true`、`visible:false`、`dragDropEnabled:true` | 首启的声明尺寸 |
-| `src-tauri/src/lib.rs:32-36` `WindowConfig::default()` | 434×634；最小尺寸在 Rust 侧硬编码 `MIN_WIDTH=346 / MIN_HEIGHT=472`（`lib.rs:1144-1145`，恢复与记录时各 clamp 一次，`lib.rs:1135,1118-1119`） | Rust 恢复/写入 `window_config.json` 时的默认值与下限 |
+| `src-tauri/src/lib.rs:32-36` `WindowConfig::default()` | 434×634；最小尺寸在 Rust 侧硬编码 `MIN_WIDTH=346 / MIN_HEIGHT=472`（`lib.rs:1174-1175`，恢复与记录时各 clamp 一次，`lib.rs:1165,1118-1119`） | Rust 恢复/写入 `window_config.json` 时的默认值与下限 |
 | `src-tauri/tauri.linux.conf.json` `app.windows[0]` | **整份重写** base 那一条，只把 `transparent` 改成 `false` 并补不透明 `backgroundColor` `{22,20,50,255}` | Linux 必须用不透明窗口，原因见「跨平台 WebView 兼容性」 |
 
 ⚠️ 平台配置合并是 RFC 7386，**数组整体替换**——所以 Linux 那份不能只写 `{transparent:false}`，
 必须把 base 的窗口对象整份抄过去再改，否则 `minWidth` / `dragDropEnabled` 之类会静默消失。
 
-用户拖过窗口后，真实尺寸记在 AppData 的 `window_config.json`（`lib.rs:1120`），启动时优先读它，
+用户拖过窗口后，真实尺寸记在 AppData 的 `window_config.json`（`lib.rs:1150`），启动时优先读它，
 写入带 **500ms 防抖**（`lib.rs:84,90`）。所以「改了 tauri.conf.json 但界面尺寸没变」通常是本机
 `window_config.json` 在覆盖，删掉该文件再看。
 
@@ -742,7 +742,7 @@ alpha 保持 0，Hyprland 直接把后面的桌面（还带模糊）透出来，
 5. **投屏失败必须让用户看见**：窗口收进托盘时界面红条没人看得到，所以媒体投屏的 `start_cast`
    失败、「停止未送达」，以及屏幕投屏的被拒 / 未送达 / 会话中途报错，**五条路径**都发系统通知，
    并把**隐藏的窗口带回前台**（`src/api/commands.ts` 的 `notify()` → `raiseIfHidden()` `:1401` +
-   壳层 `notify_os` `lib.rs:961`——**UN 的调用必须排到主线程**（`run_on_main_thread`），从命令的工作
+   壳层 `notify_os` `lib.rs:991`——**UN 的调用必须排到主线程**（`run_on_main_thread`），从命令的工作
    线程直接调会被系统判成「不允许」；授权状态与投递错误都落进程序日志（`src-tauri/src/macos_notify.rs`
    的 `log()`，与 Python 侧同一份 `hancast.log`、同一行格式，后台日志面板读得到）。
    屏幕投屏那侧的去重在 `src/stores/screencast.ts:45`）。
@@ -802,8 +802,8 @@ alpha 保持 0，Hyprland 直接把后面的桌面（还带模糊）透出来，
    两类例外由闸门承认，别硬盖章：已被取代的历史稿在**前 15 行**声明「已被…取代/仅作留档」即可放行
    （给退役稿盖「校对过」反而是说谎）；门面 `README.md` / `README_en.md` 用 **HTML 注释**藏这一行
    （GitHub 上不可见，但 `check-doc-freshness.py` 读得到）。
-4. **数字必须写口径**。例：`#[tauri::command]` 71 条（`lib.rs:1509-1581`）/ Sidecar 注册 64 条
-   （`commands.py:131-224`）/ 前端 `commands.ts` 导出 70 个；
+4. **数字必须写口径**。例：`#[tauri::command]` 74 条（`lib.rs:1539-1615`）/ Sidecar 注册 67 条
+   （`commands.py:131-227`）/ 前端 `commands.ts` 导出 73 个；
    事件是**三个数**：Sidecar 发出 7 个事件名、其中 6 条转发前端（`browser_request` 只到壳层）、
    壳层自加 2 条 ⇒ 前端监听 8 条。不写口径，下次改动看起来就像文档坏了。
    `tools/` 的顶层脚本数也一样要写口径，且由闸门逐行点名核对（漏一行就报）。
