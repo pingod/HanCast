@@ -1,5 +1,18 @@
 # HanCast 开发进度
 
+## 2026-11-03 发布轮：v2.4.9（设备列表空状态误显示 + 遥控器镜像定时器泄漏）——已发布
+
+用户贴截图质问「这么明显的bug没发现??」：设备列表已渲染两台 LAN 设备，下方同时又显示「还没有发现设备」空状态块。
+
+- **真因**：`src/components/DeviceList.vue` 的 `v-else` 空状态块贴在「隐藏设备按钮」的 `v-if` 上，而不是设备列表的 `v-if` 上 ⇒ 渲染条件是「没有隐藏设备」，与有没有设备无关。`git log` 追溯到 **v2.4.4（`e1d4922`）引入**，跨三个版本没被发现。修法：空状态块移回 `device-list__items` 之后、隐藏按钮移到空状态之后改独立 `v-if`；现结构 items(v-if) → empty(v-else) → hidden(v-if)，`git diff --stat` 11/11 纯重排。
+- **顺带两处（同源：v2.4.8 加了新依赖，验收脚本没跟上）**：
+  - `src/stores/cast.ts` 的 `setupRemoteUiSync()` 里 300ms 去抖 timer 是**函数局部变量**，`onUnmounted` 只置 `disposed = true` 从不 `clearTimeout`，回调体也不挡 `disposed` ⇒ 组件死后仍发一次 `remote_update_ui`。修法：timer 提到 store 作用域 `remoteUiTimer`，回调开头清引用并挡 `disposed`，卸载时 `clearTimeout`。
+  - `tools/verify-cast-ui.cjs` 桩缺 `remoteUpdateUi` 与 `playlist.playableItems`（v2.4.8 起 cast.ts 要它们）⇒ 从 v2.4.6 的 30/30 **静默退化到 0/30**，发布时没察觉；`tools/verify-app-lifecycle.cjs` 的 `leafNames` 漏 `HiddenDevicesModal`（v2.4.4 起 App.vue 已挂）导致整脚本加载失败、`responses` 缺 `getHiddenDevices`。
+- **新增回归测试** `tools/verify-device-list-empty.cjs`（4 条用例钉住「列表与空状态互斥」，仿 verify-cast-ui 的 compiler-sfc + createRenderer + node:vm 手法），并做了**负向验证**（还原旧结构 → 4/4 变红）。两个坑写进注释：① `compileScript` 走 CommonJS 取 `.default`，imports 必须传 `{ __esModule: true, default: Stub }`；② 查找必须遍历挂载根 `container` 不能遍历 `body`（body 只有 teleport 才有内容）。
+- **验证**：`npx vue-tsc --noEmit` 0 错、`npm run build` 通过；verify-cast-ui **30/30**、verify-app-lifecycle 2/2、verify-device-list-empty 4/4、verify-playlist-advance 10/10；后端全量 **604 passed**；两道文档闸门绿（audit 3994 可疑 0、freshness FAIL 0/WARN 0，顺手修 5 处既有漂移：cast.ts 843→847/794→798、CHANGELOG cast.ts 531→535、CHANGELOG 里 57→58）。
+- **发版**：`npm run version:set -- 2.4.9`（7 处契约点）、CHANGELOG v2.4.9 节、`tools/` 顶层脚本 57→58（`tools/README.md` §1 + AGENTS.md）、19 份 .md 校对戳 → v2.4.9、commit `0e7571f`、tag `v2.4.9`。
+- **环境性失败（非回归）**：`verify-params-ui.mjs` / `verify-error-wrap-ui.mjs` / `verify-watch-page-live.mjs` / `verify-watch-page-sound.mjs` 均因 `~/.cache/puppeteer/chrome-headless-shell` 不存在而 ENOENT。
+
 ## 2026-11-03 发布轮：v2.4.8（手机遥控器页升级——常驻 + 媒体选择 + 功能加强）——已发布
 
 在 v2.4.7 之上把 v2.4.6 的手机遥控器页从「先投屏才能用、只有几个按钮」升级成真正的遥控器：应用一启动就常驻（手机浏览器打开即用），能选视频/粘链接/选目录投屏，有队列/历史/多设备/进度条/防息屏/横屏。

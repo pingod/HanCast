@@ -44,6 +44,14 @@
 ### 行号与硬数字
 `tools/` 顶层脚本 57 → **58 个**（口径：顶层 `.py/.sh/.cmd/.ps1/.mjs/.cjs`，见 `tools/README.md` §1，闸门逐行点名核对）。
 
+### 发布
+- 两道文档闸门绿：`audit-doc-refs.py` 合计 3994 处可疑 0；`check-doc-freshness.py` FAIL 0 / WARN 0，数字校验 11 处一致。顺手修掉 5 处既有漂移（`docs/HanCast-Frontend-Spec.md` 的 `cast.ts:843`→`:847`、`:794`→`:798`，本节 v2.2.18 那条 `cast.ts:531`→`:535`，v2.4.4 节里对当时脚本总数的写法补上时点）。
+- 后端全量 `pytest` **604 passed**（含 3 subtests）。
+- 发布提交 `0e7571f`、tag `v2.4.9`、CI run `41610373164` 三平台全绿。
+- **装端验收**（macOS aarch64，dmg sha256 `80d2679cc5b15f7c69b2bb648d9e7c93b14184d14e947937f0b5c378241a9099`）：`tools/install-macos-artifact.sh 2.4.9` 装上后 `tools/accept-macos-artifact.sh 2.4.9` → **ALL PASS**，sidecar 自报 2.4.9。
+- **真机像素复核**（这条 bug 只能看画面）：装好的 2.4.9 启动后局域网确实列出那两台设备（小度添添闺蜜机 Pro 4K Max、cl32），列表下方**只有卡片、没有空状态块**——与用户截图同一条件（有设备 + 无隐藏设备），确认已消除。
+- **环境性失败（非回归，不计入判据）**：`verify-params-ui.mjs` / `verify-error-wrap-ui.mjs` / `verify-watch-page-live.mjs` / `verify-watch-page-sound.mjs` 因本机 `~/.cache/puppeteer/chrome-headless-shell` 不存在而 ENOENT；装上 Chrome headless shell 即可复跑。
+
 ---
 
 ## v2.4.8 — 2026-11-03
