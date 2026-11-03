@@ -1,6 +1,6 @@
 # Changelog
 
-> 最后校对：2026-11-03，对应版本 v2.4.9（`package.json:4`）。
+> 最后校对：2026-11-03，对应版本 v2.4.10（`package.json:4`）。
 
 本文件记录 HanCast 的版本历史。口径说明：
 
@@ -8,6 +8,39 @@
 - 版本号唯一来源是 **`package.json` 的 `version`**（`scripts/sync-version.cjs:4,17`），`npm run version:set <x.y.z>` 把它刷进 7 处契约点：`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`（本地包那条，v2.3.8 起收进来——此前每版都靠人肉补）、`hancast-backend/pyproject.toml`、`hancast_sidecar/utils/config.py:39`、`src/api/commands.ts`（mock）、`src/stores/settings.ts`。`scripts/check-version.cjs` 自称以 `tauri.conf.json` 为源（口径相反），但全仓无人调用，是未接线的孤儿脚本——判定以 `sync-version.cjs` 为准。详见 [docs/构建与发布.md](docs/构建与发布.md) §1。
 - 下表「提交」列即 `git tag <版本>` 指向的提交；细节以 `git show <提交>` 为准，本文只留用户可感知的变化。
 - 新加版本时**同一次提交**里补这里，并按 [docs/README.md](docs/README.md) §4 的约定同步对应文档。
+
+---
+
+## v2.4.10 — 2026-11-03
+
+手机遥控器从「功能存在但用不上」变成能真正用起来：**首页常驻「手机遥控」按钮，弹窗给出地址并可一键复制**，同时把地址里的 token 从「每次启动换一段」改成**落盘复用**。
+
+### 为什么需要
+用户原话：「你好像还没告诉我手机端怎么访问页面，界面上我也没看到任何提示」。查下来两个问题叠在一起：
+
+1. **入口根本不存在**。v2.4.6 加的手机遥控器页一直是「后端有个服务、但前端没有任何地方露出地址」，用户只能靠翻日志或自己想。功能等于没交付。
+2. **地址不稳定，但界面文案写着「地址固定不变」**。token 每次进程启动都重新生成（`secrets.token_urlsafe(9)`），昨天存的书签今天必然 404——而遥控器页自己的文案承诺可以加书签。这是**文档对用户说谎**，比没入口更糟。
+
+### 改动
+1. 新增 `src/components/RemoteControlPanel.vue`（139 行）：弹窗展示完整地址（去掉 `http://` 便于手输）、点地址或「复制链接」即复制；打开时先 `remote_status`，服务没跑就自动补一次 `start_remote_control`。
+2. `src/views/HomeView.vue`：屏幕投屏按钮旁新增常驻「手机遥控」按钮，两者包进 `.home__actions`；面板常驻挂载，不依赖是否在投屏。
+3. `src/locales/zh-CN.json` / `en-US.json`：新增 `home.remote`（「手机遥控」/“Phone remote”），两份各 400 键。
+4. `hancast-backend/hancast_sidecar/remote/server.py`：`RemoteControlServer.__init__` 增加 `token` 参数，由调用方注入；没注入时才现生成。
+5. `hancast-backend/hancast_sidecar/commands.py`：新增 `_remember_remote_token()`，把首次生成的 token 写进配置 `remote_control_token` 并落盘（幂等，未变不写盘）；构造遥控器服务时读回来注入。`stop_remote_control` **不删**这个键。
+6. 新增 `tools/verify-remote-entry.cjs`：真 SFC 编译 `HomeView.vue` + `RemoteControlPanel.vue`，3 条断言钉住「首页有两个常驻按钮」「已在跑时不重复 start」「没跑时自动 start」。
+7. 新增 `hancast-backend/tests/test_remote_token_persistence.py`：8 条用例覆盖注入 / 落盘 / 复用 / 幂等 / 空值不写。
+8. `tools/verify-app-lifecycle.cjs`：叶子白名单补 `RemoteControlPanel`。
+
+### 给用户的答案
+手机与电脑连**同一个局域网**，打开首页「手机遥控」弹窗里那个地址（形如 `192.168.1.5:8899/r/x7Kd2pQ1a/`）即可；地址长期有效，可加书签。连不上的判据顺序写在 [docs/故障排查.md](docs/故障排查.md) §5.8。
+
+### 验证
+- `node tools/verify-remote-entry.cjs` → **3/3 PASS**；删掉首页按钮与面板挂载后用例 1 变红（判据抓得住）。
+- `cd hancast-backend && .venv/bin/python -m pytest tests/test_remote_token_persistence.py` → **8 passed**；`git stash` 掉后端两处改动后 → **8 failed**（证明测的是真行为）。
+- `node tools/verify-cast-ui.cjs` → 30/30；`node tools/verify-device-list-empty.cjs` → 4/4；`node tools/verify-app-lifecycle.cjs` → 2/2。
+- `npx vue-tsc --noEmit` exit 0；`npm run build` ✓。
+- 口径变化：components 21→22、`tools/` 顶层脚本 58→59、`test_*.py` 38→39、locale 各 399→400 键。
+
 
 ---
 
@@ -166,7 +199,7 @@ HanCast 本身既是控制端也能当接收端（DLNA 渲染端），但设备�
 - 新增 Sidecar 命令 `cast_failure_list` / `cast_failure_clear`；后台日志面板新增「投屏失败台账」区（`components/LogsPanel.vue`，中英文案 `logs.castFailures*`）。
 
 ### 直链有效性预检 + 历史自动重解
-- 新增 Sidecar 命令 `probe_url`（commands.py:1158）：探直链是否还在（过期 / 被 CDN 判废提前暴露）。前端 `MediaInput.vue:601` 在历史条目重投前调用；历史里的 url 条目重投时自动回来源页重解（提示文案 `media.historyDead` / `media.historyDeadHint`）。
+- 新增 Sidecar 命令 `probe_url`（commands.py:1174）：探直链是否还在（过期 / 被 CDN 判废提前暴露）。前端 `MediaInput.vue:601` 在历史条目重投前调用；历史里的 url 条目重投时自动回来源页重解（提示文案 `media.historyDead` / `media.historyDeadHint`）。
 
 ### 行号与硬数字
 - 命令总数 71 → **74**（lib.rs:1547-1615），Sidecar 注册表 64 → **67**（`commands.py:131-228`），`src/api/commands.ts` 导出 70 → **73**，locale 369 → **375** 键。

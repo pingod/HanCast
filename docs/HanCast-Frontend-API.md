@@ -2,7 +2,7 @@
 
 > 回答一个问题：前端 `invoke()` 出去的每一条命令，究竟由壳层（Rust/Tauri）就地执行、还是转发给 Sidecar（Python 后台进程）；它的入参、返回结构、可能错误，以及 Sidecar 主动推给前端的事件分别是什么。
 >
-> 最后校对：2026-11-03，对应版本 v2.4.9（`package.json:4`）。本轮（v2.4.8）：遥控器页升级新增 `remote_update_ui` 命令（前端同步队列/历史/播放模式给后端），命令总数 80→81、Sidecar 注册表 73→74、前端封装 79→80；§7 快速参考表补 1 行、§2 遥控器段更新。上一轮（v2.4.7）：添加本机 `add_local_device`。
+> 最后校对：2026-11-03，对应版本 v2.4.10（`package.json:4`）。本轮（v2.4.10）：§7 遥控器三条（`start_remote_control` / `stop_remote_control` / `remote_status`）补 token 落盘复用语义——地址长期不变、stop 不删配置键、首页弹窗先 `remote_status` 再补 start。命令总数不变（81）。上一轮（v2.4.8）：遥控器页升级新增 `remote_update_ui` 命令，Sidecar 注册表 73→74。
 
 ---
 
@@ -178,7 +178,7 @@ Tauri 2 会把 JS 侧的 camelCase 自动映射到 Rust 的 snake_case 形参。
 
 | 命令名 | 前端封装 | 入参 | 返回 | 执行层 | 可能的错误 |
 | --- | --- | --- | --- | --- | --- |
-| `start_cast` | `startCast(deviceId, mediaUri, mimeType?)` commands.ts:1096 | `deviceId: string`、`mediaUri: string`、`mimeType?: string` | `void`；成功后 Sidecar 立即补发一条 `cast_state_changed`（commands.py:618、`:515`） | Sidecar | `Device not found: <device_id>`（commands.py:527）；`session.play()` 抛出的控制点异常原文（`ControlUrlUnavailable` / `RendererUnresponsive`，`protocol/dlna.py:119-126`）。本地文件路径会被 Sidecar 换成媒体服务器 HTTP 地址（commands.py:506-531） |
+| `start_cast` | `startCast(deviceId, mediaUri, mimeType?)` commands.ts:1096 | `deviceId: string`、`mediaUri: string`、`mimeType?: string` | `void`；成功后 Sidecar 立即补发一条 `cast_state_changed`（commands.py:621、`:515`） | Sidecar | `Device not found: <device_id>`（commands.py:527）；`session.play()` 抛出的控制点异常原文（`ControlUrlUnavailable` / `RendererUnresponsive`，`protocol/dlna.py:119-126`）。本地文件路径会被 Sidecar 换成媒体服务器 HTTP 地址（commands.py:506-531） |
 | `stop_cast` | `stopCast(deviceId?)` commands.ts:1117 | `deviceId?: string`（省略 = 停全部会话） | `{ ok: true, stopped: string[], control_failed: string[], reasons: Record<string,string> }`（commands.py:571-597） | Sidecar | 命令本身**不抛错**（幂等，先摘会话再发 SOAP Stop，commands.py:560-571）；「电视没收到 Stop」体现在 `control_failed` / `reasons` 里，不是异常 |
 | `pause_cast` | `pauseCast(deviceId?)` commands.ts:1122 | `deviceId?: string` | `void` | Sidecar | 通用；无会话时回落到主渲染器 `self.protocol.pause()`（commands.py:592-613） |
 | `resume_cast` | `resumeCast(deviceId?)` commands.ts:1204 | `deviceId?: string` | `void` | Sidecar | 通用；同上回落逻辑（commands.py:600-621） |
@@ -273,7 +273,7 @@ Device Guard 管的是**接收投屏**方向：外部设备往本机推流时，
 
 壳层定义：lib.rs:342-489。Sidecar 处理函数：commands.py:753-812。
 
-约定：**所有会改动插件仓库的命令（import / remove / set_rule_enabled / pull）都返回全量 `{plugins: [...]}`**，前端拿它直接刷新列表，不需要再调一次 `plugin_list`（commands.py:186 的注释就是这个意思）。`rule_inventory` 是例外，它返回的是 `script_packs` 键。
+约定：**所有会改动插件仓库的命令（import / remove / set_rule_enabled / pull）都返回全量 `{plugins: [...]}`**，前端拿它直接刷新列表，不需要再调一次 `plugin_list`（commands.py:188 的注释就是这个意思）。`rule_inventory` 是例外，它返回的是 `script_packs` 键。
 
 规则包索引默认地址来自后台参数 `rules.index_url`（默认值 `DEFAULT_RULES_INDEX` `params.py:19-23`，登记表条目 `params.py:222-224`），`plugin_pull` 会按索引条目的 `sha256` 校验下载内容，**对不上就不落盘**（`jsplugins.py:682-688`）。
 
@@ -400,9 +400,9 @@ Device Guard 管的是**接收投屏**方向：外部设备往本机推流时，
 | --- | --- | --- | --- | --- |
 | `ready` | 无（`data` 为 `{}`，`protocol_io.py:58`） | `hancast-backend/hancast_sidecar/main.py:110` | **无前端订阅者**（全仓 `listen(` 检索无命中） | Sidecar 启动完成、进入 `for line in sys.stdin` 主循环之前，握手用。壳层也不监听它 |
 | `device_found` | `id: string`、`name: string`（已被 `display_name` 覆盖）、`device_type: string`、`ip: string`、`port: number`、`status: string`、`is_default: boolean`、`manufacturer: string\|null`、`model_name: string\|null`、`udn: string`、`custom_name: string\|null`、`location: string` | commands.py:289（`_on_device_found`，载荷是 `Device.to_dict()`，`models/device.py:26-29`） | src/stores/device.ts:182 | SSDP 收到 NOTIFY/搜索响应并完成描述抓取时。同一设备重复发现也会发，前端做 upsert（device.ts:182-195）。**v2.3.13 起有准入门槛**：描述里必须声明 `AVTransport` 服务（`ssdp.py:1095`、`ssdp.py:1190-1196`），路由器/NAS 这类「有 UPnP 描述但投不了屏」的设备不再发事件、也不进列表 |
-| `device_lost` | `id: string` | commands.py:267（`_on_device_lost`） | src/stores/device.ts:199 | 收到 SSDP byebye（`ssdp.py:746-759`）或探活判定过期（`ssdp.py:743-744`、`discovery.device_stale_s`，`ssdp.py:768`） |
+| `device_lost` | `id: string` | commands.py:269（`_on_device_lost`） | src/stores/device.ts:199 | 收到 SSDP byebye（`ssdp.py:746-759`）或探活判定过期（`ssdp.py:743-744`、`discovery.device_stale_s`，`ssdp.py:768`） |
 | `cast_state_changed` | `status: string`、`device_id: string\|null`、`position: string`（`HH:MM:SS`）、`duration: string`（`HH:MM:SS`，见下注）、`volume: number`、`is_muted: boolean`、`media?: MediaInfo`（有媒体时才带） | commands.py:331（DLNA `TransportState` 变化回调）、commands.py:524（`start_cast` 后立即补发）、commands.py:554（`stop_cast` 逐设备发）、commands.py:611（`_emit_session_state`，会话轮询回调） | `src/stores/cast.ts:687-783` | 投屏状态机变化。**注意 commands.py:319-328 那条路径不带 `duration`**，前端要容错 |
-| `cast_confirm_request` | `request_id: string`、`device: { ip, udn, friendly_name, model_name }`、`timeout: number`（秒） | commands.py:1515（`_on_guard_confirm_request`） | `src/stores/guard.ts:126` | 外部设备向本机推流、且该来源不在信任/黑名单里时（`guard.py:188-238` → `240-272`）。前端收到后弹确认框并把窗口拉到前台（`guard.ts:141-148`） |
+| `cast_confirm_request` | `request_id: string`、`device: { ip, udn, friendly_name, model_name }`、`timeout: number`（秒） | commands.py:1531（`_on_guard_confirm_request`） | `src/stores/guard.ts:126` | 外部设备向本机推流、且该来源不在信任/黑名单里时（`guard.py:188-238` → `240-272`）。前端收到后弹确认框并把窗口拉到前台（`guard.ts:141-148`） |
 | `screen_cast_state_changed` | 与 `screen_cast_status` 返回体**完全相同**：`running`、`target`、`source`、`device_id`、`session_id`、`watch_url`、`url`、`viewers`、`error`、`started_at`，外加 `pull`、`ffmpeg` | `screencast/manager.py:469`（`_emit()`，载荷就是 `self.status()`） | `src/stores/screencast.ts:285-300` | 屏幕投屏启动成功（`manager.py:167`）、停止（`manager.py:225`）、捕获出错、观众数变化时 |
 | `update-available` | `has_update: boolean`、`current: string`、`latest: string`、`url: string`、`body: string`（≤500 字符）、`source: string` | src-tauri/src/lib.rs:1360（**壳层发出，不是 Python**） | `src/stores/update.ts:94` | 启动后台检查（lib.rs:1291-1323，睡 3s 后查 GitHub）命中新版本时。商店版本不会发 |
 | `autostart-changed` | `boolean`（新的自启状态） | src-tauri/src/lib.rs:1244（`set_autostart` 命令）、src-tauri/src/lib.rs:1344（托盘菜单勾选回调） | `src/stores/settings.ts:32`；**另有壳层自监听** src-tauri/src/lib.rs:1389（同步托盘勾选态） | 开机自启状态被任何一侧改动时。前端据此更新设置页开关，避免与托盘状态打架 |
@@ -909,9 +909,9 @@ v2.4.3 及以前 `unhide_device` / `get_hidden_devices` 只有 Sidecar 实现、
 | 73 | `cast_failure_list` | 取投屏（出站）失败台账：设备 / 阶段 / 错误 / 地址 / 次数（v2.4.5） | SC |
 | 74 | `cast_failure_clear` | 清空投屏失败台账（v2.4.5） | SC |
 | 75 | `probe_url` | 1 秒预算探一次地址是否还活着（历史直链重投前预检，v2.4.5） | SC |
-| 76 | `start_remote_control` | 启动手机遥控器页（v2.4.8 起随应用常驻，幂等；已在跑返回同一地址），返回带一次性 token 的局域网地址（v2.4.6） | SC |
-| 77 | `stop_remote_control` | 关闭遥控器页并作废 token（v2.4.6） | SC |
-| 78 | `remote_status` | 遥控器页运行状态与访问地址（v2.4.6） | SC |
+| 76 | `start_remote_control` | 启动手机遥控器页（v2.4.8 起随应用常驻，幂等；已在跑返回同一地址），返回带 token 的局域网地址（v2.4.6；**v2.4.10 起 token 首启生成后落盘复用**，键 `remote_control_token`，所以同一台机器上的地址长期不变） | SC |
+| 77 | `stop_remote_control` | 关闭遥控器页（v2.4.6）。**不删**落盘的 `remote_control_token`——下次启动还是同一段（v2.4.10） | SC |
+| 78 | `remote_status` | 遥控器页运行状态与访问地址（v2.4.6）；首页「手机遥控」弹窗打开时先调它，`ok` 为假才补一次 `startRemoteControl`（`src/components/RemoteControlPanel.vue:28-30`） | SC |
 | 79 | `subtitle_apply` | 把外挂字幕封进当前视频并重投同一台电视（v2.4.6） | SC |
 | 80 | `subtitle_status` | 查询字幕内封任务进度（v2.4.6） | SC |
 | 81 | `remote_update_ui` | 前端把播放队列 / 历史 / 播放模式 / 播完即停同步给后端，供遥控器页读取（v2.4.8） | SC |

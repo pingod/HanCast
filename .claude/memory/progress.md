@@ -1,5 +1,18 @@
 # HanCast 开发进度
 
+## 2026-11-03 发布轮：v2.4.10（手机遥控器地址可见 + 令牌落盘复用）——待发布
+
+用户问 user said: "你好像还没告诉我手机端怎么访问页面,界面上我也没看到任何提示"。查下去发现是两个问题叠在一起。
+
+- **问题一：入口不存在**。手机遥控器服务 v2.4.6 就有，但界面上**没有任何地方**显示地址——只有开发者知道去 `remote_status` 里捞。用户从界面上根本无从得知。
+- **问题二：地址不稳定却宣称可加书签**。`remote/server.py` 每次进程启动都随机生成 token，而文档/文案写着「地址固定不变，可加书签」。昨天存的链接今天就是 404。
+- **修法（入口）**：新增 `src/components/RemoteControlPanel.vue`（139 行，弹窗展示地址、整块可点复制、走 `writeClipboardText`），`HomeView.vue` 首页加常驻「手机遥控」按钮（与屏幕投屏并列，`.home__actions` 容器）；i18n 加 `home.remote`（两份各 400 键）。
+- **修法（令牌）**：`RemoteControlServer.__init__` 加第 4 个参数 `token`，由 `CommandHandler` 从配置键 `remote_control_token` 读出来注入；新增 `_remember_remote_token()`（幂等，只在变化时 `config.save()`），首启生成后回写，之后所有启动复用。`stop_remote_control` **不删**落盘 token。
+- **新增测试**：`hancast-backend/tests/test_remote_token_persistence.py`（8 条，含「构造即可落盘」「重启复用同一令牌」「令牌未变不重复写盘」「真起服务后地址里的令牌仍是注入的那个」），并做 `git stash` 负向验证（8 failed → 恢复后 8 passed）。`tools/verify-remote-entry.cjs`（3 条，仿 compiler-sfc + createRenderer + node:vm，负向验证「删掉首页按钮 → 用例 1 变红」）。三个坑写进注释：`vue.createApp` 走 runtime-dom 会 `ReferenceError: window is not defined` 必须用 `renderer.createApp`；Proxy 作 imports 必须加 `has() { return true }` 否则 `name in imports` 短路成 `Unexpected import`；断言输出要打 `error.stack`。
+- **文档**：`docs/故障排查.md` 新增 **§5.8**「手机遥控器页：地址在哪、手机怎么连、连不上怎么办」（地址在界面哪、手机侧三件事、token 稳定性、连不上判据表 6 行），§5.7 按新行为重写并删掉「每次启动新 token」的谎话，§2 症状索引加两行；`docs/HanCast-Frontend-Spec.md` 组件清单 21→22；`docs/HanCast-Frontend-API.md` §7 三条遥控命令补 token 语义；`docs/架构总览.md` 行数表（`commands.py` 1668、`remote/server.py` 718，顺带校准 `security/guard.py` 701→714）；`docs/开发指南.md` 测试地图 41 文件 10127 行 → 42 文件 10235 行；`tools/README.md` 58→59 并登记新脚本。
+- **验证**：`npx vue-tsc --noEmit` 0 错、`npm run build` 通过（主包 374.08 kB）；verify-remote-entry **3/3**、verify-cast-ui **30/30**、verify-device-list-empty **4/4**、verify-app-lifecycle **2/2**；两道闸门 audit 4042 可疑 0、freshness 数字 11 处一致 FAIL 0/WARN 0（自动重锚 20 处 `commands.py`/locale 漂移 + 2 处手工：`HomeView.vue:53-57`→`:73-77`、API.md 把 `start_remote_control` 改成 TS 侧真名 `startRemoteControl`）。
+- **口径变化**：components 22、tools 顶层脚本 59、`test_*.py` 39、locale 各 400 键。
+
 ## 2026-11-03 发布轮：v2.4.9（设备列表空状态误显示 + 遥控器镜像定时器泄漏）——已发布
 
 用户贴截图质问「这么明显的bug没发现??」：设备列表已渲染两台 LAN 设备，下方同时又显示「还没有发现设备」空状态块。

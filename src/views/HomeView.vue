@@ -4,12 +4,14 @@ import MediaInput from '@/components/MediaInput.vue'
 import DeviceList from '@/components/DeviceList.vue'
 import CastController from '@/components/CastController.vue'
 import ScreenCastPanel from '@/components/ScreenCastPanel.vue'
+import RemoteControlPanel from '@/components/RemoteControlPanel.vue'
 import StopWarningBanner from '@/components/StopWarningBanner.vue'
 import Footer from '@/components/Footer.vue'
 import AutostartPromptModal from '@/components/AutostartPromptModal.vue'
 import { useCastStore } from '@/stores/cast'
 import { useScreenCastStore } from '@/stores/screencast'
 import { useI18n } from 'vue-i18n'
+import { ref } from 'vue'
 import { storeToRefs } from 'pinia'
 
 const { t } = useI18n()
@@ -17,6 +19,9 @@ const castStore = useCastStore()
 const screenCastStore = useScreenCastStore()
 const { showAutostartPrompt } = storeToRefs(castStore)
 const { isRunning: screenCastRunning } = storeToRefs(screenCastStore)
+
+// 手机遥控入口常驻首页：这个地址不该只在「正在投屏」的控制器里才看得到
+const remoteOpen = ref(false)
 </script>
 
 <template>
@@ -28,18 +33,32 @@ const { isRunning: screenCastRunning } = storeToRefs(screenCastStore)
           <h1>{{ t('home.title') }}</h1>
           <p>{{ t('home.subtitle') }}</p>
         </div>
-        <button
-          class="home__screencast-btn"
-          :class="{ 'home__screencast-btn--live': screenCastRunning }"
-          @click="screenCastStore.openPanel()"
-        >
-          <span v-if="screenCastRunning" class="home__screencast-dot"></span>
-          <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="3" y="4" width="18" height="13" rx="2" />
-            <path d="M8 21h8M12 17v4" />
-          </svg>
-          <span>{{ screenCastRunning ? t('screencast.entryRunning') : t('home.screenCast') }}</span>
-        </button>
+        <div class="home__actions">
+          <button
+            class="home__screencast-btn"
+            :class="{ 'home__screencast-btn--live': screenCastRunning }"
+            @click="screenCastStore.openPanel()"
+          >
+            <span v-if="screenCastRunning" class="home__screencast-dot"></span>
+            <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="4" width="18" height="13" rx="2" />
+              <path d="M8 21h8M12 17v4" />
+            </svg>
+            <span>{{ screenCastRunning ? t('screencast.entryRunning') : t('home.screenCast') }}</span>
+          </button>
+          <button
+            class="home__screencast-btn"
+            type="button"
+            :title="t('cast.remoteTitle')"
+            @click="remoteOpen = true"
+          >
+            <svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="7" y="2" width="10" height="20" rx="2" />
+              <path d="M11 5h2M11 18h2" />
+            </svg>
+            <span>{{ t('home.remote') }}</span>
+          </button>
+        </div>
         <div v-if="screenCastRunning" class="home__screencast-viewers">
           {{ screenCastStore.state.viewers ?? 0 }} {{ t('screencast.viewers') }}
         </div>
@@ -62,6 +81,8 @@ const { isRunning: screenCastRunning } = storeToRefs(screenCastStore)
     <CastController />
     <!-- 屏幕投屏面板 -->
     <ScreenCastPanel />
+    <!-- 手机遥控器地址（常驻入口，不依赖是否正在投屏） -->
+    <RemoteControlPanel :visible="remoteOpen" @close="remoteOpen = false" />
     <!-- Autostart prompt (first successful cast) -->
     <AutostartPromptModal
       :visible="showAutostartPrompt"
@@ -114,6 +135,13 @@ const { isRunning: screenCastRunning } = storeToRefs(screenCastStore)
   .home__content { padding: 12px; gap: 16px; }
   .home__heading h1 { font-size: 19px; }
   .home__heading p { max-width: 155px; }
+}
+
+.home__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .home__screencast-btn {

@@ -3,7 +3,7 @@
 > 旧名 `CLAUDE.md`（Claude Code 私有约定），2026-10-15 改名为跨工具的 `AGENTS.md`；
 > `CLAUDE.md` 现在只留三行指针指向本文件。
 
-> 最后校对：2026-11-03，对应版本 v2.4.9（`package.json:4`）。本轮（v2.4.9）：修 `DeviceList.vue` 的 `v-else` 错配（有设备时又显示空状态块，v2.4.4 引入）+ `cast.ts` 遥控器镜像去抖定时器泄漏 + 三处验收脚本桩/白名单失效（`verify-cast-ui.cjs`、`verify-app-lifecycle.cjs`），新增 `tools/verify-device-list-empty.cjs`，`tools/` 顶层脚本 57→58。上一轮（v2.4.8）：手机遥控器页升级，新增 `remote_update_ui` 命令，`#[tauri::command]` 80→81、Sidecar 注册 73→74。
+> 最后校对：2026-11-03，对应版本 v2.4.10（`package.json:4`）。本轮（v2.4.10）：手机遥控器地址在首页常驻可见（新增 `src/components/RemoteControlPanel.vue`，组件 21→22）＋遥控器令牌落盘复用（原来每次启动换一段，界面却写「可加书签」）＋新增 `tools/verify-remote-entry.cjs`（`tools/` 顶层脚本 58→59、`test_*.py` 38→39、locale 各 400 键）。上一轮（v2.4.9）：修 `DeviceList.vue` 的 `v-else` 错配（有设备时又显示空状态块，v2.4.4 引入）+ `cast.ts` 遥控器镜像去抖定时器泄漏 + 三处验收脚本桩/白名单失效，新增 `tools/verify-device-list-empty.cjs`。
 > 本文件是速览与硬约束；逐模块的深度内容在 **docs/README.md** 的索引里，别在这里找细节。
 
 ## 项目概述
@@ -12,7 +12,7 @@
 
 - **项目名**: HanCast
 - **作者**: lanzeweie@foxmail.com
-- **版本**: 2.4.9（版本 SSOT 是 `package.json` 的 `version`，`scripts/sync-version.cjs:4`；改版本只走 `npm run version:set`，见「版本管理」）
+- **版本**: 2.4.10（版本 SSOT 是 `package.json` 的 `version`，`scripts/sync-version.cjs:4`；改版本只走 `npm run version:set`，见「版本管理」）
 - **性质**: 二次开发（非原项目官方更新）
 - **原始代码**: [xfangfang/Macast](https://github.com/xfangfang/Macast)（原作者 xfangfang，最后更新 2022-01）。仓库里**不含** `Macast-main/`、`Macast-plugins-main/` 这些本地目录，1.x 源码只作为移植参考，见「原始代码复用情况」
 - **目标架构**: Tauri 2.0 前端 + Rust 桥接 + Python Sidecar（+ MPV 接收端播放、FFmpeg 屏幕抓取）
@@ -55,7 +55,7 @@ HanCast/
 │   ├── App.vue                  # 根组件（主题检测、设置加载、全局事件订阅）
 │   ├── api/
 │   │   └── commands.ts          # Tauri invoke 封装 + 浏览器 mock
-│   ├── components/              # 21 个组件，清单见 docs/HanCast-Frontend-Spec.md
+│   ├── components/              # 22 个组件，清单见 docs/HanCast-Frontend-Spec.md
 │   │   ├── TitleBar.vue         # 自定义标题栏（最小化、关闭、设置）
 │   │   ├── MediaInput.vue       # 拖拽 + URL 输入 + 剪贴板粘贴
 │   │   ├── DeviceList.vue / DeviceCard.vue / AddDeviceModal.vue   # 设备
@@ -152,7 +152,7 @@ HanCast/
 │   ├── scripts/
 │   │   ├── build_sidecar.py     # Nuitka 构建脚本 + flatten_dependencies()
 │   │   └── run_sidecar.py       # 独立 Sidecar 运行器
-│   └── tests/                   # 38 个 test_*.py + 2 个 smoke_*.py + conftest.py + data/（清单见 docs/开发指南.md）
+│   └── tests/                   # 39 个 test_*.py + 2 个 smoke_*.py + conftest.py + data/（清单见 docs/开发指南.md）
 │
 ├── rule-packs/                  # 官方规则包源码与产物
 │   ├── hancast-bilibili / hancast-douyin / hancast-template
@@ -162,7 +162,7 @@ HanCast/
 │   ├── Cargo.toml / Cargo.lock  # --locked 构建；不依赖 GTK
 │   └── src/main.rs              # 886 行：list / capture --output --fps，帧按紧凑 BGRA 写 stdout
 ├── scripts/                     # 壳层脚本：sync-version / check-version / sync-sidecar / check-resources / build-arch-pkg（均为 .cjs）
-├── tools/                       # 58 个顶层脚本 + 1 个目录型验收包（browser-channel-livecheck/），索引与计数口径见 tools/README.md
+├── tools/                       # 59 个顶层脚本 + 1 个目录型验收包（browser-channel-livecheck/），索引与计数口径见 tools/README.md
 ├── mpv/                         # 本地放置的 MPV（`.gitignore:86-87` 只留 portable_config/）
 │   └── portable_config/mpv.conf # 入库：弹幕/OSD 脚本、着色器、字体
 ├── docs/                        # 设计文档，**入口是 docs/README.md**
@@ -282,7 +282,7 @@ Rust 命令名与 Sidecar `cmd` 名不一定同名（例如 Rust 的 `plugin_lis
 
 | 服务 | 端口 | 说明 |
 |------|------|------|
-| DLNA Server | 默认 8080，占用则回退随机 | 描述 XML、SCPDXML、入站 SOAP 处理。端口由 `commands.py:86-90` 传入，冲突回退见 `protocol/server.py:356-363`；**真实端口回灌给 SSDP**（commands.py:283 `self.ssdp._port = self.dlna_server.get_port()`），否则设备抓到 8080 却取不到描述文件 |
+| DLNA Server | 默认 8080，占用则回退随机 | 描述 XML、SCPDXML、入站 SOAP 处理。端口由 `commands.py:86-90` 传入，冲突回退见 `protocol/server.py:356-363`；**真实端口回灌给 SSDP**（commands.py:285 `self.ssdp._port = self.dlna_server.get_port()`），否则设备抓到 8080 却取不到描述文件 |
 | SSDP Service | 1900 | UDP 多播，设备发现（NOTIFY + M-SEARCH）；组播被系统阻断时回退子网广播（`ssdp.py:32,416,556-557`），NOTIFY 周期 30s 对齐 `CACHE-CONTROL: max-age=66`（`ssdp.py:6`）。**发现不扫描端口**，且描述必须声明 `AVTransport` 服务才登记（`ssdp.py:1095`、`ssdp.py:1190-1196`，v2.3.13），路由器/NAS 不进列表，判据 `tools/verify-ssdp-cast-gate.py` |
 | Media Server | 0 = 自动选择 | 本地文件 HTTP 服务（Range + 边下边播代理），`config.media_port` 默认 0（`utils/config.py:112-114`、commands.py:229） |
 | Screencast HTTP | 默认 8765 | 观看页 + HLS 供流（`screencast/httpd.py:32,84`），观看链接带每会话新生成的短随机段 `/r/<session_id>` |
@@ -677,7 +677,7 @@ python3 tools/audit-doc-refs.py        # 文档引用的 文件:行号 是否还
 python3 tools/check-doc-freshness.py   # 引用**内容**对不对 + 校对戳 + 硬数字（v2.3.23 起，见「文档维护约定」）
 ```
 
-`tools/` 下 58 个顶层脚本（+ `browser-channel-livecheck/` 目录型验收包）按用途分类见 tools/README.md（计数口径同那里，且由闸门逐行点名核对）；端到端验收脚本的判据写在
+`tools/` 下 59 个顶层脚本（+ `browser-channel-livecheck/` 目录型验收包）按用途分类见 tools/README.md（计数口径同那里，且由闸门逐行点名核对）；端到端验收脚本的判据写在
 docs/构建与发布.md §6 与各专题文档，不要凭脚本退出码 0 就当作功能可用。
 
 ## 窗口配置

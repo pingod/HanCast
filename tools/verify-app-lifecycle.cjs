@@ -24,6 +24,8 @@ const leafNames = new Set([
   // v2.4.4 起 App.vue 还挂了隐藏设备管理弹窗；这里漏登记会让整个脚本以
   // 「Unexpected import @/components/HiddenDevicesModal.vue」直接加载失败。
   'HiddenDevicesModal',
+  // v2.4.10 起 HomeView 常驻挂手机遥控弹窗；同样必须登记，漏了就是整个脚本加载失败。
+  'RemoteControlPanel',
   'TitleBar', 'MediaInput', 'DeviceList', 'CastController', 'ScreenCastPanel',
   'StopWarningBanner', 'Footer', 'AutostartPromptModal',
 ])

@@ -8,6 +8,8 @@
   "home.title": "开始投屏",
   "home.subtitle": "选择媒体，连接你的设备",
   "home.screenCast": "屏幕投屏",
+  "home.remote": "手机遥控",
+
   "devices.emptyTitle": "还没有发现设备",
   "devices.more": "管理 {name}",
   "theme.title": "外观",

@@ -3,12 +3,12 @@
 
 设计要点：
 - **随应用常驻**：sidecar 初始化时就启动（不再等第一次投屏），打开就能用；
-  端口优先 8899，占用则回退随机。token 也是启动时生成、整个会话不变
-  （重启/换端口才换），这样手机可以把地址加书签。
+  端口优先 8899，占用则回退随机。token 首次启动生成后**落盘复用**（v2.4.10），
+  换端口也不换，这样手机把地址加书签之后一直有效。
 - 页面是完全自包含的单个 HTML（内联 CSS/JS，不构建、不依赖外网/CDN），
   手机上打开即用；媒体选择/粘贴解析/投屏都复用后端既有命令，不另起一套。
 
-路由（token 是启动时随机生成、整个会话不变的路径段，防止隔壁同事随手点开）：
+路由（token 是首启生成、落盘复用的路径段，防止隔壁同事随手点开）：
 - GET  /r/{token}/                 遥控器页面（手机浏览器）
 - GET  /r/{token}/api/state        当前状态（设备/会话/队列/历史，页面每秒轮询）
 - POST /r/{token}/api/cmd          控制指令（play/pause/stop/seek/volume/mute/
@@ -454,6 +454,7 @@ class RemoteControlServer:
         get_state: Callable[[], Dict],
         action: Callable[[str, object], Dict],
         local_ip: Callable[[], str],
+        token: str = "",
     ):
         self._get_state = get_state
         self._action = action
@@ -464,7 +465,11 @@ class RemoteControlServer:
         self._on_resolve_poll: Optional[Callable[[str], Dict]] = None
         self.host = "0.0.0.0"
         self.port: Optional[int] = None
-        self.token: str = ""
+        # 访问令牌：URL 里那截随机段。**必须跨重启保持不变**——界面文案承诺
+        # 「地址固定不变，可加书签」，而早期实现每次进程启动都换 token，
+        # 于是昨天保存的书签第二天就是 404。由 CommandHandler 从配置里读出来注入、
+        # 首次生成后回写配置（见 commands.py 的 _remember_remote_token）。
+        self.token: str = token or ""
         self._thread: Optional[threading.Thread] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._runner = None

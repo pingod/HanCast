@@ -2,7 +2,7 @@
 
 > 本文档回答：HanCast 桌面端（Tauri 2 + Vue 3）的界面层是怎么搭起来的——窗口壳层、路由视图、组件与 Store 全量清单、真实数据流时序、样式与国际化机制、浏览器 mock 模式，以及写代码前必须知道的约束与坑。
 >
-> 最后校对：2026-11-03，对应版本 v2.4.9（`package.json:4`）。本轮（v2.4.8）：遥控器页升级（常驻+相册上传/粘链接/选目录+队列/历史/多设备/防息屏/横屏），locale 键 395→399；`CastController.vue` 遥控器弹窗改为常驻地址展示。上一轮（v2.4.7）：添加本机（自己投自己）。
+> 最后校对：2026-11-03，对应版本 v2.4.10（`package.json:4`）。本轮（v2.4.10）：§4 组件清单 21→22，新增 `RemoteControlPanel.vue`（首页常驻「手机遥控」入口），`HomeView.vue` 加 `remoteOpen` 与 `.home__actions`，locale 各 399→400 键。上一轮（v2.4.8）：遥控器页升级（常驻+相册上传/粘链接/选目录+队列/历史/多设备/防息屏/横屏）。
 
 术语约定：**Sidecar** = Python 后台进程（`hancast-backend/`，打包为 `hancast-sidecar`）；**壳层** = Rust/Tauri 层（`src-tauri/`）；**规则包** = JS 解析插件 zip；**声明式规则** = JSON 站点规则；**屏幕投屏** = screencast（把电脑屏幕投出去）；**接收投屏** = 本机作为 DLNA 渲染端被别的设备投；**投屏确认** = Device Guard；**后台参数** = `params.py` 可调项。
 
@@ -210,9 +210,9 @@ default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src '
 
 ---
 
-## 4. 组件清单（21 个，`src/components/`）
+## 4. 组件清单（22 个，`src/components/`）
 
-> 数量为实际 `ls` 清点结果：21 个 `.vue` 文件，一个不漏（v2.4.4 新增 `HiddenDevicesModal.vue`）。「挂载者」列为模板中的实际引用位置。
+> 数量为实际 `ls` 清点结果：22 个 `.vue` 文件，一个不漏（v2.4.10 新增 `RemoteControlPanel.vue`，v2.4.4 新增 `HiddenDevicesModal.vue`）。「挂载者」列为模板中的实际引用位置。
 
 | # | 组件 | 职责 | props | emits | 依赖 store | 被谁挂载 |
 |---|---|---|---|---|---|---|
@@ -238,6 +238,7 @@ default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src '
 | 20 | `FfmpegDepsModal.vue` | 「需要下载运行依赖」弹窗（418 行，v2.3.11 FFmpeg 去捆绑）：逐依赖显示检测状态与真实异常原文（`ffmpeg_status` 的 `items/missing`）；按平台给出包管理器安装命令（`install_commands`）与「打开安装目录」（`open_ffmpeg_dir`）；「重新检测」走 `refresh=true`；「下载并继续」起后台下载（`ffmpeg_download_start`）后按 1s 轮询 `ffmpeg_download_status`（轮询本体 `screencast.ts:109-124`、起表 `:134`；后端进度写入节流 0.4s，`ffmpeg_deps.py:390`）渲染进度/速度；`done` 时带 `refresh=true` 重测一次并**自动收起弹窗**（`:25` 的 watcher——「下载并继续」的「继续」是回到投屏面板，由用户再点一次开始投屏，程序不自动重放），安装命令可一键复制（`writeClipboardText`） | 无（visible 由 `screencastStore.showDepsModal` 驱动） | 无 | screencast | `ScreenCastPanel.vue:465`；内嵌 `Modal`(:4) |
 | 21 | `HiddenDevicesModal.vue` | 已隐藏设备管理（v2.4.4，约 180 行）：列出 `deviceStore.hiddenDevices`（名称、`is_self` 徽标、IP、在线/未发现），每行「恢复」按钮带 loading 态 → `deviceStore.unhide(udn)`；同时是手动添加地址的删除入口（`removeManualAddress`）。补上 v2.4.3 及以前「隐藏即单向、只能改配置文件」的窟窿 | 无（visible 由 `deviceStore.showHiddenModal` 驱动） | 无 | device | `App.vue:53`；内嵌 `Modal` |
 
+| 22 | `RemoteControlPanel.vue` | 手机遥控器入口弹窗（v2.4.10，139 行）：展示局域网遥控页地址并一键复制，地址里的 token 跨重启不变（落盘 `remote_control_token`，见 `docs/故障排查.md` §5.8）；打开时先 `remote_status`，服务没跑就自动 `start_remote_control`；`displayUrl` 去掉 `http://` 前缀便于手输，整块可点复制 | `visible` | `close` | 无（直接调 API） | `HomeView.vue`（常驻，`remoteOpen` 驱动）；内嵌 `Modal` |
 ---
 
 ## 5. Store 清单（11 个，`src/stores/`）
@@ -514,7 +515,7 @@ Modal 打开后聚焦 dialog，自带 Escape 关闭、Tab/Shift+Tab 循环与关
 
 ### 10.7 `stop_cast` 的 `control_failed` 不能吞
 
-lib.rs:600-607 注释：本地会话已释放、但电视没收到 Stop 时，前端要靠返回体里的 `control_failed` 解释「界面停了、电视还在播」。落点：`cast.ts:500-552`（stopCast 在 finally 释放仍属于本次操作的会话 + 置 `stopWarning`，不会删掉等待 Stop 时新开的同设备会话）→ `StopWarningBanner`（`HomeView.vue:53-57`）；屏幕投屏同款逻辑 `screencast.ts:212-249`。类型定义 `StopCastResult`/`StopWarning` 在 commands.ts:1281-1289。
+lib.rs:600-607 注释：本地会话已释放、但电视没收到 Stop 时，前端要靠返回体里的 `control_failed` 解释「界面停了、电视还在播」。落点：`cast.ts:500-552`（stopCast 在 finally 释放仍属于本次操作的会话 + 置 `stopWarning`，不会删掉等待 Stop 时新开的同设备会话）→ `StopWarningBanner`（`HomeView.vue:73-77`）；屏幕投屏同款逻辑 `screencast.ts:212-249`。类型定义 `StopCastResult`/`StopWarning` 在 commands.ts:1281-1289。
 
 ### 10.8 进度条与轮询的打架：主动解锁 + 单飞 + 操作代次
 

@@ -8,6 +8,8 @@
   "home.title": "Ready to cast",
   "home.subtitle": "Pick media. Connect your device.",
   "home.screenCast": "Share screen",
+  "home.remote": "Phone remote",
+
   "devices.emptyTitle": "No devices discovered yet",
   "devices.more": "Manage {name}",
   "theme.title": "Appearance",

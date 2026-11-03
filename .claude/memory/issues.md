@@ -87,6 +87,13 @@
 - **方案**：空状态块移回 `device-list__items` 之后（紧跟它的 v-else），隐藏按钮移到最后改独立 `v-if`。新增 `tools/verify-device-list-empty.cjs` 4 条用例钉住「列表与空状态互斥」，已做负向验证（还原旧结构即红）。
 - **教训**：多个相邻 `v-if` 共存时，`v-else` 绑的是**紧邻的上一个**而不是你以为的那个；改这块布局必须跑 `tools/verify-device-list-empty.cjs`。同类静默退化还有 `tools/verify-cast-ui.cjs`（v2.4.8 加新依赖后从 30/30 掉到 0/30 未被察觉）——验收脚本一旦不再被 CI 卡住，绿变红没人知道。
 
+### COMP-012: 手机遥控器页地址在界面上无处可见 + 令牌每次启动都换（v2.4.10 已修）
+- **现象**：用户原话「你好像还没告诉我手机端怎么访问页面,界面上我也没看到任何提示」。遥控器服务从 v2.4.6 就有，但界面上没有任何地方显示地址，只有开发者知道去 `remote_status` 里捞。
+- **叠加问题**：`remote/server.py` 每次进程启动都随机生成 token，而文案写着「地址固定不变、可加书签」——昨天存的链接今天就是 404。**文档与实现互相矛盾**。
+- **方案**：①新增 `src/components/RemoteControlPanel.vue`（弹窗展示地址、整块可点复制），`HomeView.vue` 首页加常驻「手机遥控」按钮；②`RemoteControlServer.__init__` 加 `token` 参数，由 `CommandHandler` 从配置键 `remote_control_token` 注入，`_remember_remote_token()` 首启生成后幂等回写，`stop_remote_control` 不删该键。
+- **判据**：`docs/故障排查.md` §5.8「手机遥控器页：地址在哪、手机怎么连、连不上怎么办」有 6 行连不上判据表。
+- **教训**：功能存在 ≠ 用户找得到。凡是要用户手抄/记忆的信息（地址、端口、口令），必须在界面上有一处可见入口，否则等于没做。
+
 ### COMP-008: 队列/定时/遥控器/字幕缺失（v2.4.6 已补齐）
 - **现象**：投屏只能一批替换、没有队列追加与跨重启记忆；播完自动下一集无法关；没有手机遥控；外挂字幕不能内封投屏。4.69GB 抖音文案一类场景尤其明显。
 - **方案**：playlist 持久化 + 追加、cast 播完即停/睡眠定时、`remote/server.py` 手机遥控页（一次性 token）、`media/subtitles.py` `-c copy` 内封 + 重投续播。

@@ -147,6 +147,8 @@ class CommandHandler:
             get_state=self._remote_sessions_state,
             action=self._remote_action,
             local_ip=self._get_local_ip,
+            # 令牌从配置读回：手机端地址必须跨重启稳定，否则「加书签」是空话
+            token=str(self.config.get('remote_control_token') or ''),
         )
 
         # 注册命令
@@ -322,6 +324,7 @@ class CommandHandler:
             "stop_after_current": False,
         }
         if self.remote_server.start(port=8899):
+            self._remember_remote_token()
             logger.info(f"[Remote] 遥控器页随应用启动: {self.remote_server.url}")
         else:
             logger.warning("[Remote] 遥控器页启动失败（端口占用或 aiohttp 缺失），投屏不受影响")
@@ -1037,7 +1040,20 @@ class CommandHandler:
         if not self.remote_server.running:
             if not self.remote_server.start(port=8899):
                 raise RuntimeError("遥控器页启动失败（端口被占用？）")
+            self._remember_remote_token()
         return {"ok": True, "url": self.remote_server.url, "port": self.remote_server.port}
+
+    def _remember_remote_token(self) -> None:
+        """把本次生成的遥控器令牌落盘，下次启动原样读回来。
+
+        令牌只在首次启动（配置里还没有）时生成，之后一直复用；每次启动都换的话，
+        用户昨天加的书签今天就 404，而界面还写着「地址固定不变」。
+        """
+        token = self.remote_server.token
+        if not token or token == self.config.get('remote_control_token'):
+            return
+        self.config.set('remote_control_token', token)
+        self.config.save()
 
     def _stop_remote_control(self, params: dict) -> dict:
         self.remote_server.stop()
