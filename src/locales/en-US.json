@@ -333,6 +333,8 @@
   "logs.mod.hancast_screencast": "Screen cast",
   "logs.mod.hancast_config": "Config",
   "logs.mod.hancast_params": "Advanced parameters",
+  "devices.addSelf": "Add This Computer (cast to itself)",
+  "devices.addSelfHint": "HanCast can also act as a receiver. Add this computer to the device list to cast to itself (e.g. play full-screen on this machine, or control it from a phone).",
   "devices.addDevice": "Add Device Manually",
   "devices.addHint": "Auto discovery relies on LAN multicast, which firewalls and security software often block (that is why Windows can find the Mac but not the other way round). Enter the address directly: a device IP (e.g. 192.168.1.68), IP:port, or the full description.xml link from the device page. Added devices are remembered and reconnected on startup.",
   "devices.addressPlaceholder": "Device IP / IP:port / full description.xml URL",

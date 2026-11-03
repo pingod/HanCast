@@ -23,6 +23,16 @@ async function submit() {
   }
 }
 
+// 一键把本机加进设备列表（自己投自己）。成功后与手动添加同样的反馈节奏
+async function addSelf() {
+  addedName.value = ''
+  const name = await deviceStore.addLocalDevice()
+  if (name) {
+    addedName.value = name
+    setTimeout(() => deviceStore.closeAddModal(), 900)
+  }
+}
+
 // 删掉一条填错的地址。以前这里只有只读文本，填错一次就得每次开机看着它自动重连失败
 async function removeAddress(addr: string) {
   try {
@@ -41,6 +51,17 @@ async function removeAddress(addr: string) {
     @close="deviceStore.closeAddModal()"
   >
     <p class="adm-hint">{{ t('devices.addHint') }}</p>
+
+    <!-- 本机一键添加：HanCast 自己也是 DLNA 渲染端，加进列表就能自己投自己，
+         不用手填 IP、也不必先让本机被 SSDP 发现 -->
+    <button class="adm-self" :disabled="deviceStore.adding" @click="addSelf">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="2" y="4" width="20" height="13" rx="2" />
+        <path d="M8 21h8M12 17v4" />
+      </svg>
+      <span>{{ deviceStore.adding ? t('devices.adding') : t('devices.addSelf') }}</span>
+    </button>
+    <p class="adm-self-hint">{{ t('devices.addSelfHint') }}</p>
 
     <div class="adm-row">
       <input
@@ -105,6 +126,38 @@ async function removeAddress(addr: string) {
 .adm-row {
   display: flex;
   gap: 6px;
+}
+
+.adm-self {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 12px;
+  margin-bottom: 4px;
+  font-size: 12px;
+  color: var(--on-primary);
+  background: var(--primary);
+  border-radius: var(--r-md);
+  transition: background var(--transition-fast);
+}
+
+.adm-self:hover:not(:disabled) {
+  background: var(--primary-hover);
+}
+
+.adm-self:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.adm-self-hint {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+  text-align: left;
+  margin-bottom: var(--sp-sm);
 }
 
 .adm-input {

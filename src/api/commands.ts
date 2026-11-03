@@ -200,7 +200,7 @@ const MOCK_DEVICES: Device[] = [
 const MOCK_SETTINGS: AppSettings = {
   usn: 'hancast-uuid-001',
   friendly_name: 'HanCast',
-  version: '2.4.6',
+  version: '2.4.7',
   media_port: 8080,
   default_device: null,
   network_interface: '',
@@ -675,8 +675,8 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
     case 'check_update':
       return {
         has_update: false,
-        current: '2.4.6',
-        latest: '2.4.6',
+        current: '2.4.7',
+        latest: '2.4.7',
         url: '',
         body: '',
         source: 'github',
@@ -773,6 +773,8 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
       if (!mockManualDevices.includes(addr)) mockManualDevices.push(addr)
       return mockManualDevice(addr) as T
     }
+    case 'add_local_device':
+      return mockManualDevice('192.168.1.5:8080') as T
     case 'get_manual_devices':
       return [...mockManualDevices] as T
     case 'remove_manual_device': {
@@ -892,6 +894,12 @@ export async function getHiddenDevices(): Promise<HiddenDevice[]> {
 export async function addDevice(address: string): Promise<Device> {
   const invoke = await initInvoke()
   return invoke<Device>('add_device', { address })
+}
+
+/** 把「本机」加进设备列表：HanCast 自己也是 DLNA 渲染端，可用于自己投自己 */
+export async function addLocalDevice(): Promise<Device> {
+  const invoke = await initInvoke()
+  return invoke<Device>('add_local_device')
 }
 
 /** 已持久化的手动设备地址（重启后仍会自动重连） */

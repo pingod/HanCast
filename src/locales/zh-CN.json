@@ -333,6 +333,8 @@
   "logs.mod.hancast_screencast": "屏幕投屏",
   "logs.mod.hancast_config": "配置",
   "logs.mod.hancast_params": "后台参数",
+  "devices.addSelf": "添加本机（自己投自己）",
+  "devices.addSelfHint": "HanCast 自己也能当接收端。点一下把本机加入设备列表，就可以把文件投给本机播放（比如投到本机全屏看，或用另一台手机遥控）。",
   "devices.addDevice": "手动添加设备",
   "devices.addHint": "自动发现依赖局域网组播，被防火墙或安全软件拦截时就搜不到设备（Windows 能发现 Mac、Mac 发现不了 Windows 多半是这个原因）。这里可以按地址直连：填设备的 IP（如 192.168.1.68）、IP:端口，或设备设置页里 description.xml 的完整链接。添加成功后会记住，下次启动自动重连。",
   "devices.addressPlaceholder": "设备 IP / IP:端口 / description.xml 完整地址",

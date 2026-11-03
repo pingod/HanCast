@@ -1,8 +1,21 @@
 # HanCast 开发进度
 
+## 2026-11-03 发布轮：v2.4.7（添加本机——自己投自己）
+
+在 v2.4.6 之上补「添加本机」能力：HanCast 自己也是 DLNA 渲染端，但设备列表只认 SSDP 发现的机器，本机被当「另一台设备」还常被隐藏。本版让用户一键把本机加进设备列表。
+
+- **Sidecar**：新增 `add_local_device`（`commands.py:437 _add_local_device`）——地址=本机 LAN IP + 自己的 DLNA 端口（`_get_local_ip` + `dlna_server.get_port()`），顺手 `guard.trust_device` 进信任列表，不写 `manual_devices`（本机 IP 每次启动重算，存下来会变死记录）。
+- **Guard**：新增 `trust_device(ip, device_info, friendly_name)`（`security/guard.py`，直接 `_add_trusted`，friendly_name 可覆盖）。
+- **Rust**：`#[tauri::command] add_local_device`（`lib.rs:260`）+ generate_handler 登记。
+- **前端**：`AddDeviceModal.vue` 加「添加本机（自己投自己）」按钮（`addSelf`，成功 900ms 关弹窗）；`commands.ts` 导出 `addLocalDevice` + mock；`device.ts` `addLocalDevice()` 去重并入列表；locale 各 +2 键（`devices.addSelf`/`devices.addSelfHint`）。
+- **数字**：`#[tauri::command]` 79→**80**（lib.rs:1603-1687）、Sidecar 72→**73**（commands.py:143-252）、commands.ts 导出 78→**79**、locale 395→**397**；commands.py 1519 行、lib.rs 1687、commands.ts 1643、guard.py 714、device.ts 248、AddDeviceModal.vue 273。
+- **验证**：后端全量 **590 passed**；`npx vue-tsc --noEmit` exit 0；`npm run build` 通过（主包 369.21 kB）。两道文档闸门绿：audit 3942 处可疑 0；freshness FAIL 0/WARN 0、数字 13 处一致。
+- **文档坑（本轮返工教训）**：两遍 difflib remap 用「起点取新、终点取旧」混出 **85 处反向行号范围**（a>b），audit 报「行号越界」，用 `path` basename 全局 rglob 解析唯一路径后批量 swap 修好；freshness 的 `实现 A path:N、B path:M` 并列写法会把行号 N 的 right 窗口抓到 B → 假 FAIL，改用「`A` 见 path:N，`B` 见 path:M」隔断。
+- **未闭合**：真机「自己投自己」未实测（仅源码级 + UI 桩）；多网卡/VPN 下 `_get_local_ip` 选哪张卡未加选择入口。
+
 ## 当前阶段：v2.3.19 工作区前端优化（尚未发布）
 
-**最后更新**: 2026-10-31
+**最后更新**: 2026-11-03
 
 本轮已安全拉取 `origin/feat/js-rule-plugins`，远端无新增，本地比 `origin/main` 多 5 笔既有提交。用户确认“克制精致的原生工具”风格：统一紫色亮暗主题、媒体/设备卡片、设置分组、弹窗边界及键盘操作；保持 Linux 不透明策略。修复解析结果竞态、App 路由切换丢失投屏监听、迟到监听清理、主题缓存、播控错误吞掉、进度锁定/旧轮询回写、视频被当图片加载；去掉无功能的多房同步装饰。
 
@@ -16,7 +29,7 @@
 - **播完即停 / 睡眠定时**：`cast.ts` 收到 `stopped` 且到结尾时若 `stopAfterCurrent` 就停队列；`CastController.vue` 开关 + 睡眠下拉（15/30/60/90/取消），deadline 持久化，秒级 tick 用 `setInterval` 并随卸载清理。
 - **手机遥控器页**：新增 `remote/server.py`（343 行），每会话一次性 token `/r/<token>/`，页面 + `api/state` + `api/cmd`，token 不符 404；命令 `start_remote_control`/`stop_remote_control`/`remote_status`。
 - **外挂字幕内封**：新增 `media/subtitles.py`（173 行），`-c copy` 不重编码、mp4→`mov_text`、其它→`srt`，产物按内容哈希缓存 `subtitle_cache/`；命令 `subtitle_apply`/`subtitle_status`；`CastController.vue`「💬 字幕」按钮，完成后重投同设备并从原进度继续。
-- **数字**：`#[tauri::command]` 74→**79**（`lib.rs:1595-1675`）、Sidecar 67→**72**（`commands.py:143-250`）、`commands.ts` 导出 73→**78**、locale 375→**395**；`commands.py` 1492 行、`lib.rs` 1678、`commands.ts` 1635、tests 39 文件 9813 行。
+- **数字**：`#[tauri::command]` 74→**79**（lib.rs:1603-1675）、Sidecar 67→**72**（`commands.py:143-251`）、`commands.ts` 导出 73→**78**、locale 375→**395**；`commands.py` 1492 行、`lib.rs` 1678、`commands.ts` 1635、tests 39 文件 9813 行。
 - **验证**：后端全量 **586 passed**（新增 `test_remote_control.py` 68、`test_subtitles.py` 76）；`npm run build` 通过；`tools/verify-cast-ui.cjs` **30/30**（队列桩补齐新 API + 修 `window.setInterval` 桩环境崩溃）；两道文档闸门绿（audit 3920 处可疑 0；freshness FAIL 0/WARN 0、数字 13 处一致）。
 - **文档**：CHANGELOG v2.4.6 节；故障排查新增 §5.7 + §11 三行 + §2 索引；架构总览行数表加 subtitles.py/remote/server.py；Frontend-API §0/§7（79 行）/§2 新增 5 条命令；Frontend-Spec §8.3 locale 395；全仓校对戳 2026-10-31/v2.4.6。
 - **发布**：提交 `46d2ee0`（43 files）→ tag `v2.4.6` → 推 main；CI run 41163007137 全绿。dmg `HanCast_2.4.6_aarch64.dmg` 85,600,687 字节、sha256 `a1fe8f71…55b8` 与 GitHub 一致、`hdiutil verify` VALID；`install-macos-artifact.sh 2.4.6` 装好；`accept-macos-artifact.sh 2.4.6` **89 PASS / 0 FAIL / 0 SKIP**。产物上实测：`start_remote_control` 起 `http://<ip>:8899/r/<token>/`，页面 200、`api/state` 200、`stop_remote_control` success；`subtitle_status` idle；`cast_failure_list` 正常。
@@ -28,8 +41,8 @@
 
 - **出站 INFO**：`protocol/dlna.py` `_send_action` 成功分支打 `SOAP OUT ← <status> | <action> | <device> | <ms>ms`（`dlna.py:1256-1258`），请求侧仍 DEBUG（`:1184`）。
 - **投屏失败台账**：新增 `media/cast_failures.py`（132 行，阶段 connect/set_uri/play/stop/media_ready/cast；只写本机 `cast_failures.json`，上限 100 条/保留 14 天）；Sidecar `cast_failure_list`/`cast_failure_clear`；`LogsPanel.vue` 内「投屏失败台账」区（locale `logs.castFailures*`）。
-- **预检 + 自动重解**：Sidecar `probe_url`（`commands.py:826`）；`MediaInput.vue:601` 历史条目重投前探直链；url 条目重投自动回来源页重解（`media.historyDead`/`media.historyDeadHint`）。
-- **数字**：命令 71→74（`lib.rs:1539-1615`）、Sidecar 64→67（`commands.py:131-227`）、`commands.ts` 导出 70→73、locale 369→375；`commands.py` 1320 行、`dlna.py` 1310 行、`lib.rs` 1617、`commands.ts` 1591。
+- **预检 + 自动重解**：Sidecar `probe_url`（commands.py:853）；`MediaInput.vue:601` 历史条目重投前探直链；url 条目重投自动回来源页重解（`media.historyDead`/`media.historyDeadHint`）。
+- **数字**：命令 71→74（lib.rs:1547-1615）、Sidecar 64→67（`commands.py:131-228`）、`commands.ts` 导出 70→73、locale 369→375；`commands.py` 1320 行、`dlna.py` 1310 行、`lib.rs` 1617、`commands.ts` 1591。
 - **验证**：后端全量 `pytest` **577 passed**（新增 `test_cast_failures.py` 214 行）；`npm run build` 通过；`tools/verify-cast-ui.cjs` 30/30；两道文档闸门绿。
 - **文档**：CHANGELOG v2.4.5 节；故障排查 §5.6（出站可观测/台账/判据）+ §11 两行 + §2 索引；架构总览行数表加 `media/cast_failures.py`；Frontend-API §0/§7（74 行）/§2 新增命令；Frontend-Spec §8.3 locale 375；全仓 `文件:行号` 按 diff 重映射（脚本 `/tmp/remap_v245.py` + `/tmp/remap_v245b.py`），全仓校对戳 2026-10-31/v2.4.5。
 - **发布**：提交 `c783437`（39 files, +1212/−363）→ tag `v2.4.5` → 推 main；CI run 41159185441 全绿（macos 10m54s / linux 17m36s / windows 13m48s）。dmg sha256 `fc123f3a…07030` 已校验、`hdiutil verify` VALID；`install-macos-artifact.sh 2.4.5` 装好；`accept-macos-artifact.sh 2.4.5` **88 PASS / 1 FAIL / 0 SKIP**（唯一 FAIL = SSDP 心跳采样窗口落在网卡组播暂不可用的广播兜底期，20s 后自行恢复 multicast，非回归）。新命令在产物上实测 probe_url / cast_failure_list / cast_failure_clear 均正常。docs 跟进提交 `e16c51b`（装端记录 + README_en 计数）。
@@ -73,7 +86,7 @@ v2.3.24 → **2.4.0**（minor，用户选）。合并两笔未发布改动：投
 
 用户反馈："能否对投屏本地文件时候再丰富下场景…可以投屏整个文件夹，而且可以调整文件夹中文件的列队顺序"。四项全选（文件夹队列+排序+上下一集 / 顺序记忆 / 勾选子集 / 随机+单曲循环）。
 
-实现：后端 `list_folder_media`（`media/parser.py:27` `MediaParser.list_folder`，自然序、只列当前层、跳过隐藏/`._`/非媒体、不探时长）；壳层 `lib.rs:247`；Sidecar `commands.py:662`。前端新增 `src/stores/playlist.ts`（Pinia 第 10 个）、`MediaInput.vue` 的📁入口 + 队列面板（拖拽/↑↓排序/勾选/全选/播放模式切换）、`CastController.vue` 上/下一集按钮、`cast.ts` 的 `advancePlaylistIfActive`/`skipToNext`/`skipToPrev`/`castQueueItem`（`queueAdvancing` Set + 1.5s 窗口吞 STOPPED 抖动防重复起播）。i18n 加一组 `media.*`（两语言各 346 键），清掉脚手架期未引用 key。
+实现：后端 `list_folder_media`（`media/parser.py:27` `MediaParser.list_folder`，自然序、只列当前层、跳过隐藏/`._`/非媒体、不探时长）；壳层 `lib.rs:247`；Sidecar commands.py:689。前端新增 `src/stores/playlist.ts`（Pinia 第 10 个）、`MediaInput.vue` 的📁入口 + 队列面板（拖拽/↑↓排序/勾选/全选/播放模式切换）、`CastController.vue` 上/下一集按钮、`cast.ts` 的 `advancePlaylistIfActive`/`skipToNext`/`skipToPrev`/`castQueueItem`（`queueAdvancing` Set + 1.5s 窗口吞 STOPPED 抖动防重复起播）。i18n 加一组 `media.*`（两语言各 346 键），清掉脚手架期未引用 key。
 
 测试：新增 `tests/test_folder_playlist.py` 6 项；后端全量 **549 passed**；vue-tsc / vite build 通过；`tools/verify-cast-ui.cjs` 补 `@/stores/playlist` 空队列桩后 **23/23**。命令数 67→68（壳层）/ 62→63（Sidecar）。
 
@@ -198,8 +211,8 @@ ffmpeg_manager 1156→1243、ffmpeg_deps 524→541、开发指南 test_jsplugins
 同一工作区（未提交、未 bump、未打 tag）。四项全部落地并有离线并发用例：
 
 1. 规则包三条慢操作任务化（`media/rules/tasks.py` 新增；`commands.py` 注册
-   `plugin_task_start/result/cancel`，Sidecar 注册表 59 → **62**，`commands.py:131-222`）；
-   壳层 `run_plugin_task` 轮询（`lib.rs:324-390`），前端封装与 Tauri 命令名不变。
+   `plugin_task_start/result/cancel`，Sidecar 注册表 59 → **62**，`commands.py:131-223`）；
+   壳层 `run_plugin_task` 轮询（lib.rs:332-390），前端封装与 Tauri 命令名不变。
    安装改为「暂存目录 → rename」，失败退回旧包；取消与提交互斥。
 2. 轮询每代独立取消令牌 + `callback(session, event_type, generation)`，
    处理器在 `_cast_lock` 下校验实例身份与代次，旧回调不再误删新会话。

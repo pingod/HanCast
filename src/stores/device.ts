@@ -11,6 +11,7 @@ import {
   unhideDevice as apiUnhide,
   getHiddenDevices,
   addDevice as apiAddDevice,
+  addLocalDevice as apiAddLocalDevice,
   getManualDevices,
   removeManualDevice as apiRemoveManual,
   type HiddenDevice,
@@ -152,11 +153,29 @@ export const useDeviceStore = defineStore('device', () => {
     }
   }
 
+  /** 把「本机」加进设备列表，用于自己投自己。成功返回设备名，失败写入 addError 并返回 null */
+  async function addLocalDevice(): Promise<string | null> {
+    adding.value = true
+    addError.value = null
+    try {
+      const device = await apiAddLocalDevice()
+      const exists = devices.value.some((d) => d.id === device.id)
+      devices.value = exists
+        ? devices.value.map((d) => (d.id === device.id ? { ...d, ...device } : d))
+        : [...devices.value, device]
+      return device.name
+    } catch (err) {
+      addError.value = err instanceof Error ? err.message : String(err)
+      return null
+    } finally {
+      adding.value = false
+    }
+  }
+
   // Set up event listeners
   async function setupListeners() {
     try {
       const { listen } = await import('@tauri-apps/api/event')
-
       // Device found（upsert：新设备加入，已有设备就地更新，
       // 保证状态变化如 offline→online 能实时反映，而不是等 30s 自动刷新）
       unlistenFns.push(
@@ -224,5 +243,6 @@ export const useDeviceStore = defineStore('device', () => {
     openAddModal,
     closeAddModal,
     addDevice,
+    addLocalDevice,
   }
 })

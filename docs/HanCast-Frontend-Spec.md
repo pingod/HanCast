@@ -2,7 +2,7 @@
 
 > 本文档回答：HanCast 桌面端（Tauri 2 + Vue 3）的界面层是怎么搭起来的——窗口壳层、路由视图、组件与 Store 全量清单、真实数据流时序、样式与国际化机制、浏览器 mock 模式，以及写代码前必须知道的约束与坑。
 >
-> 最后校对：2026-10-31，对应版本 v2.4.6（`package.json:4`）。本轮（v2.4.6）：队列追加与持久化、播完即停/睡眠定时、手机遥控器、外挂字幕内封；locale 键 375→395、`playlist.ts` 重写。上一轮（v2.4.5）：投屏失败台账面板、历史直链预检。
+> 最后校对：2026-11-03，对应版本 v2.4.7（`package.json:4`）。本轮（v2.4.6）：队列追加与持久化、播完即停/睡眠定时、手机遥控器、外挂字幕内封；locale 键 375→395、`playlist.ts` 重写。上一轮（v2.4.5）：投屏失败台账面板、历史直链预检。
 
 术语约定：**Sidecar** = Python 后台进程（`hancast-backend/`，打包为 `hancast-sidecar`）；**壳层** = Rust/Tauri 层（`src-tauri/`）；**规则包** = JS 解析插件 zip；**声明式规则** = JSON 站点规则；**屏幕投屏** = screencast（把电脑屏幕投出去）；**接收投屏** = 本机作为 DLNA 渲染端被别的设备投；**投屏确认** = Device Guard；**后台参数** = `params.py` 可调项。
 
@@ -73,11 +73,11 @@ npm scripts：`dev` = `vite`、`build` = `vue-tsc && vite build`、`build:sideca
 |---|---|---|---|
 | `label` / `title` | `main` / HanCast | — | 单窗口应用 |
 | `width` × `height` | 434 × 634 | — | 竖长小窗 |
-| `minWidth` × `minHeight` | 346 × 472 | — | Rust 侧恢复窗口尺寸时也做同样下限保护（`src-tauri/src/lib.rs:1214-1218`） |
-| `maxWidth` × `maxHeight` | 800 × 900 | — | 另在 setup 里 `set_maximizable(false)`（`lib.rs:1190`） |
+| `minWidth` × `minHeight` | 346 × 472 | — | Rust 侧恢复窗口尺寸时也做同样下限保护（src-tauri/src/lib.rs:1218-1222） |
+| `maxWidth` × `maxHeight` | 800 × 900 | — | 另在 setup 里 `set_maximizable(false)`（lib.rs:1198） |
 | `decorations` | `false` | :25 | 无边框 → 必须自绘 TitleBar |
 | `transparent` | `true` | :26 | 窗口透明配置仍保留，但本轮页面/卡片已使用实色 CSS 背景（`src/styles/variables.css:11-14`、`:64-67`），不等同于系统毛玻璃。**Linux 例外**：`tauri.linux.conf.json` 整份重写该窗口对象为 `transparent:false` + 不透明 `backgroundColor`（关 dmabuf 后透明窗口会漏提交 damage 露出桌面，v2.3.18，机制见 [故障排查.md](故障排查.md) §8.4） |
-| `visible` | `false` | :28 | 启动隐藏，由 Rust setup 决定何时显示（`--minimized`/`--autostart` 启动时保持最小化，`lib.rs:1163-1167`） |
+| `visible` | `false` | :28 | 启动隐藏，由 Rust setup 决定何时显示（`--minimized`/`--autostart` 启动时保持最小化，lib.rs:1167-1171） |
 | `dragDropEnabled` | `true` | :29 | Tauri 原生文件拖拽开启（代价见 §10.2） |
 | `withGlobalTauri` | `true` | :13 | 全局 `window.__TAURI__` |
 
@@ -89,23 +89,23 @@ npm scripts：`dev` = `vite`、`build` = `vue-tsc && vite build`、`build:sideca
 
 > data-tauri-drag-region 是 Tauri 官方的拖拽机制，走 IPC start_dragging；-webkit-app-region 在 macOS WKWebView 上是空操作，必须两者都留。
 
-关闭按钮**不退出进程**：Rust 侧 `CloseRequested` 回调 `prevent_close()` + `hide()`（`lib.rs:1205-1212`），`close_window` 命令同样是隐藏（`lib.rs:156-160`）——即「关闭隐藏到托盘」。首次关闭时 TitleBar 弹确认框告知（`TitleBar.vue:88`，`localStorage 'hancast-close-modal-dismissed'` 记「不再提醒」）。
+关闭按钮**不退出进程**：Rust 侧 `CloseRequested` 回调 `prevent_close()` + `hide()`（lib.rs:1212-1213），`close_window` 命令同样是隐藏（`lib.rs:156-160`）——即「关闭隐藏到托盘」。首次关闭时 TitleBar 弹确认框告知（`TitleBar.vue:88`，`localStorage 'hancast-close-modal-dismissed'` 记「不再提醒」）。
 
 ### 2.3 托盘（`lib.rs`）
 
-- 托盘菜单：复制投屏地址 / 显示窗口 / 开机自启开关 / 退出（`lib.rs:1041-1073`、`1159-1199`）。
-- 左键单击托盘：show + unminimize + set_focus（`lib.rs:1265-1280`）。
-- 每秒轮询 `get_cast_url` 刷新托盘菜单里的投屏地址（`lib.rs:1325-1385`）。
-- 单实例：二次启动时聚焦已有窗口（`tauri-plugin-single-instance`，`lib.rs:1085-1091`）。
+- 托盘菜单：复制投屏地址 / 显示窗口 / 开机自启开关 / 退出（lib.rs:1049-1073、`1159-1199`）。
+- 左键单击托盘：show + unminimize + set_focus（lib.rs:1273-1280）。
+- 每秒轮询 `get_cast_url` 刷新托盘菜单里的投屏地址（lib.rs:1333-1385）。
+- 单实例：二次启动时聚焦已有窗口（`tauri-plugin-single-instance`，lib.rs:1091-1093）。
 
 ### 2.4 开机自启动
 
-两条实现路径（`lib.rs:937-1039`）：
+两条实现路径（lib.rs:945-1039）：
 
-1. **MSIX（微软商店版）**：走 Windows `StartupTask` API（`windows` crate，仅 `cfg(windows)`）；商店版检测 `is_store_version`（`lib.rs:899`）。
+1. **MSIX（微软商店版）**：走 Windows `StartupTask` API（`windows` crate，仅 `cfg(windows)`）；商店版检测 `is_store_version`（lib.rs:907）。
 2. **其他平台**：`tauri-plugin-autostart`。
 
-`set_autostart` 成功后 Rust 主动 emit `autostart-changed` 事件（`lib.rs:1037`），前端 `settings` store 监听同步（`src/stores/settings.ts:28-38`）——因为托盘菜单里也能切自启，前端不能只信自己的本地状态。
+`set_autostart` 成功后 Rust 主动 emit `autostart-changed` 事件（lib.rs:1045），前端 `settings` store 监听同步（`src/stores/settings.ts:28-38`）——因为托盘菜单里也能切自启，前端不能只信自己的本地状态。
 
 ### 2.5 CSP 与 `unsafe-eval`（有提交历史证据）
 
@@ -135,8 +135,8 @@ default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src '
 
 ### 2.8 壳层其他与 UI 相关的行为
 
-- 启动 3 秒后自动检查更新，有新版 emit `update-available`（`lib.rs:1283-1323`）。
-- `stop_cast` 返回体中的 `control_failed` 字段被 Rust 注释点名「不能丢」（`lib.rs:537-540`）：本地会话已释放但电视未确认停止时，前端靠它显示 StopWarningBanner（见 §10.7）。
+- 启动 3 秒后自动检查更新，有新版 emit `update-available`（lib.rs:1291-1323）。
+- `stop_cast` 返回体中的 `control_failed` 字段被 Rust 注释点名「不能丢」（lib.rs:540-545）：本地会话已释放但电视未确认停止时，前端靠它显示 StopWarningBanner（见 §10.7）。
 
 ---
 
@@ -206,7 +206,7 @@ default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src '
 
 `src/App.vue:44-54` 在 router-view 之外全局挂载 5 个模态：`GuardConfirmModal`(:47)、`UpdateModal`(:49)、`LogsPanel`(:51)、`AddDeviceModal`(:52)、`HiddenDevicesModal`(:53)——它们需要跨路由可弹。另：非 DEV 构建禁用右键菜单（:27-31）；`onMounted` 拉取 `fetchSettings`（:32-37）。
 
-**App 的 setup 首先调用 `useDeviceStore()`、`useCastStore()`、`useScreenCastStore()`（`App.vue:20-25`）**。Pinia setup store 是单例，但其组件生命周期钩子归首次调用者；因此 device 的 30s 刷新与事件（`src/stores/device.ts:189-200`）、cast 的恢复/轮询/模拟进度与事件（`src/stores/cast.ts:803-817`）、screencast 的状态事件与下载轮询清理（`src/stores/screencast.ts:305-314`）均归 App 生命周期。历史上首次调用落在 HomeView 子树，进入设置会卸载这些订阅，返回又不会重跑单例 setup；本轮上移所有权修复，模态视图本身仍按路由挂载。cast 另用 `disposed` 防止根组件卸载后恢复请求重启轮询，并即时释放迟到的原生注册结果（`cast.ts:186-197`、`:221-225`、`:634-637`、`:736-741`）。
+**App 的 setup 首先调用 `useDeviceStore()`、`useCastStore()`、`useScreenCastStore()`（`App.vue:20-25`）**。Pinia setup store 是单例，但其组件生命周期钩子归首次调用者；因此 device 的 30s 刷新与事件（src/stores/device.ts:200-208）、cast 的恢复/轮询/模拟进度与事件（`src/stores/cast.ts:803-817`）、screencast 的状态事件与下载轮询清理（`src/stores/screencast.ts:305-314`）均归 App 生命周期。历史上首次调用落在 HomeView 子树，进入设置会卸载这些订阅，返回又不会重跑单例 setup；本轮上移所有权修复，模态视图本身仍按路由挂载。cast 另用 `disposed` 防止根组件卸载后恢复请求重启轮询，并即时释放迟到的原生注册结果（`cast.ts:186-197`、`:221-225`、`:634-637`、`:736-741`）。
 
 ---
 
@@ -299,7 +299,7 @@ default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src '
 
 要点：
 
-1. 剪贴板读取走 Rust（`read_clipboard`），Web API 仅降级（`commands.ts:1040-1079`，原因见 §10.1）。
+1. 剪贴板读取走 Rust（`read_clipboard`），Web API 仅降级（commands.ts:1048-1079，原因见 §10.1）。
 2. `resolve_share` 是**异步任务**：立即返回 `task_id`，前端 400ms 轮询 `get_resolve_result`，45s 兜底超时（`commands.ts:730-755`；Sidecar 单条解析预算 25s，注释写明）。兼容「直接返回结果」的旧实现/浏览器 mock（`commands.ts:740-744`）。
 3. 后端解析失败时**不再无条件透传**：只有从文本里抠出的地址本身带媒体扩展名（`media.ts:15-19` 白名单）才 `extractFirstUrl` + 按扩展名推 MIME 透传；网页地址一律如实报错（`media.ts:158-203`）。旧口径「能抠出链接就降级透传」会让随便一个 HTML 页面也能点投屏、点了却毫无动作，且失败被吞进台账之外无人看见。报错时 `ledgerHint` 置真，输入框下方直接指出「设置 → 解析插件 → 解析失败台账（按域名分组）」入口（`MediaInput.vue:809`）；本轮为降级文件名解码加 try/catch，畸形 `%` 不会再次抛错而卡住 parsing（`media.ts:173-180`）。
 4. 投屏目标选择优先级：选中设备（在线）→ 默认设备（在线）→ 弹设备选择 Modal（`MediaInput.vue:426-483`）。
@@ -331,9 +331,9 @@ default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src '
 
 1. `cast_confirm_request` 事件由 `guard` store 监听；`GuardConfirmModal` 在 `App.vue:47` 全局挂载，所以任何路由下都能弹。
 2. 倒计时到 0 **自动拒绝**（`guard.ts:33-39`），策略 `once`。
-3. 应答四态：`once`（仅此次）/ `always`（始终允许，进 trusted）/ `reject` / `blacklist`，经 `respond_cast_confirm(request_id, approved, policy)`（`lib.rs:708-722`）回传。
+3. 应答四态：`once`（仅此次）/ `always`（始终允许，进 trusted）/ `reject` / `blacklist`，经 `respond_cast_confirm(request_id, approved, policy)`（lib.rs:716-722）回传。
 4. 收到请求时前端主动 `show() + setFocus()` 把窗口拉到前台（`guard.ts:141-148`）——投屏确认必须让用户看见。
-5. MPV 播放本身发生在壳层/Sidecar（`check_mpv`/`set_mpv_path` 命令存在于 `lib.rs:1389-1452` 的 invoke_handler 清单）；前端不参与播放，只通过 `cast_state_changed` 感知状态。旁证：`CastControllerView.vue:76-77` 注释「走 store：带 device_id 打到电视；裸 invoke 会落到本地 MPV」。⚠️ MPV 进程管理细节属后端范围，本文未验证其实现。
+5. MPV 播放本身发生在壳层/Sidecar（`check_mpv`/`set_mpv_path` 命令存在于 lib.rs:1397-1452 的 invoke_handler 清单）；前端不参与播放，只通过 `cast_state_changed` 感知状态。旁证：`CastControllerView.vue:76-77` 注释「走 store：带 device_id 打到电视；裸 invoke 会落到本地 MPV」。⚠️ MPV 进程管理细节属后端范围，本文未验证其实现。
 
 ---
 
@@ -475,7 +475,7 @@ v2.4.1 的队列投屏有两处让「停止」失效的缺陷，修法都在 `ca
 | 功能 | 浏览器表现 |
 |---|---|
 | 真实设备发现 / 真实投屏 / DLNA 全部 | mock 数据，无真实网络行为 |
-| 系统剪贴板读取 | 返回空串；`readClipboardText` 会尝试 `navigator.clipboard.readText()` 降级（需用户授权，`commands.ts:1048-1078`） |
+| 系统剪贴板读取 | 返回空串；`readClipboardText` 会尝试 `navigator.clipboard.readText()` 降级（需用户授权，commands.ts:1056-1078） |
 | 文件解析 | `media.ts:83-116` 双模式：`<input type=file>` 的 File 留在 `localFile`；`MediaInput.vue:108-109`、`:128-136` 生成 `URL.createObjectURL` 做图片/视频预览 |
 | 窗口控制（拖拽/最小化/关闭/托盘） | 全部无效（无 IPC）；`data-tauri-drag-region` 无行为 |
 | 原生文件选择对话框 | `MediaInput.vue:497-517`、`PluginSettings.vue:51-83` 均有 dialog → HTML `<input>` 降级路径 |
@@ -488,7 +488,7 @@ v2.4.1 的队列投屏有两处让「停止」失效的缺陷，修法都在 `ca
 
 ### 10.1 剪贴板必须走 Rust
 
-`lib.rs:491-495` 注释原文：「WKWebView 默认不授予页面 clipboard-read 权限，前端 `navigator.clipboard.readText()` 在 macOS 上静默 reject，『粘贴』按钮因此失效——改由 Rust 侧（已装的 clipboard 插件）读取。」写入同理（`lib.rs:501-503`：Web API 的 reject 不受同步 try/catch 保护）。前端封装 `readClipboardText`：Rust 优先 → `navigator.clipboard` 降级（浏览器 mock 用）→ 空串（`commands.ts:1040-1079`）。
+lib.rs:495-499 注释原文：「WKWebView 默认不授予页面 clipboard-read 权限，前端 `navigator.clipboard.readText()` 在 macOS 上静默 reject，『粘贴』按钮因此失效——改由 Rust 侧（已装的 clipboard 插件）读取。」写入同理（lib.rs:503-509：Web API 的 reject 不受同步 try/catch 保护）。前端封装 `readClipboardText`：Rust 优先 → `navigator.clipboard` 降级（浏览器 mock 用）→ 空串（commands.ts:1048-1079）。
 
 ### 10.2 Tauri 原生拖拽与 HTML5 拖拽互斥
 
@@ -514,7 +514,7 @@ Modal 打开后聚焦 dialog，自带 Escape 关闭、Tab/Shift+Tab 循环与关
 
 ### 10.7 `stop_cast` 的 `control_failed` 不能吞
 
-`lib.rs:599-600` 注释：本地会话已释放、但电视没收到 Stop 时，前端要靠返回体里的 `control_failed` 解释「界面停了、电视还在播」。落点：`cast.ts:500-552`（stopCast 在 finally 释放仍属于本次操作的会话 + 置 `stopWarning`，不会删掉等待 Stop 时新开的同设备会话）→ `StopWarningBanner`（`HomeView.vue:53-57`）；屏幕投屏同款逻辑 `screencast.ts:212-249`。类型定义 `StopCastResult`/`StopWarning` 在 `commands.ts:1273-1289`。
+lib.rs:600-607 注释：本地会话已释放、但电视没收到 Stop 时，前端要靠返回体里的 `control_failed` 解释「界面停了、电视还在播」。落点：`cast.ts:500-552`（stopCast 在 finally 释放仍属于本次操作的会话 + 置 `stopWarning`，不会删掉等待 Stop 时新开的同设备会话）→ `StopWarningBanner`（`HomeView.vue:53-57`）；屏幕投屏同款逻辑 `screencast.ts:212-249`。类型定义 `StopCastResult`/`StopWarning` 在 commands.ts:1281-1289。
 
 ### 10.8 进度条与轮询的打架：主动解锁 + 单飞 + 操作代次
 
@@ -551,7 +551,7 @@ Modal 打开后聚焦 dialog，自带 Escape 关闭、Tab/Shift+Tab 循环与关
 - 多屏屏幕投屏默认选主屏（`ScreenCastPanel.vue:97-98` 注释）；显示器源 id 形如 `screen:x,y,w,h`（`types/screencast.ts`）。
 - 商店版（MSIX）行为差异：自启走 StartupTask（§2.4）、跳过更新检查（`update.ts:28-31`）、About 区显示 MS Store 链接（`SettingsView.vue:561-583`）。
 - 右键菜单是自定义 Teleport 菜单（`DeviceCard.vue:233-243`），且非 DEV 构建全局禁用了原生 contextmenu（`App.vue:27-40`）。
-- 窗口恢复尺寸有最小值保护 346×472（`lib.rs:1173-1177`），并禁用最大化（:1108）——布局只需考虑 346–800px 宽度区间。
+- 窗口恢复尺寸有最小值保护 346×472（lib.rs:1177-1181），并禁用最大化（:1108）——布局只需考虑 346–800px 宽度区间。
 
 ---
 

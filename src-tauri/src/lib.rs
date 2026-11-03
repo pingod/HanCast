@@ -255,6 +255,14 @@ async fn add_device(sidecar: State<'_, SidecarManager>, address: String) -> Resu
         .await
 }
 
+/// 把「本机」加进设备列表：用于自己投自己（本机也是 DLNA 渲染端）
+#[tauri::command]
+async fn add_local_device(sidecar: State<'_, SidecarManager>) -> Result<serde_json::Value, String> {
+    sidecar
+        .send_command("add_local_device", serde_json::json!({}))
+        .await
+}
+
 #[tauri::command]
 async fn get_manual_devices(sidecar: State<'_, SidecarManager>) -> Result<serde_json::Value, String> {
     sidecar
@@ -1604,6 +1612,7 @@ pub fn run() {
             unhide_device,
             get_hidden_devices,
             add_device,
+            add_local_device,
             get_manual_devices,
             remove_manual_device,
             parse_media_file,

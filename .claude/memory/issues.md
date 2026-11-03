@@ -1,6 +1,6 @@
 # Macast-Han 已知问题与解决方案
 
-**最后更新**: 2026-10-31
+**最后更新**: 2026-11-03
 
 ---
 
@@ -70,6 +70,11 @@
 
 ---
 
+### COMP-009: 本机无法作为投屏目标（自己投自己）——设备列表只认 SSDP 发现的机器
+- **现象**：HanCast 本身能当 DLNA 渲染端，但设备列表只列 SSDP 发现的局域网设备；本机把自己广播出去的那台被当成「另一台设备」且常被隐藏/忽略，用户没法「投给本机」（全屏本机看 / 另一台手机遥控）。
+- **方案**：`add_local_device` 按本机 LAN IP + DLNA 端口显式登记本机，顺手写进 Device Guard 信任列表（避免自己弹确认），不写 `manual_devices`（IP 每次启动重算）。前端 `AddDeviceModal.vue` 一键按钮。
+- **状态**：🟡 v2.4.7 工作区已实现、闸门与测试全绿，未打 tag、未装端；真机「自己投自己」未实测。
+
 ### COMP-008: 队列/定时/遥控器/字幕缺失（v2.4.6 已补齐）
 - **现象**：投屏只能一批替换、没有队列追加与跨重启记忆；播完自动下一集无法关；没有手机遥控；外挂字幕不能内封投屏。4.69GB 抖音文案一类场景尤其明显。
 - **方案**：playlist 持久化 + 追加、cast 播完即停/睡眠定时、`remote/server.py` 手机遥控页（一次性 token）、`media/subtitles.py` `-c copy` 内封 + 重投续播。
@@ -80,7 +85,7 @@
 - **状态**: 🟢 已解决（v2.4.5 工作区，未发版）
 - **现象**: 解析成功、点投屏无报错，电视不动；面板默认 INFO 看不到我们发给谁、电视回了什么。COMP-005 因此排查大半天。
 - **根因**: `protocol/dlna.py` 的 `_send_action` 成功只 `logger.debug`；失败散落、无台账。
-- **方案**: ① 出站动作成功收 INFO 一行 `SOAP OUT ← <status> | <action> | <device> | <ms>ms`（`dlna.py:1256-1258`）；② 新增 `media/cast_failures.py` 投屏失败台账 + `cast_failure_list`/`cast_failure_clear` + `LogsPanel` 展示；③ `probe_url`（`commands.py:826`）历史条目重投前预检直链、url 条目自动回来源页重解。
+- **方案**: ① 出站动作成功收 INFO 一行 `SOAP OUT ← <status> | <action> | <device> | <ms>ms`（`dlna.py:1256-1258`）；② 新增 `media/cast_failures.py` 投屏失败台账 + `cast_failure_list`/`cast_failure_clear` + `LogsPanel` 展示；③ `probe_url`（commands.py:853）历史条目重投前预检直链、url 条目自动回来源页重解。
 - **判据**: 面板「投屏失败台账」有条目 = 断在某阶段（connect/set_uri/play/stop/media_ready/cast）；契约测试 `tests/test_cast_failures.py`。
 
 ## 架构风险

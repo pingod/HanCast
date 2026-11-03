@@ -407,6 +407,19 @@ class DeviceGuard:
         self._ip_index[ip] = udn
         self._save()
 
+    def trust_device(self, ip: str, device_info: Optional[dict] = None, friendly_name: str = ""):
+        """直接把一台设备放进信任列表（不经过弹窗确认）。
+
+        目前只有「本机设备」这条路用它：用户主动把本机加进设备列表用于自己投自己时，
+        再弹一次「未知设备请求投屏」纯属自己吓自己。与 `_add_trusted` 的差别只有一处：
+        friendly_name 可由调用方覆盖——本机描述里是 HanCast(Pavia-MacBookPro.local) 这种，
+        界面上要显示得更好认。
+        """
+        info = dict(device_info or {})
+        if friendly_name:
+            info["friendly_name"] = friendly_name
+        self._add_trusted(ip, info)
+
     def _add_blacklisted(self, ip: str, device_info: dict):
         udn = device_info.get("udn") or f"ip:{ip}"
         entry = DeviceGuardEntry(

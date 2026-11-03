@@ -148,6 +148,7 @@ class CommandHandler:
             "rename_device": self._rename_device,
             "remove_device": self._remove_device,
             "add_device": self._add_device,
+            "add_local_device": self._add_local_device,
             "get_manual_devices": self._get_manual_devices,
             "remove_manual_device": self._remove_manual_device,
             "hide_device": self._hide_device,
@@ -432,6 +433,32 @@ class CommandHandler:
         self.config.add_manual_device(address)
         self.config.save()
         return device.to_dict()
+
+    def _add_local_device(self, params: dict) -> dict:
+        """把「本机」加进设备列表，用于自己投自己
+
+        为什么需要它：HanCast 本身既是控制端也能当接收端（DLNA 渲染端），但设备列表
+        只认局域网里被 SSDP 发现的机器——本机把自己广播出去的那台会被当成「另一台设备」，
+        而且多数情况下被隐藏/忽略。想让「本机 → 本机」可投，得显式按地址把自己登记进来。
+
+        与 `_add_device` 的差别：
+        - 地址是算出来的（本机 LAN IP + 自己的 DLNA 端口），不用用户填；
+        - 顺手把自己写进 Device Guard 信任列表——自己投自己再弹「未知设备请求投屏」
+          纯属自己吓自己；
+        - 不写 manual_devices（那是给「IP 填错要能手删」的持久化兜底用的），
+          本机地址每次启动按当前网卡重算，存下来反而会随 IP 变化变成死记录。
+        """
+        ip = self._get_local_ip()
+        port = self.dlna_server.get_port()
+        address = f"{ip}:{port}"
+        device = self.ssdp.add_device_by_target(address)
+        d = device.to_dict()
+
+        guard = self.device_guard
+        if guard is not None:
+            guard.trust_device(ip, {"udn": device.udn, "friendly_name": d.get("name") or "本机"})
+        logger.info(f"Local device registered for self-cast: {d.get('name')} ({address})")
+        return d
 
     def _get_manual_devices(self, params: dict) -> list:
         return self.config.manual_devices
