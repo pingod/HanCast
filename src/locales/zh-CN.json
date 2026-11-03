@@ -385,7 +385,7 @@
   "media.queueAppendHint": "把另一个文件夹接在当前队列后面，不打断正在播放的",
   "media.queueAppendNoNew": "这个文件夹里的文件都已在队列中",
   "cast.remoteTitle": "手机遥控器",
-  "cast.remoteHint": "手机连同一个 Wi-Fi，用浏览器打开下面的地址即可控制播放",
+  "cast.remoteHint": "手机连同一个 Wi-Fi，用浏览器打开下面的地址即可控制播放（常驻可用，无需先投屏）",
   "cast.remoteStarting": "正在启动…",
   "cast.remoteFailed": "启动失败（端口可能被占用）",
   "cast.remoteCopy": "点按复制链接",
@@ -395,5 +395,7 @@
   "cast.subtitlePick": "选择字幕文件",
   "cast.subtitleWorking": "正在内封字幕… {p}%",
   "cast.subtitleDone": "字幕已内封，已重新投到电视",
-  "cast.subtitleFailed": "字幕内封失败"
+  "cast.subtitleFailed": "字幕内封失败",
+  "cast.remoteAlwaysOn": "遥控器常驻运行中，地址固定不变，可加书签",
+  "cast.remoteNotRunning": "遥控器服务未启动（端口可能被占用）"
 }

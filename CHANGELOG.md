@@ -1,6 +1,6 @@
 # Changelog
 
-> 最后校对：2026-11-03，对应版本 v2.4.7（`package.json:4`）。
+> 最后校对：2026-11-03，对应版本 v2.4.8（`package.json:4`）。
 
 本文件记录 HanCast 的版本历史。口径说明：
 
@@ -10,6 +10,32 @@
 - 新加版本时**同一次提交**里补这里，并按 [docs/README.md](docs/README.md) §4 的约定同步对应文档。
 
 ---
+
+## v2.4.8 — 2026-11-03
+
+手机遥控器页升级：随应用常驻、加媒体选择（相册上传 / 粘链接 / 选目录）、队列 / 历史 / 多设备 / 进度条 / 防息屏 / 横屏。
+
+### 为什么需要
+v2.4.6 的遥控器页要「先投屏」才有用（`start_remote_control` 手动启动），而且只有播放/暂停/音量/进度几个按钮，选片还得回到电脑上操作。本轮把它变成真正能当遥控器用的一页：应用一启动就常驻（手机浏览器打开即用，无需先投屏），手机上能直接选视频（相册上传）、粘链接、选目录投出去，还能管理播放队列、看/重投历史、在已投屏的多台设备间切换。
+
+### 改了什么
+- **后端 `remote/server.py` 重写**（343 → 713 行）：`RemoteControlServer(get_state, action, local_ip)` + `set_content_hooks(on_upload, on_paste, on_resolve_poll)`；`start(port=8899)` 占用自动回退 0；新增路由 `POST /api/paste`、`GET /api/resolve`、`POST /api/upload`（multipart，≤4GB，落临时文件保留扩展名）；页面内联暗色 UI 全面升级（封面卡片、可拖动进度条、快进快退 ±5/±10、队列面板、历史面板、多设备 `select`、Wake Lock 防息屏、横屏媒体查询）。
+- **后端 `commands.py`**（1519 → 1652 行）：新增 `remote_update_ui` 注册项（前端把队列/历史/播放模式/播完即停同步进 `_remote_ui` 镜像）；`_remote_sessions_state()` 返回扩展了 queue/history/play_mode/stop_after_current；`_remote_action` 扩展 next/prev/mode/stop_after/cast_history/load_folder 走 `remote_command` 事件委派前端，play/pause/stop/seek/volume/mute 原地处理；新增 `_remote_upload`（按 focus 设备投屏）/`_remote_paste`（转后台解析）/`_remote_resolve_poll`（done 时投给 focus）。`_start_services()` 末尾随应用常驻启动遥控器页。
+- **`_start_cast` 接受可选 `title`**：手机上传的哈希文件名投屏时用原标题拼 DIDL，界面不再显示乱码文件名。
+- **前端**：`src-tauri/src/lib.rs` 新增 `remote_update_ui` 命令（81 条 `#[tauri::command]`）；`src/api/commands.ts` 导出 `remoteUpdateUi` + `RemoteUiSnapshot`（导出 80 个）；`src/stores/cast.ts` 监听 `remote_command` 事件（切集/模式/播完即停/历史重投）、新增 `setupRemoteUiSync()` 去抖推送 UI 快照；`CastController.vue` 遥控器弹窗改为常驻地址展示；locale 各补 2 键（`cast.remoteAlwaysOn` / `cast.remoteNotRunning`，399 键）。
+
+### 验证
+- 后端全量 pytest **604 passed / 0 failed**（新增 `test_remote_control.py` 4→10 项、`test_remote_commands.py` 8 项）。
+- 前端 `npx vue-tsc --noEmit` 0 错、`npm run build` 通过。
+- 端到端真起 `RemoteControlServer`（stub handler）验 `/api/state` 带队列/历史/模式、`/api/paste` 返 task_id、`/api/resolve` 返 done+uri 均正确。
+- 两道文档闸门绿：`audit-doc-refs.py` 3949 处可疑 0、`check-doc-freshness.py` FAIL 0 / WARN 0。
+
+### 数字与文档
+命令总数 80→81、Sidecar 注册表 73→74、前端封装 79→80；`remote/server.py` 343→713 行、`commands.py` 1519→1652 行；tests 37→38 个 `test_*.py`（41 文件 10127 行）。文档同轮修订：`AGENTS.md`、`docs/架构总览.md`（行数表/命令归属）、`docs/HanCast-Frontend-API.md`（§0 统计表/§7 +1 行）、`docs/HanCast-Frontend-Spec.md`（locale 399）、`docs/故障排查.md`（§5.7 遥控器日志补常驻/上传/粘贴）、`docs/开发指南.md`（测试地图）。全仓 59 处因代码行号漂移的文档引用按 `check-doc-freshness.py` 报的「实际在 [N]」逐条重锚。
+
+### 未闭合口子
+- 真机未验（手机浏览器真开、相册真上传、多设备真投）；判据是源码级 + 端到端自起 server。
+- 相册上传依赖手机浏览器支持 `<input type=file accept=video/*>` 走系统相册；iOS Safari 部分版本对超大文件会限流，未做分片。
 
 ## v2.4.7 — 2026-11-03
 
@@ -56,7 +82,7 @@ HanCast 本身既是控制端也能当接收端（DLNA 渲染端），但设备�
 
 ### 手机遥控器页
 - 新增 `hancast-backend/hancast_sidecar/remote/server.py`（343 行）：局域网 HTTP 服务，路径带**每会话一次性 token** `/r/<token>/`（`remote/server.py:258` 打印地址），提供页面、`api/state`、`api/cmd`；token 不匹配一律 404。aiohttp 起不来/端口全忙有明确日志。
-- 命令 `start_remote_control` / `stop_remote_control` / `remote_status`（`commands.py:143-251` 注册表）；前端 `CastController.vue` 加「📱 遥控器」按钮，显示二维码可选地址。
+- 命令 `start_remote_control` / `stop_remote_control` / `remote_status`（`commands.py:256-364` 注册表）；前端 `CastController.vue` 加「📱 遥控器」按钮，显示二维码可选地址。
 
 ### 外挂字幕内封
 - 新增 `media/subtitles.py`（173 行）：`ffmpeg -i 视频 -i 字幕 -map 0:v -map 0:a -map 1:0 -c copy -c:s mov_text|srt`，mp4 容器用 mov_text、其它用 mkv+srt；**视频不重编码**（-c copy），临时文件保留真实扩展名（`.part.mp4`，否则 ffmpeg 选不到封装器）。产物按「视频+字幕」内容哈希缓存在 `<配置目录>/subtitle_cache/`，同一对文件复用。
@@ -90,7 +116,7 @@ HanCast 本身既是控制端也能当接收端（DLNA 渲染端），但设备�
 - 新增 Sidecar 命令 `cast_failure_list` / `cast_failure_clear`；后台日志面板新增「投屏失败台账」区（`components/LogsPanel.vue`，中英文案 `logs.castFailures*`）。
 
 ### 直链有效性预检 + 历史自动重解
-- 新增 Sidecar 命令 `probe_url`（commands.py:1025）：探直链是否还在（过期 / 被 CDN 判废提前暴露）。前端 `MediaInput.vue:601` 在历史条目重投前调用；历史里的 url 条目重投时自动回来源页重解（提示文案 `media.historyDead` / `media.historyDeadHint`）。
+- 新增 Sidecar 命令 `probe_url`（commands.py:1158）：探直链是否还在（过期 / 被 CDN 判废提前暴露）。前端 `MediaInput.vue:601` 在历史条目重投前调用；历史里的 url 条目重投时自动回来源页重解（提示文案 `media.historyDead` / `media.historyDeadHint`）。
 
 ### 行号与硬数字
 - 命令总数 71 → **74**（lib.rs:1547-1615），Sidecar 注册表 64 → **67**（`commands.py:131-228`），`src/api/commands.ts` 导出 70 → **73**，locale 369 → **375** 键。
@@ -346,7 +372,7 @@ HanCast 本身既是控制端也能当接收端（DLNA 渲染端），但设备�
 - **实测证据（不是推测）**：装好 2.3.21 后往那台 TCL 投被拒，重复五次，`usernoted` 库里躺着五条 `com.han.hancast` 记录——标题 `投屏失败`、正文 `unknown tcl_mt5879_cn：…HTTP 500…请在电视上打开「多屏互动/无线投屏/DLNA」…`（内容完全对，说明链路走到了最后一米），但 **`presented` 全为 0**，屏幕上也没有横幅。同机正对照：走新 API 的 App 是 21 条 `presented=1`，而这段时间系统自己的横幅（屏幕访问提示）正常弹出——**不是勿扰、不是样式设置**（HanCast 在系统设置里是「允许通知 on + 桌面/通知中心/锁屏全勾 + 提醒样式=临时」）。
 - **根因**：`tauri-plugin-notification` 在 macOS 上落到 `notify-rust 4.18` → `mac-notification-sys 0.6.15`，用的是 **`NSUserNotificationCenter`**（macOS 11 起废弃；当前 macOS 只把它存进通知中心，不再呈现）。载荷里那句 `scat.id = "LEGACY"` 就是这条路的签名。**升级插件没用**——已查 2.7.0 的依赖仍是 `notify-rust ^4.18`。
 - **修法一 · 壳层直发**：新增 `#[tauri::command] notify_os`（src-tauri/src/lib.rs:1055），macOS 走 `UNUserNotificationCenter`（新模块 `src-tauri/src/macos_notify.rs`：授权只在第一次真要发时问一次、被拒不重试不报错；`RcBlock` 传空 completion handler）。依赖 `objc2 0.6` / `objc2-foundation 0.3` / `objc2-user-notifications 0.3` / `block2 0.6`，**与 tauri 自己在用的同一套版本**（锁里 objc2 就是 0.6.4），不引第二份运行时。**非 macOS 一律回 `Err`**，前端 catch 之后退回插件那条路——Linux 的 DBus（他那台由 quickshell 接收）与 Windows 的 Toast 保留原样。
-- **修法二 · 不依赖系统通知的兜底**：`raiseIfHidden()`（src/api/commands.ts:1608）在窗口不可见时 `show()+setFocus()`，把那条红字直接摆到用户眼前；**只在真不可见时做**，避免用户正在别的程序里打字被抢焦点。为此加 capability `core:window:allow-is-visible`。这条同时也是「投屏失败必须让用户看见」这条约束里唯一与 OS 通知实现无关的保证。
+- **修法二 · 不依赖系统通知的兜底**：`raiseIfHidden()`（src/api/commands.ts:1626）在窗口不可见时 `show()+setFocus()`，把那条红字直接摆到用户眼前；**只在真不可见时做**，避免用户正在别的程序里打字被抢焦点。为此加 capability `core:window:allow-is-visible`。这条同时也是「投屏失败必须让用户看见」这条约束里唯一与 OS 通知实现无关的保证。
 - **契约变化**：`#[tauri::command]` **66 → 67**（`generate_handler!` 现读 lib.rs:1541-1608）；壳层就地执行的命令 **9 → 10**（新增 `notify_os`）；转发 Sidecar 的仍是 57 条。
 - **验证**：`cargo check` 通过（同时证明 `core:window:allow-is-visible` 是合法 capability 标识、objc2 绑定签名可用：`requestWithIdentifier_content_trigger` 参数顺序是 id→content→trigger，`requestAuthorization…` 的 handler 非空所以必须给 block）；`vue-tsc` + `vite build` 通过；`tools/verify-cast-ui.cjs` 23 条仍全绿（该 harness 把 `notify()` 整个 stub 掉，所以它证明的是「五条失败出口都会调用它」，不涉及 OS 呈现）。**真机端到端复验在装完 2.3.22 之后做**：同一台电视重投被拒 + 窗口收进托盘，看横幅弹不弹、窗口带不带得回来。
 - **文档同轮修订**：AGENTS.md（**安全约束第 5 条**改写：macOS 不得用插件发通知 + 窗口兜底 + 实测数字、Rust 依赖块加 objc2 家族、命令计数与 `generate_handler!` 行号重锚、版本行）；docs/架构总览.md（进程图 66 → 67、命令归属 9 → 10）；docs/HanCast-Frontend-API.md（§2 新增 `notify_os` 一行、快速参考表 66 → 67 条并加第 67 行、壳层本地执行计数、头部校对标明「本轮只补这一条链路，其余沿用 2.3.13 取证」）；docs/HanCast-Frontend-Spec.md（capability 清单加 `allow-is-visible`、cast.ts 失败出口补窗口前置、版本行）。

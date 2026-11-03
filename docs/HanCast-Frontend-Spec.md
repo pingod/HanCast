@@ -2,7 +2,7 @@
 
 > 本文档回答：HanCast 桌面端（Tauri 2 + Vue 3）的界面层是怎么搭起来的——窗口壳层、路由视图、组件与 Store 全量清单、真实数据流时序、样式与国际化机制、浏览器 mock 模式，以及写代码前必须知道的约束与坑。
 >
-> 最后校对：2026-11-03，对应版本 v2.4.7（`package.json:4`）。本轮（v2.4.6）：队列追加与持久化、播完即停/睡眠定时、手机遥控器、外挂字幕内封；locale 键 375→395、`playlist.ts` 重写。上一轮（v2.4.5）：投屏失败台账面板、历史直链预检。
+> 最后校对：2026-11-03，对应版本 v2.4.8（`package.json:4`）。本轮（v2.4.8）：遥控器页升级（常驻+相册上传/粘链接/选目录+队列/历史/多设备/防息屏/横屏），locale 键 395→399；`CastController.vue` 遥控器弹窗改为常驻地址展示。上一轮（v2.4.7）：添加本机（自己投自己）。
 
 术语约定：**Sidecar** = Python 后台进程（`hancast-backend/`，打包为 `hancast-sidecar`）；**壳层** = Rust/Tauri 层（`src-tauri/`）；**规则包** = JS 解析插件 zip；**声明式规则** = JSON 站点规则；**屏幕投屏** = screencast（把电脑屏幕投出去）；**接收投屏** = 本机作为 DLNA 渲染端被别的设备投；**投屏确认** = Device Guard；**后台参数** = `params.py` 可调项。
 
@@ -102,7 +102,7 @@ npm scripts：`dev` = `vite`、`build` = `vue-tsc && vite build`、`build:sideca
 
 两条实现路径（lib.rs:945-1039）：
 
-1. **MSIX（微软商店版）**：走 Windows `StartupTask` API（`windows` crate，仅 `cfg(windows)`）；商店版检测 `is_store_version`（lib.rs:907）。
+1. **MSIX（微软商店版）**：走 Windows `StartupTask` API（`windows` crate，仅 `cfg(windows)`）；商店版检测 `is_store_version`（lib.rs:919）。
 2. **其他平台**：`tauri-plugin-autostart`。
 
 `set_autostart` 成功后 Rust 主动 emit `autostart-changed` 事件（lib.rs:1045），前端 `settings` store 监听同步（`src/stores/settings.ts:28-38`）——因为托盘菜单里也能切自启，前端不能只信自己的本地状态。
@@ -438,7 +438,7 @@ v2.4.1 的队列投屏有两处让「停止」失效的缺陷，修法都在 `ca
 
 ### 8.3 两语言是否等键（脚本比对结果）
 
-2026-10-31（v2.4.6）读取两份扁平 JSON 比对：**zh-CN / en-US 各 395 个 key，双向差集为 0**（v2.4.6 补 20 个键：队列追加/播完即停/睡眠定时/遥控器/字幕提示）（v2.4.5 补 6 个键：投屏失败台账 `logs.castFailuresTitle` / `logs.castFailuresHint` / `logs.castFailuresEmpty` / `logs.castFailuresClear`，历史直链过期提示 `media.historyDead` / `media.historyDeadHint`；v2.4.4 那轮是 369，v2.4.3 是 358，v2.4.2 是 353）。278、321、324、346 都是历史取证数，不能继续当作现值。
+2026-11-03（v2.4.8）读取两份扁平 JSON 比对：**zh-CN / en-US 各 399 个 key，双向差集为 0**（v2.4.8 补 2 个键：`cast.remoteAlwaysOn` / `cast.remoteNotRunning`）（v2.4.6 补 20 个键：队列追加/播完即停/睡眠定时/遥控器/字幕提示）（v2.4.5 补 6 个键：投屏失败台账 `logs.castFailuresTitle` / `logs.castFailuresHint` / `logs.castFailuresEmpty` / `logs.castFailuresClear`，历史直链过期提示 `media.historyDead` / `media.historyDeadHint`；v2.4.4 那轮是 369，v2.4.3 是 358，v2.4.2 是 353）。278、321、324、346 都是历史取证数，不能继续当作现值。
 
 ### 8.4 覆盖范围与已知缺口
 

@@ -40,6 +40,16 @@ import requests
 logger = logging.getLogger("hancast.commands")
 
 
+def _guess_mime(path: str) -> str:
+    """按扩展名猜 MIME（手机上传的临时文件没有其它线索）。
+
+    只用于给 SOAP 元数据一个像样的 type；猜不出就留空，投屏链路不依赖它。
+    """
+    import mimetypes
+    mime, _ = mimetypes.guess_type(path)
+    return mime or ""
+
+
 def _cast_serialized(method):
     """Serialize device ownership changes and capture-error callbacks.
 
@@ -132,7 +142,7 @@ class CommandHandler:
         # 字幕内封任务 {device_id: {status, progress, message, path}}
         self._subtitle_tasks: Dict[str, dict] = {}
 
-        # 手机遥控器页（局域网浏览器打开，按需启动）
+        # 手机遥控器页（局域网浏览器打开；v2.4.8 起随应用常驻，无需先投屏）
         self.remote_server = RemoteControlServer(
             get_state=self._remote_sessions_state,
             action=self._remote_action,
@@ -244,6 +254,7 @@ class CommandHandler:
             "start_remote_control": self._start_remote_control,
             "stop_remote_control": self._stop_remote_control,
             "remote_status": self._remote_status,
+            "remote_update_ui": self._remote_update_ui,
 
             # 日志查看（排错）
             "get_logs": self._get_logs,
@@ -300,6 +311,21 @@ class CommandHandler:
         # 屏幕投屏管理器（复用 config / ssdp / session）
         self.screencast = ScreenCastManager(self)
 
+        # 遥控器页随应用常驻：注入上传/粘贴三条后端动作，再启动服务
+        self.remote_server.set_content_hooks(
+            on_upload=self._remote_upload,
+            on_paste=self._remote_paste,
+            on_resolve_poll=self._remote_resolve_poll,
+        )
+        self._remote_ui = {
+            "queue": [], "history": [], "play_mode": "sequential",
+            "stop_after_current": False,
+        }
+        if self.remote_server.start(port=8899):
+            logger.info(f"[Remote] 遥控器页随应用启动: {self.remote_server.url}")
+        else:
+            logger.warning("[Remote] 遥控器页启动失败（端口占用或 aiohttp 缺失），投屏不受影响")
+
     def _restore_manual_devices(self):
         """启动后重新抓取手动添加的设备（不依赖多播）"""
         for target in self.config.manual_devices:
@@ -329,6 +355,11 @@ class CommandHandler:
         self.ssdp.stop()
         self.dlna_server.stop()
         self.media_server.stop()
+        # 遥控器页是常驻服务，退出时要显式停，否则 aiohttp 线程会拖着进程不退出
+        try:
+            self.remote_server.stop()
+        except Exception:
+            pass
         # shutdown() 用于退出路径，幂等可重复调用；stop() 用于运行时暂停
         self.renderer.shutdown()
         self.protocol.stop_event_thread()
@@ -591,6 +622,9 @@ class CommandHandler:
         device_id = params["device_id"]
         media_uri = params["media_uri"]
         mime_type = params.get("mime_type", "")  # 可选，前端传入
+        # 可选标题：手机相册上传的文件落地后是个哈希文件名，直接拿来当标题电视上很难看，
+        # 所以调用方（遥控器上传）传原始文件名进来，这里塞进媒体元数据。
+        title_override = str(params.get("title") or "").strip()
         # Replacing this TV's screen stream also releases FFmpeg/HLS. A browser
         # screen share or another TV's stream is independent and stays running.
         self.screencast.stop_for_device(device_id)
@@ -601,6 +635,12 @@ class CommandHandler:
 
         # 获取或创建设备会话（每个设备独立的 DLNAProtocol 实例）
         session = self._get_or_create_session(device_id)
+        # 标题覆盖：session.play() 会读 cast_state.media.title 拼 DIDL，先把它设好再播
+        if title_override:
+            from .models.media import MediaInfo
+            session.cast_state.media = MediaInfo(
+                media_type="url", uri=media_uri, title=title_override,
+                mime_type=mime_type)
         try:
             session.play(media_uri, mime_type)
         except Exception as e:
@@ -852,7 +892,13 @@ class CommandHandler:
     # ── 手机遥控器 ──
 
     def _remote_sessions_state(self) -> dict:
-        """给遥控器页的状态快照：当前聚焦会话 + 全部会话列表"""
+        """给遥控器页的状态快照：当前聚焦会话 + 全部会话列表 + 队列/历史/播完即停。
+
+        遥控器页每秒轮询这一个接口拿全量状态，所以这里要把页面要显示的东西一次备齐：
+        会话（含封面缩略图）、多设备列表与聚焦、播放队列（标题+当前项）、投屏历史、
+        「播完即停」开关、播放模式。所有状态都由前端推给一个内存镜像
+        （`_remote_ui`），没有会话时页面也能显示队列/历史。
+        """
         sessions = []
         for did, s in self.device_sessions.items():
             st = s.cast_state
@@ -865,12 +911,38 @@ class CommandHandler:
                 "volume": st.volume,
                 "is_muted": st.is_muted,
                 "title": (st.media.title if st.media else "") or "",
+                "thumbnail": (st.media.thumbnail if st.media else None) or None,
             })
         focus = self.cast_state.device_id
         if sessions and not any(x["device_id"] == focus for x in sessions):
             focus = sessions[0]["device_id"]
         current = next((x for x in sessions if x["device_id"] == focus), None)
-        return {"session": current, "sessions": sessions, "focus": focus}
+        ui = getattr(self, "_remote_ui", {}) or {}
+        return {
+            "session": current,
+            "sessions": sessions,
+            "focus": focus,
+            "queue": ui.get("queue") or [],
+            "play_mode": ui.get("play_mode") or "sequential",
+            "stop_after_current": bool(ui.get("stop_after_current")),
+            "history": ui.get("history") or [],
+        }
+
+    def _remote_update_ui(self, params: dict) -> dict:
+        """前端把队列/历史/播放模式等 UI 状态同步进内存镜像。
+
+        这些状态本在前端 Pinia/localStorage 里（队列、历史、播放模式），后端原本
+        看不到；遥控器页在手机上打开时需要一个后端可读的副本，所以前端每次改动
+        调一次本命令把快照推过来。只存内存、不落盘——权威数据仍在前端。
+        """
+        ui = getattr(self, "_remote_ui", None)
+        if ui is None:
+            ui = {}
+            self._remote_ui = ui
+        for k in ("queue", "history", "play_mode", "stop_after_current"):
+            if k in params:
+                ui[k] = params[k]
+        return {"ok": True}
 
     @staticmethod
     def _hms(seconds: int) -> str:
@@ -878,9 +950,24 @@ class CommandHandler:
         return f"{seconds // 3600:02d}:{(seconds % 3600) // 60:02d}:{seconds % 60:02d}"
 
     def _remote_action(self, action: str, value) -> dict:
-        """遥控器页发来的控制指令 → 复用既有投屏命令（都已串行化）"""
+        """遥控器页发来的控制指令 → 复用既有投屏命令（都已串行化）。
+
+        `next`/`prev`/`mode`/`stop_after`/`focus_device`/`load_folder` 这几条改的是
+        **前端权威状态**（队列在 Pinia/localStorage），后端只把它们打成事件回推给壳层：
+        前端收到 `remote_command` 事件后执行真正的切集/改模式。后端不试图复制一套队列逻辑。
+        """
         state = self._remote_sessions_state()
         did = state.get("focus")
+        # 需要转给前端处理的动作：只回推事件，不在后端改动
+        if action in ("next", "prev", "mode", "stop_after", "cast_history", "load_folder"):
+            protocol_io.emit_event("remote_command", {"action": action, "value": value,
+                                                      "device_id": did})
+            return {"action": action, "device_id": did, "delegated": True}
+        if action == "focus_device":
+            # 切聚焦：cast_state.device_id 记为当前控制目标
+            if value and value in self.device_sessions:
+                self.cast_state.device_id = value
+            return {"action": action, "device_id": value}
         if action == "play":
             self._resume_cast({"device_id": did})
         elif action == "pause":
@@ -899,6 +986,52 @@ class CommandHandler:
         else:
             raise ValueError(f"未知的遥控指令: {action}")
         return {"action": action, "device_id": did}
+
+    def _remote_upload(self, tmp_path: str, filename: str) -> dict:
+        """手机相册上传落地后的处理：把临时文件交给媒体服务器并按当前聚焦设备投出去。
+
+        不走 parse_file（本地文件路径在电脑上、直接 serve_file 即可），但要用原文件名
+        当标题。投到当前聚焦设备；没有聚焦设备就报错让用户在电脑端先起一次投屏。
+        """
+        state = self._remote_sessions_state()
+        did = state.get("focus")
+        if not did:
+            raise ValueError("当前没有可控制的设备，请先在电脑端投一次或添加设备")
+        title = os.path.splitext(filename)[0] or filename
+        self._start_cast({
+            "device_id": did,
+            "media_uri": tmp_path,   # 本地路径 → _start_cast 内部走 media_server.serve_file
+            "mime_type": _guess_mime(tmp_path),
+            "title": title,
+        })
+        return {"ok": True, "title": title, "device_id": did}
+
+    def _remote_paste(self, text: str) -> dict:
+        """遥控器页粘贴链接/分享口令 → 起后台解析任务（复用 _spawn_resolve_task）"""
+        return self._spawn_resolve_task(text)
+
+    def _remote_resolve_poll(self, task_id: str) -> dict:
+        """轮询解析任务；完成时把结果投给当前聚焦设备。"""
+        entry = self._get_resolve_result({"task_id": task_id})
+        status = entry.get("status")
+        if status == "done":
+            result = entry.get("result") or {}
+            media = result.get("media") or result
+            uri = media.get("uri") if isinstance(media, dict) else None
+            if not uri:
+                return {"status": "error", "error": "解析结果没有可播地址"}
+            state = self._remote_sessions_state()
+            did = state.get("focus")
+            if not did:
+                return {"status": "error", "error": "当前没有可控制的设备"}
+            self._start_cast({
+                "device_id": did,
+                "media_uri": uri,
+                "mime_type": (media.get("mime_type") if isinstance(media, dict) else "") or "",
+                "title": (media.get("title") if isinstance(media, dict) else "") or "",
+            })
+            return {"status": "done", "result": media}
+        return entry
 
     def _start_remote_control(self, params: dict) -> dict:
         if not self.remote_server.running:

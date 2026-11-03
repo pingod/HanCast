@@ -75,6 +75,11 @@
 - **方案**：`add_local_device` 按本机 LAN IP + DLNA 端口显式登记本机，顺手写进 Device Guard 信任列表（避免自己弹确认），不写 `manual_devices`（IP 每次启动重算）。前端 `AddDeviceModal.vue` 一键按钮。
 - **状态**：🟢 v2.4.7 已发布（tag `v2.4.7`，CI 41585153134 三平台全绿，macOS 装端 89 PASS / 0 FAIL；产物上 `add_local_device` 端到端跑通）。真机「真投一集」未手动复测。
 
+### COMP-010: 手机遥控器页能力弱（需先投屏、不能选片）——v2.4.8 升级
+- **现象**：v2.4.6 的遥控器页要手动 `start_remote_control` 先投屏才有用，只有播放/暂停/音量/进度几个按钮；选片还得回电脑操作，手机上不能直接挑视频投。
+- **方案**：`remote/server.py` 重写为随应用常驻（`_start_services` 启动，8899 占用回退）；新增 `/api/upload`（相册上传即投）、`/api/paste`（粘链接转解析投）、`/api/resolve`（轮询）；队列/历史/多设备/进度条/防息屏/横屏；`remote_update_ui` 命令让前端把队列/历史/模式同步给后端读取。
+- **状态**：🟡 工作区已实现（v2.4.8 未打 tag、未装端、真机未验）：后端 604 passed、vue-tsc 0 错、两道文档闸门绿。
+
 ### COMP-008: 队列/定时/遥控器/字幕缺失（v2.4.6 已补齐）
 - **现象**：投屏只能一批替换、没有队列追加与跨重启记忆；播完自动下一集无法关；没有手机遥控；外挂字幕不能内封投屏。4.69GB 抖音文案一类场景尤其明显。
 - **方案**：playlist 持久化 + 追加、cast 播完即停/睡眠定时、`remote/server.py` 手机遥控页（一次性 token）、`media/subtitles.py` `-c copy` 内封 + 重投续播。

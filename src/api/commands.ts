@@ -200,7 +200,7 @@ const MOCK_DEVICES: Device[] = [
 const MOCK_SETTINGS: AppSettings = {
   usn: 'hancast-uuid-001',
   friendly_name: 'HanCast',
-  version: '2.4.7',
+  version: '2.4.8',
   media_port: 8080,
   default_device: null,
   network_interface: '',
@@ -558,6 +558,8 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
       return { ok: true } as T
     case 'remote_status':
       return { running: false, url: '', port: 0 } as T
+    case 'remote_update_ui':
+      return { ok: true } as T
     case 'probe_url':
       return { ok: true, status: 200, ms: 12, final_url: String(args?.url ?? '') } as T
     case 'plugin_check_updates': {
@@ -675,8 +677,8 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
     case 'check_update':
       return {
         has_update: false,
-        current: '2.4.7',
-        latest: '2.4.7',
+        current: '2.4.8',
+        latest: '2.4.8',
         url: '',
         body: '',
         source: 'github',
@@ -1224,6 +1226,22 @@ export async function remoteStatus(): Promise<RemoteControlInfo> {
   const invoke = await initInvoke()
   const r = await invoke<RemoteControlInfo>('remote_status', {})
   return { ok: r?.running === true, url: r?.url ?? '', port: r?.port ?? 0 }
+}
+
+/** 把前端权威状态（队列/历史/播放模式/播完即停）同步给手机遥控器页 */
+export interface RemoteUiSnapshot {
+  queue?: Array<{ title: string; playing?: boolean }>
+  history?: Array<{ title: string; device_name?: string; kind?: string; thumbnail?: string | null }>
+  play_mode?: string
+  stop_after_current?: boolean
+}
+export async function remoteUpdateUi(payload: RemoteUiSnapshot): Promise<void> {
+  try {
+    const invoke = await initInvoke()
+    await invoke('remote_update_ui', { payload })
+  } catch {
+    /* 遥控器页同步是便利功能，失败不打断主流程 */
+  }
 }
 
 function normalizeLedger(resp: FailureLedger): FailureLedger {

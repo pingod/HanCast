@@ -1,5 +1,16 @@
 # HanCast 开发进度
 
+## 2026-11-03 发布轮：v2.4.8（手机遥控器页升级——常驻 + 媒体选择 + 功能加强）
+
+在 v2.4.7 之上把 v2.4.6 的手机遥控器页从「先投屏才能用、只有几个按钮」升级成真正的遥控器：应用一启动就常驻（手机浏览器打开即用），能选视频/粘链接/选目录投屏，有队列/历史/多设备/进度条/防息屏/横屏。
+
+- **后端 `remote/server.py` 重写**（343 → 713 行）：`RemoteControlServer(get_state, action, local_ip)` + `set_content_hooks(on_upload, on_paste, on_resolve_poll)`；`start(port=8899)` 占用回退 0；新增 `/api/paste`、`/api/resolve`、`/api/upload`（multipart，≤4GB，落临时文件保扩展名）；页面内联 UI 升级（封面卡片、拖动进度条、快进快退 ±5/±10、队列/历史面板、多设备 select、Wake Lock、横屏媒体查询）。
+- **后端 `commands.py`**（1519 → 1652 行）：新增 `remote_update_ui` 注册项同步 `_remote_ui` 镜像；`_remote_sessions_state()` 扩 queue/history/play_mode/stop_after_current；`_remote_action` 扩 next/prev/mode/stop_after/cast_history/load_folder 走 `remote_command` 事件委派前端；新增 `_remote_upload`/`_remote_paste`/`_remote_resolve_poll`；`_start_services()` 随应用常驻启动遥控器页。`_start_cast` 接受可选 `title` 覆盖 DIDL 标题（手机上传哈希文件名不再难看）。
+- **前端**：`lib.rs` 新增 `remote_update_ui`（81 条 `#[tauri::command]`）；`commands.ts` 导出 `remoteUpdateUi`/`RemoteUiSnapshot`（80 个）；`cast.ts` 监听 `remote_command`、新增 `setupRemoteUiSync()` 去抖推 UI 快照；`CastController.vue` 弹窗改常驻地址展示；locale 各 399 键。
+- **测试**：`test_remote_control.py` 68→153 行（4→10 项）、新增 `test_remote_commands.py`（125 行 8 项）；后端全量 **604 passed**；vue-tsc 0 错、build 通过。
+- **文档**：AGENTS/架构总览/Frontend-API/Frontend-Spec/故障排查/开发指南 + CHANGELOG v2.4.8 节；两道闸门绿（audit 3949 可疑 0、freshness FAIL 0/WARN 0）；59 处行号漂移按 freshness「实际在[N]」重锚。
+- **未闭合**：真机未验（手机浏览器真开/相册真上传/多设备真投）；iOS Safari 超大文件未做分片。
+
 ## 2026-11-03 发布轮：v2.4.7（添加本机——自己投自己）
 
 在 v2.4.6 之上补「添加本机」能力：HanCast 自己也是 DLNA 渲染端，但设备列表只认 SSDP 发现的机器，本机被当「另一台设备」还常被隐藏。本版让用户一键把本机加进设备列表。

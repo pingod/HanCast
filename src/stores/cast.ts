@@ -1,4 +1,4 @@
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { defineStore } from 'pinia'
 import type { CastState, CastSession } from '@/types/cast'
 import { createSession } from '@/types/cast'
@@ -18,7 +18,7 @@ import {
   resolveShare,
 } from '@/api/commands'
 import type { StopWarning } from '@/api/commands'
-import { notify } from '@/api/commands'
+import { notify, remoteUpdateUi } from '@/api/commands'
 import { tt } from '@/i18n'
 import { useDeviceStore } from '@/stores/device'
 import { usePlaylistStore } from '@/stores/playlist'
@@ -996,9 +996,111 @@ export const useCastStore = defineStore('cast', () => {
           console.error('Cast error:', event.payload.message)
         })
       )
+
+      if (disposed) return
+      // 手机遥控器页发来的「队列类」指令（切集/改播放模式/播完即停/重投历史/选文件夹）。
+      // 这些状态以前端为权威，后端只把意图打回事件，这里执行真正的动作。
+      registerUnlisten(
+        await listen<{ action: string; value?: any; device_id?: string }>('remote_command', (event) => {
+          if (disposed) return
+          const { action, value } = event.payload
+          const playlist = usePlaylistStore()
+          if (value && event.payload.device_id && !focusedDeviceId.value) {
+            focusedDeviceId.value = event.payload.device_id
+          }
+          if (action === 'next') {
+            void skipToNext()
+          } else if (action === 'prev') {
+            void skipToPrev()
+          } else if (action === 'mode') {
+            if (value === 'sequential' || value === 'shuffle' || value === 'repeat-one') {
+              playlist.setPlayMode(value)
+            }
+          } else if (action === 'stop_after') {
+            playlist.setStopAfterCurrent(!!value)
+          } else if (action === 'cast_history') {
+            const entry = useHistoryStore().entries[Number(value)]
+            if (entry) void castHistoryEntry(entry)
+          }
+        })
+      )
     } catch {
       // Running outside Tauri, skip listeners
     }
+  }
+
+  /** 从历史条目一键重投（复用已有媒体类型：文件走路径、链接走来源页、队列走文件夹） */
+  async function castHistoryEntry(entry: {
+    deviceId: string; uri: string; title: string; mime_type: string; kind: string;
+    filePath?: string; sourceUrl?: string; folder?: string; thumbnail?: string | null
+  }): Promise<boolean> {
+    const deviceId = focusedDeviceId.value || entry.deviceId
+    if (!deviceId) return false
+    // 链接类历史：直链带签名会过期，回到来源页重新解析再投（与 PC 端行为一致）
+    if (entry.kind === 'url' && entry.sourceUrl) {
+      return resolveShareAndCast(deviceId, entry.sourceUrl, entry.thumbnail ?? null)
+    }
+    // 文件类历史：拿原始路径重新投（直链是本地服务的临时地址，重启即失效）
+    const uri = entry.filePath || entry.uri
+    return castQueueItem(deviceId, { id: `hist-${Date.now()}`, media: {
+      uri, title: entry.title, mime_type: entry.mime_type, thumbnail: entry.thumbnail ?? null,
+    } })
+  }
+
+  /** 解析分享链接后投屏（历史的链接类重投走这条） */
+  async function resolveShareAndCast(deviceId: string, text: string, thumb: string | null): Promise<boolean> {
+    try {
+      const { resolveShare } = await import('@/api/commands')
+      const r = await resolveShare(text)
+      if (!r || !r.uri) return false
+      return castQueueItem(deviceId, { id: `share-${Date.now()}`, media: {
+        uri: r.uri, title: r.title, mime_type: r.mime_type, thumbnail: thumb,
+      } })
+    } catch {
+      return false
+    }
+  }
+
+  /** 把前端权威状态（队列/历史/播放模式/播完即停）镜像给后端，供手机遥控器页读取。
+   *  这些状态原本只在前端 Pinia/localStorage 里，后端看不到；遥控器页需要一个可读副本。
+   *  用 watch 而非每处调用点手动推：只要队列/历史/模式变了就自动同步一次（去抖 300ms）。 */
+  function setupRemoteUiSync() {
+    const playlist = usePlaylistStore()
+    const history = useHistoryStore()
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const push = () => {
+      if (disposed) return
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => {
+        void remoteUpdateUi({
+          queue: playlist.playableItems.map((it) => ({
+            title: it.media.title || it.media.uri,
+            playing: it.id === playlist.playingId,
+          })),
+          history: history.entries.slice(0, 30).map((e) => ({
+            title: e.title,
+            device_name: e.deviceName,
+            kind: e.kind,
+            thumbnail: e.thumbnail ?? null,
+          })),
+          play_mode: playlist.playMode,
+          stop_after_current: playlist.stopAfterCurrent,
+        })
+      }, 300)
+    }
+    watch(
+      () => [
+        playlist.items.length,
+        playlist.selected,
+        playlist.playMode,
+        playlist.stopAfterCurrent,
+        playlist.playingId,
+        history.entries.length,
+      ],
+      push,
+      { deep: false },
+    )
+    push()
   }
 
   onMounted(() => {
@@ -1008,6 +1110,7 @@ export const useCastStore = defineStore('cast', () => {
       }
     })
     setupListeners()
+    setupRemoteUiSync()
   })
 
   onUnmounted(() => {
@@ -1062,6 +1165,7 @@ export const useCastStore = defineStore('cast', () => {
     skipToNext,
     skipToPrev,
     castQueueItem,
+    castHistoryEntry,
     seek,
     setVolume,
     setMute,

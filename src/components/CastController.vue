@@ -146,6 +146,7 @@ async function openRemote() {
   remoteLoading.value = true
   remoteOpen.value = true
   try {
+    // 遥控器页现在随应用常驻；这里只是把地址取回来展示（start 幂等，已在跑时返回同一地址）
     const r = await startRemoteControl()
     if (r.ok && r.url) remoteUrl.value = r.url
     else remoteError.value = t('cast.remoteFailed')
@@ -557,6 +558,7 @@ onMounted(async () => {
           <template v-else>
             <div class="ctrl-remote__url" @click="copyRemoteUrl" :title="t('cast.remoteCopy')">{{ remoteUrl }}</div>
             <p class="ctrl-remote__hint">{{ remoteCopied ? t('cast.remoteCopied') : t('cast.remoteCopy') }}</p>
+            <p class="ctrl-remote__hint">{{ t('cast.remoteAlwaysOn') }}</p>
           </template>
           <button class="ctrl__stop ctrl__wide" @click="closeRemote">{{ t('common.close') }}</button>
         </div>

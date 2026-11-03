@@ -635,6 +635,18 @@ async fn remote_status(
         .await
 }
 
+/// 把前端权威状态（队列/历史/播放模式/播完即停）同步给遥控器页
+#[tauri::command]
+async fn remote_update_ui(
+    sidecar: State<'_, SidecarManager>,
+    payload: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    sidecar
+        .send_command("remote_update_ui", payload)
+        .await
+}
+
+
 #[tauri::command]
 async fn start_cast(
     sidecar: State<'_, SidecarManager>,
@@ -1642,6 +1654,7 @@ pub fn run() {
             start_remote_control,
             stop_remote_control,
             remote_status,
+            remote_update_ui,
             stop_cast,
             pause_cast,
             resume_cast,
