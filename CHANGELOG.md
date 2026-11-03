@@ -41,6 +41,13 @@
 - `npx vue-tsc --noEmit` exit 0；`npm run build` ✓。
 - 口径变化：components 21→22、`tools/` 顶层脚本 58→59、`test_*.py` 38→39、locale 各 399→400 键。
 
+### 发布
+- 提交 `f91cdfd`，tag `v2.4.10`；CI run **41621247311** 三平台全绿（linux-x64 / macos-arm64 / windows-x64 + Upload to draft Release）。
+- 产物 `HanCast_2.4.10_aarch64.dmg` 85,661,674 字节，sha256 `c1269129284de9e30213214612e87c958b1d945f483f016fc695ee01f783efe8`。
+- 装端验收：`tools/install-macos-artifact.sh 2.4.10 <dmg>` 装上（旧版备份 `/tmp/HanCast_pre_249_190657.app`），`tools/accept-macos-artifact.sh 2.4.10` → **ALL PASS**（含 ffmpeg 探测 source=system `/opt/homebrew/bin/ffmpeg` 9.0.2、下载那份 6.0 也能执行、手动指定优先）。
+- **真机复核「令牌跨重启稳定」**（这是本轮的核心承诺，脚本测不到进程重启这条线）：装好的 2.4.10 首次启动后 `hancast_setting.json` 里出现 `remote_control_token`；`curl http://127.0.0.1:8899/r/<token>/` → **200**；`osascript quit` 后重开，读回**同一个 token**，同一地址仍 **200**。
+- 未做：首页按钮的**像素级截图复核**（本机 HanCast 窗口启动即隐藏到菜单栏，用户当时在通话中，不便抢焦点）。该入口由 `tools/verify-remote-entry.cjs`（真 SFC 编译 + 3 条断言 + 负向验证）与 `npm run build` 类型检查覆盖。
+
 
 ---
 
