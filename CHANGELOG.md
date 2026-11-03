@@ -33,6 +33,13 @@ v2.4.6 的遥控器页要「先投屏」才有用（`start_remote_control` 手�
 ### 数字与文档
 命令总数 80→81、Sidecar 注册表 73→74、前端封装 79→80；`remote/server.py` 343→713 行、`commands.py` 1519→1652 行；tests 37→38 个 `test_*.py`（41 文件 10127 行）。文档同轮修订：`AGENTS.md`、`docs/架构总览.md`（行数表/命令归属）、`docs/HanCast-Frontend-API.md`（§0 统计表/§7 +1 行）、`docs/HanCast-Frontend-Spec.md`（locale 399）、`docs/故障排查.md`（§5.7 遥控器日志补常驻/上传/粘贴）、`docs/开发指南.md`（测试地图）。全仓 59 处因代码行号漂移的文档引用按 `check-doc-freshness.py` 报的「实际在 [N]」逐条重锚。
 
+### 装端验收（macOS arm64）
+- CI run 41598558501 三平台全绿（linux 17m36s / macos 11m29s / windows 21m3s）。dmg sha256 `5acff30272236fa11b6ad610d17106cb47ada79e66c53435989f5f6aeb9fb889`，`hdiutil verify` VALID。
+- `tools/install-macos-artifact.sh 2.4.8` 装好（原 2.4.7 移到 /tmp），CFBundleShortVersionString=2.4.8，adhoc 签名。
+- `tools/accept-macos-artifact.sh 2.4.8` → **90 PASS / 0 FAIL / ALL PASS**。
+- 产物内 `hancast_sidecar/remote/server.py`、`commands.py` sha256 与仓库逐字节一致。
+- 装好的产物上真验遥控器页：应用启动后 `[Remote] 遥控器页随应用启动: http://<ip>:8899/r/<token>/` 自动出现在日志（无需先投屏）；`/r/<token>/` 页面 200（18KB）、`/api/state` 返回完整 session/queue/history/play_mode、错误 token 404、`/api/cmd` play 正确返回。
+
 ### 未闭合口子
 - 真机未验（手机浏览器真开、相册真上传、多设备真投）；判据是源码级 + 端到端自起 server。
 - 相册上传依赖手机浏览器支持 `<input type=file accept=video/*>` 走系统相册；iOS Safari 部分版本对超大文件会限流，未做分片。

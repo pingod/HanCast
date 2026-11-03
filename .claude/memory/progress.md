@@ -1,6 +1,6 @@
 # HanCast 开发进度
 
-## 2026-11-03 发布轮：v2.4.8（手机遥控器页升级——常驻 + 媒体选择 + 功能加强）
+## 2026-11-03 发布轮：v2.4.8（手机遥控器页升级——常驻 + 媒体选择 + 功能加强）——已发布
 
 在 v2.4.7 之上把 v2.4.6 的手机遥控器页从「先投屏才能用、只有几个按钮」升级成真正的遥控器：应用一启动就常驻（手机浏览器打开即用），能选视频/粘链接/选目录投屏，有队列/历史/多设备/进度条/防息屏/横屏。
 
@@ -9,7 +9,8 @@
 - **前端**：`lib.rs` 新增 `remote_update_ui`（81 条 `#[tauri::command]`）；`commands.ts` 导出 `remoteUpdateUi`/`RemoteUiSnapshot`（80 个）；`cast.ts` 监听 `remote_command`、新增 `setupRemoteUiSync()` 去抖推 UI 快照；`CastController.vue` 弹窗改常驻地址展示；locale 各 399 键。
 - **测试**：`test_remote_control.py` 68→153 行（4→10 项）、新增 `test_remote_commands.py`（125 行 8 项）；后端全量 **604 passed**；vue-tsc 0 错、build 通过。
 - **文档**：AGENTS/架构总览/Frontend-API/Frontend-Spec/故障排查/开发指南 + CHANGELOG v2.4.8 节；两道闸门绿（audit 3949 可疑 0、freshness FAIL 0/WARN 0）；59 处行号漂移按 freshness「实际在[N]」重锚。
-- **未闭合**：真机未验（手机浏览器真开/相册真上传/多设备真投）；iOS Safari 超大文件未做分片。
+- **发布**：commit `38b6aab`、tag `v2.4.8`、CI 41598558501 三平台全绿、dmg sha256 `5acff302…b889` 装端 90 PASS/0 FAIL、产物内 remote/server.py+commands.py sha256 与仓库一致、装好的产物上遥控器页随应用常驻并 /api/state /api/cmd 端到端通；publish `gh release edit --draft=false`。
+- **未闭合**：真机手机浏览器真开/相册真上传/多设备真投未手动复测；iOS Safari 超大文件未做分片。
 
 ## 2026-11-03 发布轮：v2.4.7（添加本机——自己投自己）
 
