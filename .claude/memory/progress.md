@@ -11,7 +11,8 @@
 - **数字**：`#[tauri::command]` 79→**80**（lib.rs:1603-1687）、Sidecar 72→**73**（commands.py:143-252）、commands.ts 导出 78→**79**、locale 395→**397**；commands.py 1519 行、lib.rs 1687、commands.ts 1643、guard.py 714、device.ts 248、AddDeviceModal.vue 273。
 - **验证**：后端全量 **590 passed**；`npx vue-tsc --noEmit` exit 0；`npm run build` 通过（主包 369.21 kB）。两道文档闸门绿：audit 3942 处可疑 0；freshness FAIL 0/WARN 0、数字 13 处一致。
 - **文档坑（本轮返工教训）**：两遍 difflib remap 用「起点取新、终点取旧」混出 **85 处反向行号范围**（a>b），audit 报「行号越界」，用 `path` basename 全局 rglob 解析唯一路径后批量 swap 修好；freshness 的 `实现 A path:N、B path:M` 并列写法会把行号 N 的 right 窗口抓到 B → 假 FAIL，改用「`A` 见 path:N，`B` 见 path:M」隔断。
-- **未闭合**：真机「自己投自己」未实测（仅源码级 + UI 桩）；多网卡/VPN 下 `_get_local_ip` 选哪张卡未加选择入口。
+- **发布**：提交 `7ace465`、tag `v2.4.7` 已推；CI run 41585153134 三平台全绿；dmg sha256 逐字节一致（`2c8cbb7f…08b2`）、`hdiutil verify` VALID；`install-macos-artifact.sh 2.4.7` 装好、`accept-macos-artifact.sh 2.4.7` **89 PASS / 0 FAIL / ALL PASS**；在装好的产物上喂 `add_local_device` 真返回本机设备、`get_devices` 查得到（端到端通）。Release 已 publish。
+- **未闭合**：真机「自己投自己」真投（本机渲染端真放一集 + 另一台手机遥控）尚未手动点一遍；多网卡/VPN 下 `_get_local_ip` 选哪张卡未加选择入口。
 
 ## 当前阶段：v2.3.19 工作区前端优化（尚未发布）
 

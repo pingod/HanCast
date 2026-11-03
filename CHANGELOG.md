@@ -33,8 +33,13 @@ HanCast 本身既是控制端也能当接收端（DLNA 渲染端），但设备�
 - 全仓 `文件:行号` 引用按 diff 映射重校（本轮两遍 difflib remap + freshness 报「实际在 [N]」逐条人工修），顺带批量修复了 remap 造成的 85 处**反向行号范围**（`a>b`，例如把起点写大了的反向区间实际是把两端换了个方向）。
 - 两道闸门全绿：`tools/audit-doc-refs.py` 合计 3925 处可疑 0；`tools/check-doc-freshness.py` FAIL 0 / WARN 0（22 份文档，硬数字 13 处一致）。
 
+### 装端验收（macOS arm64）
+- CI run 41585153134 全绿（macos/linux/windows 三平台）；dmg sha256 `2c8cbb7fd83cdd88466e36a2524a3410769831736b732bd729255e9bc1af08b2` 与 GitHub 声明逐字节一致，`hdiutil verify` VALID。
+- `tools/install-macos-artifact.sh 2.4.7` 装好（原 2.4.6 备份到 /tmp）；`tools/accept-macos-artifact.sh 2.4.7` → **89 PASS / 0 FAIL / ALL PASS**。
+- 在装好的产物上直接喂 `add_local_device` 给 sidecar：返回本机设备（uuid、LAN IP、自己的 DLNA 端口、`location=http://<lan-ip>:<port>/description.xml`），随后 `get_devices` 能查到它——「添加本机」端到端真跑通。
+
 ### 未闭合口子
-- 真机「自己投自己」未实测（只到源码级 + 前端 UI 桩），装端验收另行；未 bump 到 /Applications 现场。
+- 「自己投自己」的**真投**（在本机渲染端真放一集、另一台手机遥控）尚未手动点一遍；本机渲染验证留待日常使用。
 - 依赖本机网卡探测出对的 LAN IP（多网卡/VPN 场景下 `_get_local_ip` 选哪张卡可能有分歧，本轮未加选择入口）。
 
 ## v2.4.6 — 2026-10-31
