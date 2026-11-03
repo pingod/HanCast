@@ -43,6 +43,14 @@
 ### 诚实说明
 「媒体输入区消失」的**具体触发条件这一轮没抓到**：打包版 WebView 里不方便挂调试器（`safaridriver` 需要用户手动打开 Safari 的「允许远程自动化」），代码路径又已逐层排除，无法稳定复现。本轮做的是让这类问题**下次能查、能看见、能重试**，而不是猜一个根因去改。若再次出现，按 [docs/故障排查.md](docs/故障排查.md) §5.9 第 1 步取 `[webview/` 日志。
 
+### 发布
+- 提交 `a742c8d`，tag `v2.4.11`；CI run **41638206642** 三平台全绿（macos-arm64 / windows-x64 / linux-x64 + Upload to draft Release）。
+- 产物 `HanCast_2.4.11_aarch64.dmg` 85,684,153 字节，sha256 `11ce9d037d5fc999b3a7d8820b0ede97ae67b65aba7bd35a26e1b2ac9174bb56`。
+- 装端验收：`tools/install-macos-artifact.sh 2.4.11 <dmg>` 装上（原 2.4.10 备份到 `/tmp/HanCast_pre_2410_210432.app`），`tools/accept-macos-artifact.sh 2.4.11` → **ALL PASS**（ffmpeg source=system `/opt/homebrew/bin/ffmpeg` 9.0.2、下载那份 6.0 也能跑、手动指定优先、ffprobe 未采纳）。
+- **前端错误通道在真实产物上验过**：把装好的 `/Applications/HanCast.app/Contents/MacOS/hancast-sidecar` 单拉起来喂一条 `frontend_log`，返回 `{"ok": true}`，日志里出现 `hancast.commands ERROR: [webview/section] 装端自检：这条来自真实产物` —— 整条链路（`frontendLog()` → 命令 → `hancast.log`）在打包版成立。
+- **遥控页在真实产物上验过**：启动装好的 2.4.11，`curl http://127.0.0.1:8899/r/<token>/` → 200，页面里**没有** `setInterval(poll`、有 `async function refresh()` 与 `refresh_devices`；`/api/state` 的 `devices` 列出了**没在投**的局域网设备（cl32 / 192.168.175.227）；`POST /api/cmd {"action":"refresh_devices"}` → `{"ok":true,"result":{"scanning":true}}`，重扫后 state 仍能列出该设备。
+- 未做像素级复核的只剩「错误边界真的出现」这一幕——它只在组件渲染期抛异常时才出现，本机造不出稳定复现；由 `tools/verify-section-boundary.cjs`（5 条 + 负向验证）兜底。
+
 ---
 
 ## v2.4.10 — 2026-11-03
