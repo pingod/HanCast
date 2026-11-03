@@ -1,6 +1,6 @@
 # Changelog
 
-> 最后校对：2026-11-03，对应版本 v2.4.10（`package.json:4`）。
+> 最后校对：2026-11-03，对应版本 v2.4.11（`package.json:4`）。
 
 本文件记录 HanCast 的版本历史。口径说明：
 
@@ -8,6 +8,40 @@
 - 版本号唯一来源是 **`package.json` 的 `version`**（`scripts/sync-version.cjs:4,17`），`npm run version:set <x.y.z>` 把它刷进 7 处契约点：`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`（本地包那条，v2.3.8 起收进来——此前每版都靠人肉补）、`hancast-backend/pyproject.toml`、`hancast_sidecar/utils/config.py:39`、`src/api/commands.ts`（mock）、`src/stores/settings.ts`。`scripts/check-version.cjs` 自称以 `tauri.conf.json` 为源（口径相反），但全仓无人调用，是未接线的孤儿脚本——判定以 `sync-version.cjs` 为准。详见 [docs/构建与发布.md](docs/构建与发布.md) §1。
 - 下表「提交」列即 `git tag <版本>` 指向的提交；细节以 `git show <提交>` 为准，本文只留用户可感知的变化。
 - 新加版本时**同一次提交**里补这里，并按 [docs/README.md](docs/README.md) §4 的约定同步对应文档。
+
+---
+
+## v2.4.11 — 2026-11-03
+
+三件事，一条主线：**把「静默失败」变成看得见的东西**。用户报「首页中间的媒体输入模块自己消失了」——这类问题此前在程序里查无可查；同一轮把手机遥控页的设备列表修准，并改成手动刷新。
+
+### 为什么需要
+用户原话：「中间那个模块不知道为什么自己消失了，另外，手机控制页面无法准确列出局域网设备，而且你需要改成手动刷新方式」。
+
+1. **媒体输入区自己消失，而且事后查不到任何痕迹**。`MediaInput.vue` 的模板穷举了 `mediaStore.state` 的所有取值，CSS 里也没有能把整块隐藏成高度 0 的规则，`HomeView.vue` 又是无条件渲染 `<MediaInput />` —— 那么「整块空白」只剩一种解释：子组件在**渲染期抛了异常**，Vue 把出错的组件整块卸掉。而这类异常在 v2.4.10 之前**任何地方都不落盘**（`hancast.log` 是 Python 侧的，`app.config.errorHandler` 根本没注册），用户只能看到「中间空了一块」。
+2. **遥控器页的设备列表只列「有活动会话」的设备**。页面的 `renderDevSel()` 吃的是 `state.sessions`，所以没在投的电视在手机上根本选不到，只能回电脑上先投一次。
+3. **页面自己在定时轮询设备列表**。电视开关机、网络抖动都会让下拉框自顾自跳一下，用户正在点的设备可能被换掉。
+
+### 改动
+1. 新增 `hancast-backend/hancast_sidecar/commands.py` 的 `frontend_log` 命令（`_frontend_log`，`commands.py:1716`）：前端错误写进**同一份** `hancast.log`，行首 `[webview/<source>]`，`message` 截 2000 字、`stack` 截 4000 字。命令注册表 74→75。
+2. `src/api/commands.ts` 新增 `frontendLog()`（`:1523`）：整段 `try/catch` 吞掉异常——它是在错误处理里被调用的，自己再抛就会引发新错误。
+3. `src/main.ts`：注册 `app.config.errorHandler`（`:50`）与 `unhandledrejection` / `error` 监听，共用 `:42` 的上报函数；为此把 `createApp` 与各 `use()` 提到 errorHandler 之前（否则 `vue-tsc` 报 TS2448/TS2454）。
+4. 新增 `src/components/SectionBoundary.vue`（89 行）：`onErrorCaptured` 捕获子组件异常 → 记日志 → **原地**换成「这块内容没能加载出来，错误已记入日志 + 具体错误 + 重试」。`return false` 是刻意的（上面还有 errorHandler，重复记一遍没意义，继续上抛会让整页白掉）。
+5. `src/views/HomeView.vue`：用 `<SectionBoundary :key="mediaKey" …>` 包住 `<MediaInput />`，重试时 `mediaKey += 1` 强制重新挂载。组件 22→23。
+6. `src/locales/*.json`：新增 `home.sectionFailed` / `home.retry` / `home.mediaSection`，两份各 403 键。
+7. `commands.py` 的 `_remote_sessions_state()` 返回新增 `devices`：SSDP **全量**设备表，跳过隐藏设备，逐台带 `online`（会话还在但 SSDP 已消失 ⇒ 离线）与 `session_status`；会话还在但设备已消失的也补进来。
+8. `_remote_action` 新增 `refresh_devices` → `ssdp.scan()`；`focus_device` 改吃 `state.devices`（没在投的电视也能选）。三处取「当前控制目标」的地方统一成 `cast_state.device_id or state["focus"]`——**权威聚焦点是 `cast_state.device_id`**（`focus_device` 写的就是它），`state["focus"]` 只是页面显示用的兜底（它不在设备表里时会退到第一台）；反过来用会让正在控制的那台被设备表里的第一台盖掉（全量测试抓到的，见「验证」第 2 条）。
+9. `hancast_sidecar/remote/server.py`：`renderDevSel()` 改吃 `state.devices`（带 `▶` 正在播 /「（离线）」标记），新增 `refresh()`（触发重扫 → 等 1.8 秒 → 拉一次 state），**去掉 state 的定时轮询**。
+10. 新增 `tools/verify-section-boundary.cjs`（5 条断言）与 `hancast-backend/tests/test_remote_device_list_refresh.py`（10 条）；`tools/verify-app-lifecycle.cjs` 叶子白名单补 `SectionBoundary`。
+
+### 验证
+- `node tools/verify-section-boundary.cjs` → **5/5 PASS**；把 `SectionBoundary.vue:30` 的 `return false` 改成 `true`、或用裸 `<MediaInput />` 换掉 HomeView 里的边界 → **4/5 变红**。
+- `cd hancast-backend && .venv/bin/python -m pytest tests/test_remote_device_list_refresh.py tests/test_remote_commands.py tests/test_remote_token_persistence.py -q` → **26 passed**；`git stash` 掉后端两处改动 → **9 failed / 1 passed**（唯一通过的是 HEAD 本就有的行为）。
+- 全量 `pytest` 抓到一个**只有整套跑才出现**的回归：`test_remote_commands.py::test_切集指令回推事件不自己播` / `test_上传把临时文件投给聚焦设备` 单独跑绿、连跑红——`handler` fixture 会起真 SSDP 并发现局域网里真电视，于是 `state["devices"]` 非空、`state["focus"]` 退到「第一台真电视」，把测试里写死的 `cast_state.device_id = "d1"` 盖掉。改成 `cast_state.device_id or state["focus"]` 后 26 passed、全量 622 passed。教训：**涉 SSDP 的用例不能只单独跑**，设备表内容取决于本机网络。
+- `node tools/verify-remote-entry.cjs` 3/3、`verify-cast-ui.cjs` 30/30、`verify-device-list-empty.cjs` 4/4、`verify-app-lifecycle.cjs` 2/0；`npx vue-tsc --noEmit` exit 0；`npm run build` ✓（主包 375.96 kB）；`bash tools/rust-check.sh` 通过。
+
+### 诚实说明
+「媒体输入区消失」的**具体触发条件这一轮没抓到**：打包版 WebView 里不方便挂调试器（`safaridriver` 需要用户手动打开 Safari 的「允许远程自动化」），代码路径又已逐层排除，无法稳定复现。本轮做的是让这类问题**下次能查、能看见、能重试**，而不是猜一个根因去改。若再次出现，按 [docs/故障排查.md](docs/故障排查.md) §5.9 第 1 步取 `[webview/` 日志。
 
 ---
 
@@ -206,7 +240,7 @@ HanCast 本身既是控制端也能当接收端（DLNA 渲染端），但设备�
 - 新增 Sidecar 命令 `cast_failure_list` / `cast_failure_clear`；后台日志面板新增「投屏失败台账」区（`components/LogsPanel.vue`，中英文案 `logs.castFailures*`）。
 
 ### 直链有效性预检 + 历史自动重解
-- 新增 Sidecar 命令 `probe_url`（commands.py:1174）：探直链是否还在（过期 / 被 CDN 判废提前暴露）。前端 `MediaInput.vue:601` 在历史条目重投前调用；历史里的 url 条目重投时自动回来源页重解（提示文案 `media.historyDead` / `media.historyDeadHint`）。
+- 新增 Sidecar 命令 `probe_url`（commands.py:1220）：探直链是否还在（过期 / 被 CDN 判废提前暴露）。前端 `MediaInput.vue:601` 在历史条目重投前调用；历史里的 url 条目重投时自动回来源页重解（提示文案 `media.historyDead` / `media.historyDeadHint`）。
 
 ### 行号与硬数字
 - 命令总数 71 → **74**（lib.rs:1547-1615），Sidecar 注册表 64 → **67**（`commands.py:131-228`），`src/api/commands.ts` 导出 70 → **73**，locale 369 → **375** 键。
@@ -462,7 +496,7 @@ HanCast 本身既是控制端也能当接收端（DLNA 渲染端），但设备�
 - **实测证据（不是推测）**：装好 2.3.21 后往那台 TCL 投被拒，重复五次，`usernoted` 库里躺着五条 `com.han.hancast` 记录——标题 `投屏失败`、正文 `unknown tcl_mt5879_cn：…HTTP 500…请在电视上打开「多屏互动/无线投屏/DLNA」…`（内容完全对，说明链路走到了最后一米），但 **`presented` 全为 0**，屏幕上也没有横幅。同机正对照：走新 API 的 App 是 21 条 `presented=1`，而这段时间系统自己的横幅（屏幕访问提示）正常弹出——**不是勿扰、不是样式设置**（HanCast 在系统设置里是「允许通知 on + 桌面/通知中心/锁屏全勾 + 提醒样式=临时」）。
 - **根因**：`tauri-plugin-notification` 在 macOS 上落到 `notify-rust 4.18` → `mac-notification-sys 0.6.15`，用的是 **`NSUserNotificationCenter`**（macOS 11 起废弃；当前 macOS 只把它存进通知中心，不再呈现）。载荷里那句 `scat.id = "LEGACY"` 就是这条路的签名。**升级插件没用**——已查 2.7.0 的依赖仍是 `notify-rust ^4.18`。
 - **修法一 · 壳层直发**：新增 `#[tauri::command] notify_os`（src-tauri/src/lib.rs:1055），macOS 走 `UNUserNotificationCenter`（新模块 `src-tauri/src/macos_notify.rs`：授权只在第一次真要发时问一次、被拒不重试不报错；`RcBlock` 传空 completion handler）。依赖 `objc2 0.6` / `objc2-foundation 0.3` / `objc2-user-notifications 0.3` / `block2 0.6`，**与 tauri 自己在用的同一套版本**（锁里 objc2 就是 0.6.4），不引第二份运行时。**非 macOS 一律回 `Err`**，前端 catch 之后退回插件那条路——Linux 的 DBus（他那台由 quickshell 接收）与 Windows 的 Toast 保留原样。
-- **修法二 · 不依赖系统通知的兜底**：`raiseIfHidden()`（src/api/commands.ts:1626）在窗口不可见时 `show()+setFocus()`，把那条红字直接摆到用户眼前；**只在真不可见时做**，避免用户正在别的程序里打字被抢焦点。为此加 capability `core:window:allow-is-visible`。这条同时也是「投屏失败必须让用户看见」这条约束里唯一与 OS 通知实现无关的保证。
+- **修法二 · 不依赖系统通知的兜底**：`raiseIfHidden()`（src/api/commands.ts:1653）在窗口不可见时 `show()+setFocus()`，把那条红字直接摆到用户眼前；**只在真不可见时做**，避免用户正在别的程序里打字被抢焦点。为此加 capability `core:window:allow-is-visible`。这条同时也是「投屏失败必须让用户看见」这条约束里唯一与 OS 通知实现无关的保证。
 - **契约变化**：`#[tauri::command]` **66 → 67**（`generate_handler!` 现读 lib.rs:1541-1608）；壳层就地执行的命令 **9 → 10**（新增 `notify_os`）；转发 Sidecar 的仍是 57 条。
 - **验证**：`cargo check` 通过（同时证明 `core:window:allow-is-visible` 是合法 capability 标识、objc2 绑定签名可用：`requestWithIdentifier_content_trigger` 参数顺序是 id→content→trigger，`requestAuthorization…` 的 handler 非空所以必须给 block）；`vue-tsc` + `vite build` 通过；`tools/verify-cast-ui.cjs` 23 条仍全绿（该 harness 把 `notify()` 整个 stub 掉，所以它证明的是「五条失败出口都会调用它」，不涉及 OS 呈现）。**真机端到端复验在装完 2.3.22 之后做**：同一台电视重投被拒 + 窗口收进托盘，看横幅弹不弹、窗口带不带得回来。
 - **文档同轮修订**：AGENTS.md（**安全约束第 5 条**改写：macOS 不得用插件发通知 + 窗口兜底 + 实测数字、Rust 依赖块加 objc2 家族、命令计数与 `generate_handler!` 行号重锚、版本行）；docs/架构总览.md（进程图 66 → 67、命令归属 9 → 10）；docs/HanCast-Frontend-API.md（§2 新增 `notify_os` 一行、快速参考表 66 → 67 条并加第 67 行、壳层本地执行计数、头部校对标明「本轮只补这一条链路，其余沿用 2.3.13 取证」）；docs/HanCast-Frontend-Spec.md（capability 清单加 `allow-is-visible`、cast.ts 失败出口补窗口前置、版本行）。

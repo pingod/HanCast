@@ -6,6 +6,7 @@ import CastController from '@/components/CastController.vue'
 import ScreenCastPanel from '@/components/ScreenCastPanel.vue'
 import RemoteControlPanel from '@/components/RemoteControlPanel.vue'
 import StopWarningBanner from '@/components/StopWarningBanner.vue'
+import SectionBoundary from '@/components/SectionBoundary.vue'
 import Footer from '@/components/Footer.vue'
 import AutostartPromptModal from '@/components/AutostartPromptModal.vue'
 import { useCastStore } from '@/stores/cast'
@@ -22,6 +23,9 @@ const { isRunning: screenCastRunning } = storeToRefs(screenCastStore)
 
 // 手机遥控入口常驻首页：这个地址不该只在「正在投屏」的控制器里才看得到
 const remoteOpen = ref(false)
+
+// 媒体输入区的外部 key：出错时换 key 重新挂载（错误边界点「重试」走这里）
+const mediaKey = ref(0)
 </script>
 
 <template>
@@ -64,7 +68,15 @@ const remoteOpen = ref(false)
         </div>
       </div>
 
-      <MediaInput />
+      <!-- 媒体输入区包一层错误边界：子组件抛错时整块会被 Vue 卸掉，
+           以前就是「这块自己消失了」，现在记日志并原地给条可见的失败提示 -->
+      <SectionBoundary
+        :key="mediaKey"
+        :label="t('home.mediaSection')"
+        @retry="mediaKey += 1"
+      >
+        <MediaInput />
+      </SectionBoundary>
       <div v-if="castStore.lastError" class="home__error" role="alert">
         <p><strong>{{ t('cast.error') }}</strong> · {{ castStore.lastError }}</p>
         <button :aria-label="t('controller.close')" @click="castStore.dismissError()">×</button>

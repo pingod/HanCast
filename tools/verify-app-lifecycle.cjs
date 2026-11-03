@@ -26,6 +26,8 @@ const leafNames = new Set([
   'HiddenDevicesModal',
   // v2.4.10 起 HomeView 常驻挂手机遥控弹窗；同样必须登记，漏了就是整个脚本加载失败。
   'RemoteControlPanel',
+  // v2.4.11 起 HomeView 用错误边界（SectionBoundary）包住媒体输入区。
+  'SectionBoundary',
   'TitleBar', 'MediaInput', 'DeviceList', 'CastController', 'ScreenCastPanel',
   'StopWarningBanner', 'Footer', 'AutostartPromptModal',
 ])

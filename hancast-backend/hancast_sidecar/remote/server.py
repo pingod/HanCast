@@ -136,7 +136,7 @@ _PAGE = r"""<!DOCTYPE html>
 <body>
   <div class="hd">
     <div class="devsel"><select id="devsel"></select></div>
-    <button class="sm" style="width:44px;padding:10px 0" onclick="refresh()" title="刷新">⟳</button>
+    <button id="refreshBtn" class="sm" style="width:44px;padding:10px 0" onclick="refresh()" title="重新扫描并刷新">⟳</button>
   </div>
 
   <div class="card" id="nowcard">
@@ -299,13 +299,21 @@ function onDevChange() {
 }
 function renderDevSel() {
   const sel = document.getElementById('devsel');
-  const sessions = (state && state.sessions) || [];
+  // 列的是「局域网里的全部设备」，不是「正在投的那几台」。
+  // 早先只吃 state.sessions，没在投的电视在手机上根本看不见，用户以为列表不准。
+  const list = (state && state.devices) || [];
   const cur = state && state.focus;
-  if (!sessions.length) { sel.innerHTML = '<option>暂无设备</option>'; return; }
-  sel.innerHTML = sessions.map(s =>
-    '<option value="' + s.device_id + '"' + (s.device_id === cur ? ' selected' : '') + '>' +
-    (s.device_name || s.device_id) + (s.status === 'playing' ? ' ▶' : '') + '</option>'
-  ).join('');
+  if (!list.length) {
+    sel.innerHTML = '<option value="">暂无设备（点 ⟳ 重新扫描）</option>';
+    return;
+  }
+  sel.innerHTML = list.map(d => {
+    const playing = d.session_status === 'playing';
+    const tag = playing ? ' ▶' : (d.online ? '' : '（离线）');
+    const label = (d.device_name || d.device_id) + tag;
+    return '<option value="' + esc(d.device_id) + '"' + (d.device_id === cur ? ' selected' : '') + '>' +
+      esc(label) + '</option>';
+  }).join('');
 }
 
 function render() {
@@ -426,8 +434,27 @@ async function poll() {
   } catch (e) { /* 网络抖动保持上一帧 */ }
   render();
 }
-// 刷新按钮
-function refresh() { poll(); toast('已刷新'); }
+
+// 手动刷新（v2.4.11 起页面不自动轮询）：
+// ① 先让电脑端重扫一遍局域网（M-SEARCH 是异步的，2 秒内陆续回来）
+// ② 等一会儿再拉状态，这样「新上线的电视」才会出现在下拉里
+// 自动轮询被去掉的原因：设备列表一秒一跳，选中项会自己变，且看起来像列表不准。
+let refreshing = false;
+async function refresh() {
+  if (refreshing) return;
+  refreshing = true;
+  const btn = document.getElementById('refreshBtn');
+  if (btn) btn.textContent = '…';
+  try {
+    await cmd('refresh_devices', null);
+    await new Promise(r => setTimeout(r, 1800));
+    await poll();
+    toast('已刷新');
+  } finally {
+    refreshing = false;
+    if (btn) btn.textContent = '⟳';
+  }
+}
 
 // 防息屏（Wake Lock）
 async function keepAwake() {
@@ -435,11 +462,12 @@ async function keepAwake() {
     if ('wakeLock' in navigator) { await navigator.wakeLock.request('screen'); }
   } catch (e) { /* 忽略：部分浏览器不支持 */ }
 }
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') keepAwake(); });
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') { keepAwake(); poll(); }
+});
 keepAwake();
 
 poll();
-setInterval(poll, 1000);
 </script>
 </body>
 </html>

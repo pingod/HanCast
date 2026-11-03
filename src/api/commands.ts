@@ -200,7 +200,7 @@ const MOCK_DEVICES: Device[] = [
 const MOCK_SETTINGS: AppSettings = {
   usn: 'hancast-uuid-001',
   friendly_name: 'HanCast',
-  version: '2.4.10',
+  version: '2.4.11',
   media_port: 8080,
   default_device: null,
   network_interface: '',
@@ -677,8 +677,8 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
     case 'check_update':
       return {
         has_update: false,
-        current: '2.4.10',
-        latest: '2.4.10',
+        current: '2.4.11',
+        latest: '2.4.11',
         url: '',
         body: '',
         source: 'github',
@@ -1510,6 +1510,33 @@ export async function getLogs(query: LogQuery = {}): Promise<LogPage> {
 export async function setLogLevel(level: string): Promise<{ ok: boolean; level: string }> {
   const invoke = await initInvoke()
   return invoke('set_log_level', { level })
+}
+
+/**
+ * 把 WebView 里的报错送进同一份 hancast.log（后台日志面板里就能看见前端出了什么）。
+ *
+ * 为什么需要：界面上某块区域整个不见、按钮点了没反应，这类问题只发生在前端，
+ * 后端日志里一个字都没有——2026-11-03 用户报「首页中间的媒体输入区自己消失了」，
+ * 翻遍 hancast.log 只有 DLNA 的记录，完全查不下去。
+ * 这个通道**自己绝不能再抛错**：它是在错误处理里被调用的，所以整段吞掉异常。
+ */
+export async function frontendLog(entry: {
+  level?: 'error' | 'warn' | 'info'
+  message: string
+  stack?: string
+  source?: string
+}): Promise<void> {
+  try {
+    const invoke = await initInvoke()
+    await invoke('frontend_log', {
+      level: entry.level || 'error',
+      message: entry.message,
+      stack: entry.stack || '',
+      source: entry.source || 'webview',
+    })
+  } catch {
+    // 日志通道坏了就闭嘴，不能在这里引发新的错误
+  }
 }
 
 // ── Update Check ──

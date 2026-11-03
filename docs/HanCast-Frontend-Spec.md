@@ -2,7 +2,7 @@
 
 > 本文档回答：HanCast 桌面端（Tauri 2 + Vue 3）的界面层是怎么搭起来的——窗口壳层、路由视图、组件与 Store 全量清单、真实数据流时序、样式与国际化机制、浏览器 mock 模式，以及写代码前必须知道的约束与坑。
 >
-> 最后校对：2026-11-03，对应版本 v2.4.10（`package.json:4`）。本轮（v2.4.10）：§4 组件清单 21→22，新增 `RemoteControlPanel.vue`（首页常驻「手机遥控」入口），`HomeView.vue` 加 `remoteOpen` 与 `.home__actions`，locale 各 399→400 键。上一轮（v2.4.8）：遥控器页升级（常驻+相册上传/粘链接/选目录+队列/历史/多设备/防息屏/横屏）。
+> 最后校对：2026-11-03，对应版本 v2.4.11（`package.json:4`）。本轮（v2.4.11）：§4 组件清单 22→23，新增 `SectionBoundary.vue`（区块错误边界），`HomeView.vue` 用它包住媒体输入区并加 `mediaKey` 重挂载；表格里所有 `HomeView.vue` 行号按加按钮/加边界后的实际位置重校；`main.ts` 注册 `app.config.errorHandler`；locale 各 400→403 键。上一轮（v2.4.10）：§4 组件清单 21→22，新增 `RemoteControlPanel.vue`（首页常驻「手机遥控」入口）。遥控器页升级（常驻+相册上传/粘链接/选目录+队列/历史/多设备/防息屏/横屏）。
 
 术语约定：**Sidecar** = Python 后台进程（`hancast-backend/`，打包为 `hancast-sidecar`）；**壳层** = Rust/Tauri 层（`src-tauri/`）；**规则包** = JS 解析插件 zip；**声明式规则** = JSON 站点规则；**屏幕投屏** = screencast（把电脑屏幕投出去）；**接收投屏** = 本机作为 DLNA 渲染端被别的设备投；**投屏确认** = Device Guard；**后台参数** = `params.py` 可调项。
 
@@ -210,20 +210,20 @@ default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src '
 
 ---
 
-## 4. 组件清单（22 个，`src/components/`）
+## 4. 组件清单（23 个，`src/components/`）
 
 > 数量为实际 `ls` 清点结果：22 个 `.vue` 文件，一个不漏（v2.4.10 新增 `RemoteControlPanel.vue`，v2.4.4 新增 `HiddenDevicesModal.vue`）。「挂载者」列为模板中的实际引用位置。
 
 | # | 组件 | 职责 | props | emits | 依赖 store | 被谁挂载 |
 |---|---|---|---|---|---|---|
 | 1 | `TitleBar.vue` | 自绘标题栏：拖拽区、主题切换、设置入口、最小化、关闭（首次弹确认框，`localStorage 'hancast-close-modal-dismissed'`） | 无 | 无 | theme | `HomeView.vue:24` |
-| 2 | `MediaInput.vue` | 媒体输入区：原生文件拖拽、URL 输入/粘贴、粘贴按钮（走 Rust 剪贴板）、口令解析、`<video>`+canvas 抽帧缩略图（:29-88）、文件选择（dialog → `<input>` 降级 :439-458）、设备选择弹窗、投屏触发；拖放区可 Enter/Space 打开文件（:492-502），清空按钮有名称（:529） | 无 | 无 | media、device、cast | `HomeView.vue:48`；内嵌 `Modal`(:601) |
-| 3 | `DeviceList.vue` | 设备列表：数量徽标与头部三按钮（添加、日志、刷新）；底部在 `hiddenDevices.length` 时显示「已隐藏 N 台 · 管理」按钮打开 `HiddenDevicesModal`（v2.4.4）；刷新旋转/禁用跟随 `deviceStore.refresh()` 的 Promise，在 `finally` 结束（:15-21、:57），不再固定转 10s；空态含添加按钮 | 无 | 无 | device、logs | `HomeView.vue:58` |
+| 2 | `MediaInput.vue` | 媒体输入区：原生文件拖拽、URL 输入/粘贴、粘贴按钮（走 Rust 剪贴板）、口令解析、`<video>`+canvas 抽帧缩略图（:29-88）、文件选择（dialog → `<input>` 降级 :439-458）、设备选择弹窗、投屏触发；拖放区可 Enter/Space 打开文件（:492-502），清空按钮有名称（:529） | 无 | 无 | media、device、cast | `HomeView.vue:78`；内嵌 `Modal`(:601) |
+| 3 | `DeviceList.vue` | 设备列表：数量徽标与头部三按钮（添加、日志、刷新）；底部在 `hiddenDevices.length` 时显示「已隐藏 N 台 · 管理」按钮打开 `HiddenDevicesModal`（v2.4.4）；刷新旋转/禁用跟随 `deviceStore.refresh()` 的 Promise，在 `finally` 结束（:15-21、:57），不再固定转 10s；空态含添加按钮 | 无 | 无 | device、logs | `HomeView.vue:89` |
 | 4 | `DeviceCard.vue` | 单设备卡片：状态灯、默认徽标、投屏按钮（需 `mediaStore.isReady` 且非 `castStore.loading`，:178-189）、casting 态标题+恢复控制器按钮（:162-174，≤420px 隐藏标题 :437-439）、自定义右键菜单（Teleport，:233-244）、改名/移除 Modal（:211/:225）；**已移除**旧装饰性「多房间同步」复选框，独立 speaker 会话不代表同步播放（:158） | `device: Device` | 无（直接调 store） | device、media、cast | `DeviceList.vue` |
-| 5 | `Footer.vue` | 底部提示，仅 `devices.length === 0` 时显示 | 无 | 无 | device | `HomeView.vue:60` |
-| 6 | `CastController.vue` | Teleport 模态投屏控制器：seek 锁定由主动 watch 解锁，并有请求结束/5s 兜底（:145-163、:199-221，见 §10.8）；音量 50ms 防抖捕获目标设备（:112-121）；图片/视频两种模式、按聚焦设备展示、操作失败 `lastError` 提示（:244-248）；无缩略图的视频/音频 URI 不交给 img（:64-85） | 无 | 无 | cast、device | `HomeView.vue:62` |
-| 7 | `StopWarningBanner.vue` | 「已停止但电视可能还在播」黄色横幅 | `warning: StopWarning \| null` | `close` | 无（数据由父级传入） | `HomeView.vue:53-57`（数据源 `cast.stopWarning`）、`ScreenCastPanel.vue:394`、`CastControllerView.vue:89`（死代码） |
-| 8 | `ScreenCastPanel.vue` | 屏幕投屏面板：目标 browser（HLS 观看链接）/ dlna（投电视）；源 screen/window；音频（麦克风/系统声音，平台差异见 §10.9-10.10）；分辨率/FPS/码率 CustomSelect；watch_url 邀请链接 + 三级降级复制（:167-184） | 无 | 无 | screencast、device | `HomeView.vue:64`；内嵌 `Modal`(:188)、`FfmpegDepsModal`(:419) |
+| 5 | `Footer.vue` | 底部提示，仅 `devices.length === 0` 时显示 | 无 | 无 | device | `HomeView.vue:91` |
+| 6 | `CastController.vue` | Teleport 模态投屏控制器：seek 锁定由主动 watch 解锁，并有请求结束/5s 兜底（:145-163、:199-221，见 §10.8）；音量 50ms 防抖捕获目标设备（:112-121）；图片/视频两种模式、按聚焦设备展示、操作失败 `lastError` 提示（:244-248）；无缩略图的视频/音频 URI 不交给 img（:64-85） | 无 | 无 | cast、device | `HomeView.vue:93` |
+| 7 | `StopWarningBanner.vue` | 「已停止但电视可能还在播」黄色横幅 | `warning: StopWarning \| null` | `close` | 无（数据由父级传入） | `HomeView.vue:85-88`（数据源 `cast.stopWarning`）、`ScreenCastPanel.vue:394`、`CastControllerView.vue:89`（死代码） |
+| 8 | `ScreenCastPanel.vue` | 屏幕投屏面板：目标 browser（HLS 观看链接）/ dlna（投电视）；源 screen/window；音频（麦克风/系统声音，平台差异见 §10.9-10.10）；分辨率/FPS/码率 CustomSelect；watch_url 邀请链接 + 三级降级复制（:167-184） | 无 | 无 | screencast、device | `HomeView.vue:95`；内嵌 `Modal`(:188)、`FfmpegDepsModal`(:419) |
 | 9 | `Modal.vue` | 通用模态基座：Teleport 到 body、overlay 点击关闭、图标/标题、4 档尺寸 `default/small/mini/wide`；外层留 16px 边距、框体 `min-width: 0` + `max-width/max-height: 100%`、纵向滚动（:112-141，wide 溢出已修，见 §10.5）；最上层 Modal 处理 Escape/Tab 焦点循环、打开聚焦/关闭或卸载还原焦点（:28-71）；dialog/aria-modal（:78），具名插槽 btn-cancel/confirm/danger | `visible`、`title?`、`showIcon?`、`size?` | `close` | 无 | AddDeviceModal、AutostartPromptModal、DeviceCard(×2)、DownloadModal、LogsPanel、MediaInput、ScreenCastPanel、TitleBar、UpdateModal |
 | 10 | `CustomSelect.vue` | 手写下拉框：click-outside/失焦关闭；方向键、Home/End 移动选项；Escape 关闭并还焦点（阻止冒泡，不连带关闭外层 Modal），Tab 关闭但不困住焦点（:30-89）；listbox/option 语义（:100-149），菜单限高 `min(240px, 40vh)`（:213-229） | `modelValue`、`options`、`ariaLabel?`、`ariaLabelledby?`（:9-14，无 disabled prop） | `update:modelValue` | 无 | SettingsView（5 处模板：:273/:287/:329/:359/:457）、ScreenCastPanel(×8)、LogsPanel(×3) |
 | 11 | `AddDeviceModal.vue` | 手动添加设备弹窗：IP/端口表单，成功后 900ms 延迟关闭（:22）；显示已添加的 manualDevices 列表 | 无（visible 由 `deviceStore.showAddModal` 驱动） | 无 | device | `App.vue:52`；内嵌 `Modal`(:28) |
@@ -233,12 +233,14 @@ default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src '
 | 15 | `DownloadModal.vue` | 下载渠道选择：GitHub / Gitee / MS Store（商店版），`plugin-shell open` → `window.open` 降级（:19-27） | `visible` | `close` | update | `UpdateModal.vue:66`；内嵌 `Modal`(:46) |
 | 16 | `LogsPanel.vue` | 应用内日志查看：Modal size=wide；模块/级别/条数/关键字过滤（关键字 450ms 防抖 :73-78）；autoTail 自动滚底（:81-86）；`modLabel` 把模块名中的点换成下划线再当 i18n key（:38-41，点号是 vue-i18n 路径分隔符，不能直接用） | 无（visible 由 `logsStore` 驱动） | 无 | logs | `App.vue:51`；内嵌 `Modal`(:110)、`CustomSelect`(×3) |
 | 17 | `PluginSettings.vue` | 解析插件管理（847 行）：`rule_inventory` 双段列表（脚本规则包 + 声明式规则）；导入 zip（dialog → base64 `<input>` 降级 :51-83）或 URL 导入；单条规则开关；官方索引查更新 / `plugin_pull` 安装（sha256 校验在壳层/Sidecar）；两段式删除确认 4s（:168-178）；`plugin_test` 试跑；解析失败台账（按域名分组，删域名/删单条/清空/复制/timeAgo） | 无 | 无 | 无（组件内直接调 `api/commands.ts`） | `SettingsView.vue:533`（展开区） |
-| 18 | `AutostartPromptModal.vue` | 首次投屏成功后的自启询问弹窗：开启（`toggleAutostart`）/跳过，都会 `markAsked`（localStorage `has_asked_autostart`） | `visible` | `close` | settings | `HomeView.vue:66-69`；内嵌 `Modal`(:34) |
+| 18 | `AutostartPromptModal.vue` | 首次投屏成功后的自启询问弹窗：开启（`toggleAutostart`）/跳过，都会 `markAsked`（localStorage `has_asked_autostart`） | `visible` | `close` | settings | `HomeView.vue:99-102`；内嵌 `Modal`(:34) |
 | 19 | `CastControl.vue` | 旧版内嵌投屏控制条（427 行）：画质选择器（qualities ≥ 2 才显示）+ 进度条 + 播放控制。**死代码**——全仓 grep 无任何 import | — | — | — | 无（未被挂载） |
 | 20 | `FfmpegDepsModal.vue` | 「需要下载运行依赖」弹窗（418 行，v2.3.11 FFmpeg 去捆绑）：逐依赖显示检测状态与真实异常原文（`ffmpeg_status` 的 `items/missing`）；按平台给出包管理器安装命令（`install_commands`）与「打开安装目录」（`open_ffmpeg_dir`）；「重新检测」走 `refresh=true`；「下载并继续」起后台下载（`ffmpeg_download_start`）后按 1s 轮询 `ffmpeg_download_status`（轮询本体 `screencast.ts:109-124`、起表 `:134`；后端进度写入节流 0.4s，`ffmpeg_deps.py:390`）渲染进度/速度；`done` 时带 `refresh=true` 重测一次并**自动收起弹窗**（`:25` 的 watcher——「下载并继续」的「继续」是回到投屏面板，由用户再点一次开始投屏，程序不自动重放），安装命令可一键复制（`writeClipboardText`） | 无（visible 由 `screencastStore.showDepsModal` 驱动） | 无 | screencast | `ScreenCastPanel.vue:465`；内嵌 `Modal`(:4) |
 | 21 | `HiddenDevicesModal.vue` | 已隐藏设备管理（v2.4.4，约 180 行）：列出 `deviceStore.hiddenDevices`（名称、`is_self` 徽标、IP、在线/未发现），每行「恢复」按钮带 loading 态 → `deviceStore.unhide(udn)`；同时是手动添加地址的删除入口（`removeManualAddress`）。补上 v2.4.3 及以前「隐藏即单向、只能改配置文件」的窟窿 | 无（visible 由 `deviceStore.showHiddenModal` 驱动） | 无 | device | `App.vue:53`；内嵌 `Modal` |
 
-| 22 | `RemoteControlPanel.vue` | 手机遥控器入口弹窗（v2.4.10，139 行）：展示局域网遥控页地址并一键复制，地址里的 token 跨重启不变（落盘 `remote_control_token`，见 `docs/故障排查.md` §5.8）；打开时先 `remote_status`，服务没跑就自动 `start_remote_control`；`displayUrl` 去掉 `http://` 前缀便于手输，整块可点复制 | `visible` | `close` | 无（直接调 API） | `HomeView.vue`（常驻，`remoteOpen` 驱动）；内嵌 `Modal` |
+| 22 | `RemoteControlPanel.vue` | 手机遥控器入口弹窗（v2.4.10，139 行）：展示局域网遥控页地址并一键复制，地址里的 token 跨重启不变（落盘 `remote_control_token`，见 `docs/故障排查.md` §5.8）；打开时先 `remote_status`，服务没跑就自动 `start_remote_control`；`displayUrl` 去掉 `http://` 前缀便于手输，整块可点复制 | `visible` | `close` | 无（直接调 API） | `HomeView.vue:97`（常驻，`remoteOpen` 驱动）；内嵌 `Modal` |
+
+| 23 | `SectionBoundary.vue` | 区块级错误边界（v2.4.11，89 行）：`onErrorCaptured` 捕获子组件渲染/生命周期异常 → 记一条 `frontend_log`（`source: 'section'`，含区块名、阶段、堆栈）并把整块替换成可见的失败提示 + 「重试」按钮；`onErrorCaptured` 回落 `false` 是刻意的——上方还有 `app.config.errorHandler`，重复记一遍没意义，继续上抛会让整页白掉；点重试清 `failed` 后 emit `retry`，父级换 `key` 重新挂载子组件。补上「Vue 在渲染期抛错会把整块 DOM 卸掉、用户只看到中间空了一块」这条静默失败路径 | `label`（区块名，用于提示与日志） | `retry` | 无 | `HomeView.vue:73-79`（包住 `MediaInput`，`mediaKey` 驱动重挂载） |
 ---
 
 ## 5. Store 清单（11 个，`src/stores/`）
@@ -515,7 +517,7 @@ Modal 打开后聚焦 dialog，自带 Escape 关闭、Tab/Shift+Tab 循环与关
 
 ### 10.7 `stop_cast` 的 `control_failed` 不能吞
 
-lib.rs:600-607 注释：本地会话已释放、但电视没收到 Stop 时，前端要靠返回体里的 `control_failed` 解释「界面停了、电视还在播」。落点：`cast.ts:500-552`（stopCast 在 finally 释放仍属于本次操作的会话 + 置 `stopWarning`，不会删掉等待 Stop 时新开的同设备会话）→ `StopWarningBanner`（`HomeView.vue:73-77`）；屏幕投屏同款逻辑 `screencast.ts:212-249`。类型定义 `StopCastResult`/`StopWarning` 在 commands.ts:1281-1289。
+lib.rs:600-607 注释：本地会话已释放、但电视没收到 Stop 时，前端要靠返回体里的 `control_failed` 解释「界面停了、电视还在播」。落点：`cast.ts:500-552`（stopCast 在 finally 释放仍属于本次操作的会话 + 置 `stopWarning`，不会删掉等待 Stop 时新开的同设备会话）→ `StopWarningBanner`（`HomeView.vue:85-89`）；屏幕投屏同款逻辑 `screencast.ts:212-249`。类型定义 `StopCastResult`/`StopWarning` 在 commands.ts:1281-1289。
 
 ### 10.8 进度条与轮询的打架：主动解锁 + 单飞 + 操作代次
 

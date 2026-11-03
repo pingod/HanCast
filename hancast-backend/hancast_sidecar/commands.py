@@ -261,6 +261,7 @@ class CommandHandler:
             # 日志查看（排错）
             "get_logs": self._get_logs,
             "set_log_level": self._set_log_level,
+            "frontend_log": self._frontend_log,
         }
 
         # 设置回调
@@ -895,12 +896,14 @@ class CommandHandler:
     # ── 手机遥控器 ──
 
     def _remote_sessions_state(self) -> dict:
-        """给遥控器页的状态快照：当前聚焦会话 + 全部会话列表 + 队列/历史/播完即停。
+        """给遥控器页的状态快照：聚焦设备 + 全量设备 + 会话 + 队列/历史/播完即停。
 
-        遥控器页每秒轮询这一个接口拿全量状态，所以这里要把页面要显示的东西一次备齐：
-        会话（含封面缩略图）、多设备列表与聚焦、播放队列（标题+当前项）、投屏历史、
-        「播完即停」开关、播放模式。所有状态都由前端推给一个内存镜像
+        页面在这个接口上一次拿齐要显示的东西：会话（含封面缩略图）、**局域网全部设备**
+        （`devices`，不只是有会话的）、聚焦、播放队列（标题+当前项）、投屏历史、
+        「播完即停」开关、播放模式。所有 UI 状态都由前端推给一个内存镜像
         （`_remote_ui`），没有会话时页面也能显示队列/历史。
+
+        v2.4.11 起页面改成**手动刷新**（点 ⟳ 才拉一次），不再每秒轮询。
         """
         sessions = []
         for did, s in self.device_sessions.items():
@@ -916,14 +919,44 @@ class CommandHandler:
                 "title": (st.media.title if st.media else "") or "",
                 "thumbnail": (st.media.thumbnail if st.media else None) or None,
             })
+        # 局域网里的**全部**已知设备，而不只是「正在投的那几台会话」。
+        # 用户反馈「手机控制页面无法准确列出局域网设备」：之前下拉只吃 sessions，
+        # 没在投的电视在手机上根本看不见、也就选不了，而电脑端明明列着它们。
+        by_id = {s["device_id"]: s for s in sessions}
+        devices = []
+        hidden = set(self.config.hidden_devices or [])
+        for d in self.ssdp.get_devices():
+            if d.id in hidden:
+                continue
+            s = by_id.pop(d.id, None)
+            devices.append({
+                "device_id": d.id,
+                "device_name": d.display_name or d.id,
+                "ip": d.ip,
+                "online": True,
+                "session_status": s["status"] if s else "",
+                "title": (s["title"] if s else "") or "",
+            })
+        # 反方向的缺口：会话还在（设备掉线了但仍在投），SSDP 列表里已经没有它
+        for s in by_id.values():
+            devices.append({
+                "device_id": s["device_id"],
+                "device_name": s["device_name"],
+                "ip": "",
+                "online": False,
+                "session_status": s["status"],
+                "title": s["title"],
+            })
         focus = self.cast_state.device_id
-        if sessions and not any(x["device_id"] == focus for x in sessions):
-            focus = sessions[0]["device_id"]
+        known_ids = {x["device_id"] for x in devices}
+        if focus not in known_ids:
+            focus = devices[0]["device_id"] if devices else None
         current = next((x for x in sessions if x["device_id"] == focus), None)
         ui = getattr(self, "_remote_ui", {}) or {}
         return {
             "session": current,
             "sessions": sessions,
+            "devices": devices,
             "focus": focus,
             "queue": ui.get("queue") or [],
             "play_mode": ui.get("play_mode") or "sequential",
@@ -958,17 +991,30 @@ class CommandHandler:
         `next`/`prev`/`mode`/`stop_after`/`focus_device`/`load_folder` 这几条改的是
         **前端权威状态**（队列在 Pinia/localStorage），后端只把它们打成事件回推给壳层：
         前端收到 `remote_command` 事件后执行真正的切集/改模式。后端不试图复制一套队列逻辑。
+
+        另有 `refresh_devices`：页面手动刷新时重扫局域网（v2.4.11 起页面不再自动轮询）。
         """
         state = self._remote_sessions_state()
-        did = state.get("focus")
+        # cast_state.device_id 是**权威**聚焦点（`focus_device` 指令写的就是它），
+        # state["focus"] 只是页面显示用的兜底（它不在设备表里时会退到第一台）——
+        # 反过来用会让「正在控制的那台」被设备表里的第一台盖掉。
+        did = self.cast_state.device_id or state.get("focus")
+        # 手动刷新：重扫局域网（只发起 M-SEARCH，不等结果；页面过一两秒再拉一次状态）。
+        # 页面不再每秒轮询，设备列表的变化就靠这个动作带过来。
+        if action == "refresh_devices":
+            self.ssdp.scan()
+            return {"action": action, "scanning": True}
         # 需要转给前端处理的动作：只回推事件，不在后端改动
         if action in ("next", "prev", "mode", "stop_after", "cast_history", "load_folder"):
             protocol_io.emit_event("remote_command", {"action": action, "value": value,
                                                       "device_id": did})
             return {"action": action, "device_id": did, "delegated": True}
         if action == "focus_device":
-            # 切聚焦：cast_state.device_id 记为当前控制目标
-            if value and value in self.device_sessions:
+            # 切聚焦：cast_state.device_id 记为当前控制目标。
+            # 认的是「已知设备」而不是「有会话的设备」——没在投的电视也要能选，
+            # 否则手机上永远只能控制那几台已经在投的。
+            known = {x["device_id"] for x in (state.get("devices") or [])}
+            if value and value in known:
                 self.cast_state.device_id = value
             return {"action": action, "device_id": value}
         if action == "play":
@@ -997,7 +1043,7 @@ class CommandHandler:
         当标题。投到当前聚焦设备；没有聚焦设备就报错让用户在电脑端先起一次投屏。
         """
         state = self._remote_sessions_state()
-        did = state.get("focus")
+        did = self.cast_state.device_id or state.get("focus")
         if not did:
             raise ValueError("当前没有可控制的设备，请先在电脑端投一次或添加设备")
         title = os.path.splitext(filename)[0] or filename
@@ -1024,7 +1070,7 @@ class CommandHandler:
             if not uri:
                 return {"status": "error", "error": "解析结果没有可播地址"}
             state = self._remote_sessions_state()
-            did = state.get("focus")
+            did = self.cast_state.device_id or state.get("focus")
             if not did:
                 return {"status": "error", "error": "当前没有可控制的设备"}
             self._start_cast({
@@ -1666,3 +1712,24 @@ class CommandHandler:
         from .utils import logger as log_mod
         level = log_mod.set_level(params.get("level", "INFO"))
         return {"ok": True, "level": level}
+
+    def _frontend_log(self, params: dict) -> dict:
+        """把前端（WebView）里的报错写进同一份 hancast.log。
+
+        为什么需要它：界面上有一块区域整个不见、或者按钮点了没反应，这类问题发生在
+        WebView 里，Python 侧一无所知——2026-11-03 用户报「首页中间的媒体输入区自己
+        消失了」，翻遍日志只有 DLNA 的 SOAP 记录，查不到任何线索。前端现在把
+        error/unhandledrejection/组件错误都通过这里落盘，后台日志面板能直接看到。
+        """
+        level = str(params.get("level") or "error").lower()
+        message = str(params.get("message") or "")[:2000]
+        stack = str(params.get("stack") or "")[:4000]
+        source = str(params.get("source") or "webview")
+        text = f"[webview/{source}] {message}" + (f"\n{stack}" if stack else "")
+        if level == "warn":
+            logger.warning(text)
+        elif level == "info":
+            logger.info(text)
+        else:
+            logger.error(text)
+        return {"ok": True}

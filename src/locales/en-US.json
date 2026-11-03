@@ -9,7 +9,6 @@
   "home.subtitle": "Pick media. Connect your device.",
   "home.screenCast": "Share screen",
   "home.remote": "Phone remote",
-
   "devices.emptyTitle": "No devices discovered yet",
   "devices.more": "Manage {name}",
   "theme.title": "Appearance",
@@ -399,5 +398,8 @@
   "cast.subtitleDone": "Subtitles muxed and re-cast to the TV",
   "cast.subtitleFailed": "Subtitle muxing failed",
   "cast.remoteAlwaysOn": "Remote is always on with a stable address — bookmark it",
-  "cast.remoteNotRunning": "Remote service is not running (port may be in use)"
+  "cast.remoteNotRunning": "Remote service is not running (port may be in use)",
+  "home.sectionFailed": "This section failed to load; the error was logged",
+  "home.retry": "Retry",
+  "home.mediaSection": "Media input"
 }

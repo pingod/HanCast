@@ -94,6 +94,13 @@
 - **判据**：`docs/故障排查.md` §5.8「手机遥控器页：地址在哪、手机怎么连、连不上怎么办」有 6 行连不上判据表。
 - **教训**：功能存在 ≠ 用户找得到。凡是要用户手抄/记忆的信息（地址、端口、口令），必须在界面上有一处可见入口，否则等于没做。
 
+### COMP-013: 首页媒体输入区整块消失、且日志里查不到任何痕迹（v2.4.11 已加可观测性，根因未定位）
+- **现象**: 2026-11-03 用户截图显示首页「局域网设备」表头上方整块空白——拖拽区/链接输入栏都不见了，设备列表本身正常。
+- **排查结论**: 代码路径不可能渲染成空（`HomeView.vue` 无条件渲染 `<MediaInput />`；`MediaInput.vue` 的 `v-if="state !== 'ready'"`/`v-else` 覆盖全部取值；CSS 无隐藏规则）；截图逐行亮度扫描确认那块真没渲染。**只剩「渲染期抛异常被 Vue 卸掉整块」一种解释**，而这类异常此前哪都不落盘。
+- **为什么当初查不到**: 前端没有 `app.config.errorHandler`、没有 `unhandledrejection` 监听，`hancast.log` 只收 Python 侧日志；打包版 WebView 不便挂调试器（`safaridriver` 要用户手开「允许远程自动化」）。
+- **修法**: ① `frontend_log` Sidecar 命令 + `commands.ts:1523` `frontendLog()` + `main.ts:50` errorHandler ⇒ 前端错误进**同一份** `hancast.log`（行首 `[webview/<source>]`）；② `SectionBoundary.vue` 区块错误边界 ⇒ 出错时原地显示「没能加载 + 错误 + 重试」，不再是一块空白。
+- **判据**: 再出现时按 `docs/故障排查.md` §5.9 第 1 步筛 `[webview/` 日志；`node tools/verify-section-boundary.cjs` 验证边界本身没坏。
+
 ### COMP-008: 队列/定时/遥控器/字幕缺失（v2.4.6 已补齐）
 - **现象**：投屏只能一批替换、没有队列追加与跨重启记忆；播完自动下一集无法关；没有手机遥控；外挂字幕不能内封投屏。4.69GB 抖音文案一类场景尤其明显。
 - **方案**：playlist 持久化 + 追加、cast 播完即停/睡眠定时、`remote/server.py` 手机遥控页（一次性 token）、`media/subtitles.py` `-c copy` 内封 + 重投续播。

@@ -2,7 +2,7 @@
 
 > 回答一个问题：前端 `invoke()` 出去的每一条命令，究竟由壳层（Rust/Tauri）就地执行、还是转发给 Sidecar（Python 后台进程）；它的入参、返回结构、可能错误，以及 Sidecar 主动推给前端的事件分别是什么。
 >
-> 最后校对：2026-11-03，对应版本 v2.4.10（`package.json:4`）。本轮（v2.4.10）：§7 遥控器三条（`start_remote_control` / `stop_remote_control` / `remote_status`）补 token 落盘复用语义——地址长期不变、stop 不删配置键、首页弹窗先 `remote_status` 再补 start。命令总数不变（81）。上一轮（v2.4.8）：遥控器页升级新增 `remote_update_ui` 命令，Sidecar 注册表 73→74。
+> 最后校对：2026-11-03，对应版本 v2.4.11（`package.json:4`）。本轮（v2.4.11）：新增 `frontend_log`（前端错误写进同一份 `hancast.log`，§2.8 四条），`remote_status` 返回的 `state` 补 `devices` 全量设备表、页面由自动轮询改手动 `refresh_devices`，命令总数 81→82、Sidecar 注册 74→75。上一轮（v2.4.10）：§7 遥控器三条补 token 落盘复用语义（地址长期不变、stop 不删配置键、首页弹窗先 `remote_status` 再补 start）。
 
 ---
 
@@ -45,7 +45,7 @@ src-tauri/src/sidecar.rs   SidecarManager：stdin 写一行 JSON，oneshot 等�
 hancast_sidecar/main.py    for line in sys.stdin → handler.execute(cmd, params)
         │
         ▼
-hancast_sidecar/commands.py  CommandHandler._commands 注册表（74 条）
+hancast_sidecar/commands.py  CommandHandler._commands 注册表（75 条）
 ```
 
 Sidecar 的启动方式：开发态 `uv run python -m hancast_sidecar.main`（`sidecar.rs:155-172`），打包态用 Nuitka 产物 `hancast-sidecar*`（`sidecar.rs:173-213`，macOS 在 `Contents/MacOS/` 下找，Windows/Linux 在 `resource_dir` 下找，`sidecar.rs:44-129`）。找不到二进制时 `setup()` 直接中止启动（lib.rs:1233-1237）。
@@ -178,7 +178,7 @@ Tauri 2 会把 JS 侧的 camelCase 自动映射到 Rust 的 snake_case 形参。
 
 | 命令名 | 前端封装 | 入参 | 返回 | 执行层 | 可能的错误 |
 | --- | --- | --- | --- | --- | --- |
-| `start_cast` | `startCast(deviceId, mediaUri, mimeType?)` commands.ts:1096 | `deviceId: string`、`mediaUri: string`、`mimeType?: string` | `void`；成功后 Sidecar 立即补发一条 `cast_state_changed`（commands.py:621、`:515`） | Sidecar | `Device not found: <device_id>`（commands.py:527）；`session.play()` 抛出的控制点异常原文（`ControlUrlUnavailable` / `RendererUnresponsive`，`protocol/dlna.py:119-126`）。本地文件路径会被 Sidecar 换成媒体服务器 HTTP 地址（commands.py:506-531） |
+| `start_cast` | `startCast(deviceId, mediaUri, mimeType?)` commands.ts:1096 | `deviceId: string`、`mediaUri: string`、`mimeType?: string` | `void`；成功后 Sidecar 立即补发一条 `cast_state_changed`（commands.py:622、`:515`） | Sidecar | `Device not found: <device_id>`（commands.py:527）；`session.play()` 抛出的控制点异常原文（`ControlUrlUnavailable` / `RendererUnresponsive`，`protocol/dlna.py:119-126`）。本地文件路径会被 Sidecar 换成媒体服务器 HTTP 地址（commands.py:506-531） |
 | `stop_cast` | `stopCast(deviceId?)` commands.ts:1117 | `deviceId?: string`（省略 = 停全部会话） | `{ ok: true, stopped: string[], control_failed: string[], reasons: Record<string,string> }`（commands.py:571-597） | Sidecar | 命令本身**不抛错**（幂等，先摘会话再发 SOAP Stop，commands.py:560-571）；「电视没收到 Stop」体现在 `control_failed` / `reasons` 里，不是异常 |
 | `pause_cast` | `pauseCast(deviceId?)` commands.ts:1122 | `deviceId?: string` | `void` | Sidecar | 通用；无会话时回落到主渲染器 `self.protocol.pause()`（commands.py:592-613） |
 | `resume_cast` | `resumeCast(deviceId?)` commands.ts:1204 | `deviceId?: string` | `void` | Sidecar | 通用；同上回落逻辑（commands.py:600-621） |
@@ -218,16 +218,16 @@ Tauri 2 会把 JS 侧的 camelCase 自动映射到 Rust 的 snake_case 形参。
 
 | 命令名 | 前端封装 | 入参 | 返回 | 执行层 | 可能的错误 |
 | --- | --- | --- | --- | --- | --- |
-| `list_screen_sources` | `listScreenSources()` commands.ts:1540 | 无 | `{ screens: ScreenSourceItem[], windows: ScreenSourceItem[], audio_inputs: AudioDeviceItem[], ffmpeg: {...}, platform: "darwin"\|"win32"\|"linux" }`（`ffmpeg_manager.py:486-508`） | Sidecar | 通用 |
+| `list_screen_sources` | `listScreenSources()` commands.ts:1567 | 无 | `{ screens: ScreenSourceItem[], windows: ScreenSourceItem[], audio_inputs: AudioDeviceItem[], ffmpeg: {...}, platform: "darwin"\|"win32"\|"linux" }`（`ffmpeg_manager.py:486-508`） | Sidecar | 通用 |
 | `start_screen_cast` | `startScreenCast(params)` commands.ts:1470 | `params: ScreenCastStartParams`，**整个对象直接作为 Sidecar 的 params**（lib.rs:834-834，前端 `{ params }` → Rust 形参 `params` 原样下传） | 成功：dlna → `{ok:true, target:"dlna", device_id, session_id, url}`；browser → `{ok:true, target:"browser", session_id, watch_url, width, height, fps}`（`manager.py:322-339`）。失败：`{ok:false, error}` | Sidecar | **校验类错误全部走 `{ok:false,error}` 而不是异常**（`manager.py:92-169`）：`已有投屏正在进行，请先停止`、`未知目标类型: <t>`、FFmpeg 不可用原文、`窗口源缺少窗口信息`、`未选择系统声音设备（…）`、`未选择麦克风设备`、`选中的<麦克风/系统声音>设备已不可用：<名>；请重新选择（…）`、`麦克风采到的全是静音…`、`缺少目标设备 (device_id)`、`设备不存在或已离线: <id>`、`HTTP 服务启动失败`、`会话注册失败`、`屏幕捕获失败`、`电视拒绝播放（…），可换较低分辨率/码率后重试`、`启动失败: <异常>` |
-| `stop_screen_cast` | `stopScreenCast()` commands.ts:1550 | 无 | `{ok:true, control_failed: string[], reasons: Record<string,string>}`；本来就没在跑 → `{ok:true, already_stopped:true}`（`manager.py:204-229`） | Sidecar | 幂等，不抛错。dlna 目标会复用 `_stop_cast` 的 `control_failed` 语义 |
-| `screen_cast_status` | `getScreenCastStatus()` commands.ts:1555 | 无 | `_state` 全量 + `viewers`（仅 browser 通道）+ `pull`（有 session_id 时）+ `ffmpeg`（`manager.py:231-241`） | Sidecar | 通用 |
+| `stop_screen_cast` | `stopScreenCast()` commands.ts:1577 | 无 | `{ok:true, control_failed: string[], reasons: Record<string,string>}`；本来就没在跑 → `{ok:true, already_stopped:true}`（`manager.py:204-229`） | Sidecar | 幂等，不抛错。dlna 目标会复用 `_stop_cast` 的 `control_failed` 语义 |
+| `screen_cast_status` | `getScreenCastStatus()` commands.ts:1582 | 无 | `_state` 全量 + `viewers`（仅 browser 通道）+ `pull`（有 session_id 时）+ `ffmpeg`（`manager.py:231-241`） | Sidecar | 通用 |
 | `set_ffmpeg_path` | `setFfmpegPath(path)` commands.ts:1485 | `path: string` | `{ok:true, path, version}` 或 `{ok:false, error}`（`ffmpeg_manager.py:448-462`）；**只能设不能清**，落盘键 `screencast.ffmpeg_path` | Sidecar | `缺少路径`（`manager.py:243-247`）；`文件不存在: <abs>`、`不是有效的 FFmpeg 可执行文件`（`ffmpeg_manager.py:450-454`） |
 | `ffmpeg_status` | `ffmpegStatus(refresh)` commands.ts:1491 | `refresh?: bool`（用户点「重新检测」时传 `true`） | 检测报告：`ok / path / version / source / ffprobe_path / items[] / missing[] / optional_missing[] / managed_dir / platform / arch / install_commands[] / download / error`（`ffmpeg_deps.py:189-252`） | Sidecar | 缺依赖不算异常：`ok:false` + 中文 `error`，前端据此弹窗 |
-| `ffmpeg_download_start` | `ffmpegDownloadStart()` commands.ts:1572 | 无 | `{ok:true, task:{status, stage, ...}}`；已在下 → `already_running` | Sidecar | 起不来后台线程时 `{ok:false,error}`；压缩包 >512MB 直接拒（`ffmpeg_deps.py:448-469`） |
-| `ffmpeg_download_status` | `ffmpegDownloadStatus()` commands.ts:1571 | 无 | 后台任务快照（`status/stage/received_bytes/total_bytes/speed/path/error`），`Command_TIMEOUT=60s` 所以下载绝不占住命令循环（`ffmpeg_deps.py:470-474`） | Sidecar | 通用 |
-| `open_ffmpeg_dir` | `openFfmpegDir()` commands.ts:1583 | 无 | `{ok:true, path}`（回显目录，成败由调用方按「有没有窗口」判断） | **壳层就地**（lib.rs:907-926） | `Sidecar 未返回 FFmpeg 目录`、`目录创建失败: <e>`、`无法打开目录: <e>`；路径由 Sidecar 的 `managed_dir` 给出，**不接受前端传入**，否则等于开放「用资源管理器打开任意路径」；**只 spawn 不 wait**——`xdg-open` 活到文件管理器关闭为止，等它等于把按钮按死在命令循环里 |
-| `notify_os` | `notify()` commands.ts:1639（内部先 `raiseIfHidden()` `:1600`） | `title: string`、`body: string` | `Ok(())` 或 `Err(msg)` | **壳层就地**（lib.rs:999；macOS 实现在 `src-tauri/src/macos_notify.rs`，命令里 `run_on_main_thread` 排到主线程再调 UN） | macOS 用 `UNUserNotificationCenter`——插件那条路走已废弃的 `NSUserNotificationCenter`，实测只入通知中心不弹横幅；**非 macOS 一律回 `Err("本平台由前端走通知插件")`**，前端 catch 后改调 `tauri-plugin-notification`。通知失败从不影响投屏本身 |
+| `ffmpeg_download_start` | `ffmpegDownloadStart()` commands.ts:1599 | 无 | `{ok:true, task:{status, stage, ...}}`；已在下 → `already_running` | Sidecar | 起不来后台线程时 `{ok:false,error}`；压缩包 >512MB 直接拒（`ffmpeg_deps.py:448-469`） |
+| `ffmpeg_download_status` | `ffmpegDownloadStatus()` commands.ts:1598 | 无 | 后台任务快照（`status/stage/received_bytes/total_bytes/speed/path/error`），`Command_TIMEOUT=60s` 所以下载绝不占住命令循环（`ffmpeg_deps.py:470-474`） | Sidecar | 通用 |
+| `open_ffmpeg_dir` | `openFfmpegDir()` commands.ts:1610 | 无 | `{ok:true, path}`（回显目录，成败由调用方按「有没有窗口」判断） | **壳层就地**（lib.rs:907-926） | `Sidecar 未返回 FFmpeg 目录`、`目录创建失败: <e>`、`无法打开目录: <e>`；路径由 Sidecar 的 `managed_dir` 给出，**不接受前端传入**，否则等于开放「用资源管理器打开任意路径」；**只 spawn 不 wait**——`xdg-open` 活到文件管理器关闭为止，等它等于把按钮按死在命令循环里 |
+| `notify_os` | `notify()` commands.ts:1666（内部先 `raiseIfHidden()` `:1600`） | `title: string`、`body: string` | `Ok(())` 或 `Err(msg)` | **壳层就地**（lib.rs:999；macOS 实现在 `src-tauri/src/macos_notify.rs`，命令里 `run_on_main_thread` 排到主线程再调 UN） | macOS 用 `UNUserNotificationCenter`——插件那条路走已废弃的 `NSUserNotificationCenter`，实测只入通知中心不弹横幅；**非 macOS 一律回 `Err("本平台由前端走通知插件")`**，前端 catch 后改调 `tauri-plugin-notification`。通知失败从不影响投屏本身 |
 
 壳层定义：lib.rs:825-926。Sidecar 注册 commands.py:188-194、处理函数 commands.py:1207-1217，投屏实现在 `screencast/manager.py`、依赖检测与下载在 `utils/ffmpeg_deps.py`。
 
@@ -311,13 +311,14 @@ Device Guard 管的是**接收投屏**方向：外部设备往本机推流时，
 
 改 `network_interface` 会触发 SSDP 在后台线程重绑网卡（约 1-2 秒），命令本身立即返回（commands.py:904-917）—— 前端 `saveSettings` resolve 之后设备列表可能还是旧网卡的结果。
 
-### 2.8 日志（3 条）
+### 2.8 日志（4 条）
 
 | 命令名 | 前端封装 | 入参 | 返回 | 执行层 | 可能的错误 |
 | --- | --- | --- | --- | --- | --- |
 | `get_logs` | `getLogs(query)` commands.ts:1365 | `params: { limit?, module?, level?, keyword?, include_older? }`；壳层**不解包**，`params` 原样下传（lib.rs:878） | `{ lines: LogLine[], total, truncated, path, level, modules: LogModule[] }`（`utils/logger.py:207-215`）。`limit` 被夹到 1..5000（`logger.py:163`） | Sidecar | 通用。`level` 非法时不报错，等同于不过滤（`logger.py:166-167`） |
 | `set_log_level` | `setLogLevel(level)` commands.ts:1293 | `level: string` | `{ ok: true, level: string }`（commands.py:1202-1225） | Sidecar | `未知日志级别: <level>`（`logger.py:131`）；通用 |
 | `export_logs` | `exportLogs()` commands.ts:1500 | 无 | `boolean`：`true` = 已复制，`false` = 用户在保存对话框里取消（lib.rs:927-927） | **壳层** | `日志文件不存在`（lib.rs:914）；`无法获取 APPDATA 目录`（lib.rs:929）/ `无法获取 HOME 目录`（lib.rs:904、`819`）；`Invalid path: <e>`（lib.rs:929）；`复制日志文件失败: <e>`（lib.rs:931） |
+| `frontend_log` | `frontendLog(entry)` commands.ts:1523 | `level?: "error" \| "warn" \| "info"`、`message: string`、`stack?: string`、`source?: string`；默认 `level=error`、`source=webview` | `{ ok: true }`（commands.py:1716 `_frontend_log`）。`message` 截 2000 字、`stack` 截 4000 字，落盘行首统一是 `[webview/<source>]`（v2.4.11） | Sidecar | **没有**——前端侧整段 `try/catch` 吞掉异常：这个通道是在错误处理里被调用的，它自己再抛就会引发新错误 |
 
 壳层定义：lib.rs:873-881（前两条）、lib.rs:891-928（`export_logs`）。
 
@@ -366,7 +367,7 @@ Device Guard 管的是**接收投屏**方向：外部设备往本机推流时，
 
 | 命令名 | 前端封装 | 入参 | 返回 | 执行层 | 可能的错误 |
 | --- | --- | --- | --- | --- | --- |
-| `is_store_version` | `isStoreVersion()` commands.ts:1529 | 无 | `boolean` | **壳层** | 无。判定纯靠可执行文件路径是否含 `windowsapps` / `553787e6.hancast` / `build-msix`（lib.rs:788-794）；非 Windows 恒为 `false`。封装层 catch 后返回 `false`（commands.ts:1311-1312） |
+| `is_store_version` | `isStoreVersion()` commands.ts:1556 | 无 | `boolean` | **壳层** | 无。判定纯靠可执行文件路径是否含 `windowsapps` / `553787e6.hancast` / `build-msix`（lib.rs:788-794）；非 Windows 恒为 `false`。封装层 catch 后返回 `false`（commands.ts:1311-1312） |
 | `get_autostart` | `getAutostart()` commands.ts:1427 | 无 | `boolean` | **壳层** | MSIX 路径：`获取启动任务失败: …` / `等待启动任务失败: …` / `获取启动任务状态失败: …`（lib.rs:950-951）；非 MSIX：`tauri-plugin-autostart` 的错误原文（lib.rs:1023） |
 | `set_autostart` | `setAutostart(enabled)` commands.ts:1215 | `enabled: boolean` | `void`；成功后 emit `autostart-changed`（lib.rs:1045） | **壳层** | MSIX 路径：`请求启用启动任务失败: …` / `等待启用结果失败: …` / `禁用启动任务失败: …`（lib.rs:973-974）；非 MSIX：autolaunch 错误原文（lib.rs:1033-1035）。非 Windows 的 `MSIX 开机自启仅在 Windows 上可用`（lib.rs:1002）实际不可达 —— `is_store_version()` 在非 Windows 恒 `false`（lib.rs:983-987 的注释也这么说） |
 | `check_mpv` | **无** | 无 | `{ status: "ready"\|"not_found"\|"error", path, version, source, error }`（`models/mpv.py:17-27`、commands.py:1123-1147） | Sidecar | 通用 |
@@ -400,12 +401,12 @@ Device Guard 管的是**接收投屏**方向：外部设备往本机推流时，
 | --- | --- | --- | --- | --- |
 | `ready` | 无（`data` 为 `{}`，`protocol_io.py:58`） | `hancast-backend/hancast_sidecar/main.py:110` | **无前端订阅者**（全仓 `listen(` 检索无命中） | Sidecar 启动完成、进入 `for line in sys.stdin` 主循环之前，握手用。壳层也不监听它 |
 | `device_found` | `id: string`、`name: string`（已被 `display_name` 覆盖）、`device_type: string`、`ip: string`、`port: number`、`status: string`、`is_default: boolean`、`manufacturer: string\|null`、`model_name: string\|null`、`udn: string`、`custom_name: string\|null`、`location: string` | commands.py:289（`_on_device_found`，载荷是 `Device.to_dict()`，`models/device.py:26-29`） | src/stores/device.ts:182 | SSDP 收到 NOTIFY/搜索响应并完成描述抓取时。同一设备重复发现也会发，前端做 upsert（device.ts:182-195）。**v2.3.13 起有准入门槛**：描述里必须声明 `AVTransport` 服务（`ssdp.py:1095`、`ssdp.py:1190-1196`），路由器/NAS 这类「有 UPnP 描述但投不了屏」的设备不再发事件、也不进列表 |
-| `device_lost` | `id: string` | commands.py:269（`_on_device_lost`） | src/stores/device.ts:199 | 收到 SSDP byebye（`ssdp.py:746-759`）或探活判定过期（`ssdp.py:743-744`、`discovery.device_stale_s`，`ssdp.py:768`） |
+| `device_lost` | `id: string` | commands.py:270（`_on_device_lost`） | src/stores/device.ts:199 | 收到 SSDP byebye（`ssdp.py:746-759`）或探活判定过期（`ssdp.py:743-744`、`discovery.device_stale_s`，`ssdp.py:768`） |
 | `cast_state_changed` | `status: string`、`device_id: string\|null`、`position: string`（`HH:MM:SS`）、`duration: string`（`HH:MM:SS`，见下注）、`volume: number`、`is_muted: boolean`、`media?: MediaInfo`（有媒体时才带） | commands.py:331（DLNA `TransportState` 变化回调）、commands.py:524（`start_cast` 后立即补发）、commands.py:554（`stop_cast` 逐设备发）、commands.py:611（`_emit_session_state`，会话轮询回调） | `src/stores/cast.ts:687-783` | 投屏状态机变化。**注意 commands.py:319-328 那条路径不带 `duration`**，前端要容错 |
-| `cast_confirm_request` | `request_id: string`、`device: { ip, udn, friendly_name, model_name }`、`timeout: number`（秒） | commands.py:1531（`_on_guard_confirm_request`） | `src/stores/guard.ts:126` | 外部设备向本机推流、且该来源不在信任/黑名单里时（`guard.py:188-238` → `240-272`）。前端收到后弹确认框并把窗口拉到前台（`guard.ts:141-148`） |
+| `cast_confirm_request` | `request_id: string`、`device: { ip, udn, friendly_name, model_name }`、`timeout: number`（秒） | commands.py:1577（`_on_guard_confirm_request`） | `src/stores/guard.ts:126` | 外部设备向本机推流、且该来源不在信任/黑名单里时（`guard.py:188-238` → `240-272`）。前端收到后弹确认框并把窗口拉到前台（`guard.ts:141-148`） |
 | `screen_cast_state_changed` | 与 `screen_cast_status` 返回体**完全相同**：`running`、`target`、`source`、`device_id`、`session_id`、`watch_url`、`url`、`viewers`、`error`、`started_at`，外加 `pull`、`ffmpeg` | `screencast/manager.py:469`（`_emit()`，载荷就是 `self.status()`） | `src/stores/screencast.ts:285-300` | 屏幕投屏启动成功（`manager.py:167`）、停止（`manager.py:225`）、捕获出错、观众数变化时 |
 | `update-available` | `has_update: boolean`、`current: string`、`latest: string`、`url: string`、`body: string`（≤500 字符）、`source: string` | src-tauri/src/lib.rs:1360（**壳层发出，不是 Python**） | `src/stores/update.ts:94` | 启动后台检查（lib.rs:1291-1323，睡 3s 后查 GitHub）命中新版本时。商店版本不会发 |
-| `autostart-changed` | `boolean`（新的自启状态） | src-tauri/src/lib.rs:1244（`set_autostart` 命令）、src-tauri/src/lib.rs:1344（托盘菜单勾选回调） | `src/stores/settings.ts:32`；**另有壳层自监听** src-tauri/src/lib.rs:1389（同步托盘勾选态） | 开机自启状态被任何一侧改动时。前端据此更新设置页开关，避免与托盘状态打架 |
+| `autostart-changed` | `boolean`（新的自启状态） | src-tauri/src/lib.rs:1231（`set_autostart` 命令）、src-tauri/src/lib.rs:1344（托盘菜单勾选回调） | `src/stores/settings.ts:32`；**另有壳层自监听** src-tauri/src/lib.rs:1389（同步托盘勾选态） | 开机自启状态被任何一侧改动时。前端据此更新设置页开关，避免与托盘状态打架 |
 
 ### 3.2 一个死监听
 
@@ -799,7 +800,7 @@ commands.ts:793 声明了 `broken?: boolean`，`PluginSettings.vue:279` 用它�
 - 壳层 `SessionLogger` 写 `app_data_dir()/logs/hancast.log`（目录拼接在 lib.rs:1141-1144），且**每次启动清空**（`lib.rs:126-133`，`fs::write(&path, "")` 在 `:131`）。`app_data_dir` 由 identifier `com.han.hancast` 推导（`tauri.conf.json:5`）。
 - Python 写 `~/Library/Application Support/HanCast/logs/hancast.log`（macOS，`logger.py:19-24`）。
 
-`export_logs`（lib.rs:1108）和 `get_logs`（lib.rs:1090，取数走 `read_logs` `logger.py:156-218`）读的都是**后者**。前者里的壳层日志不会出现在日志面板和导出文件里。
+`export_logs`（lib.rs:1133）和 `get_logs`（lib.rs:1090，取数走 `read_logs` `logger.py:156-218`）读的都是**后者**。前者里的壳层日志不会出现在日志面板和导出文件里。
 
 > **例外（v2.3.23 起）**：macOS 通知的授权状态与投递错误由壳层 `macos_notify::log()` 直接追加到**后者**那份文件（路径拼接在 `macos_notify.rs:30-40`，行格式与 Python logger 一致：`[时间] hancast.notify INFO: …`），为的就是让后台日志面板当场读到——上一版把 add 的 completion handler 传成 `None`，等于亲手丢掉了唯一的直接证据。
 
@@ -828,7 +829,7 @@ v2.4.3 及以前 `unhide_device` / `get_hidden_devices` 只有 Sidecar 实现、
 
 ---
 
-## 7. 快速参考表（81 条）
+## 7. 快速参考表（82 条）
 
 执行层：**壳** = 壳层本地，**SC** = Sidecar。
 
@@ -911,10 +912,11 @@ v2.4.3 及以前 `unhide_device` / `get_hidden_devices` 只有 Sidecar 实现、
 | 75 | `probe_url` | 1 秒预算探一次地址是否还活着（历史直链重投前预检，v2.4.5） | SC |
 | 76 | `start_remote_control` | 启动手机遥控器页（v2.4.8 起随应用常驻，幂等；已在跑返回同一地址），返回带 token 的局域网地址（v2.4.6；**v2.4.10 起 token 首启生成后落盘复用**，键 `remote_control_token`，所以同一台机器上的地址长期不变） | SC |
 | 77 | `stop_remote_control` | 关闭遥控器页（v2.4.6）。**不删**落盘的 `remote_control_token`——下次启动还是同一段（v2.4.10） | SC |
-| 78 | `remote_status` | 遥控器页运行状态与访问地址（v2.4.6）；首页「手机遥控」弹窗打开时先调它，`ok` 为假才补一次 `startRemoteControl`（`src/components/RemoteControlPanel.vue:28-30`） | SC |
+| 78 | `remote_status` | 遥控器页运行状态与访问地址（v2.4.6）；首页「手机遥控」弹窗打开时先调它，`ok` 为假才补一次 `startRemoteControl`（`src/components/RemoteControlPanel.vue:28-30`）。返回的 `state.devices` 是**全量局域网设备**（v2.4.11，逐台带 `online` / `session_status`，隐藏设备不进），页面上的 `⟳` 走 `refresh_devices` 手动重扫、不再自动轮询 | SC |
 | 79 | `subtitle_apply` | 把外挂字幕封进当前视频并重投同一台电视（v2.4.6） | SC |
 | 80 | `subtitle_status` | 查询字幕内封任务进度（v2.4.6） | SC |
 | 81 | `remote_update_ui` | 前端把播放队列 / 历史 / 播放模式 / 播完即停同步给后端，供遥控器页读取（v2.4.8） | SC |
+| 82 | `frontend_log` | 前端把错误（含渲染期异常与未捕获 rejection）写进同一份 `hancast.log`，行首 `[webview/<source>]`（v2.4.11）；`SectionBoundary` 与 `app.config.errorHandler` 都走它 | SC |
 
 **8 个事件**（详见 §3.1）：`ready`、`device_found`、`device_lost`、`cast_state_changed`、`cast_confirm_request`、`screen_cast_state_changed`、`update-available`、`autostart-changed`。
 

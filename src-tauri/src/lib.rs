@@ -1104,6 +1104,31 @@ async fn set_log_level(
         .await
 }
 
+/// 把 WebView 里的报错写进同一份 hancast.log（前端 app.config.errorHandler /
+/// window.onerror / unhandledrejection 都走这里）。
+/// 为什么需要：界面上一块区域整个不见这类问题只发生在 WebView 里，Python 侧
+/// 毫无线索，用户在日志面板里查不到任何东西（2026-11-03 的「媒体输入区消失」）。
+#[tauri::command]
+async fn frontend_log(
+    sidecar: State<'_, SidecarManager>,
+    level: Option<String>,
+    message: String,
+    stack: Option<String>,
+    source: Option<String>,
+) -> Result<serde_json::Value, String> {
+    sidecar
+        .send_command(
+            "frontend_log",
+            serde_json::json!({
+                "level": level.unwrap_or_else(|| "error".into()),
+                "message": message,
+                "stack": stack.unwrap_or_default(),
+                "source": source.unwrap_or_else(|| "webview".into()),
+            }),
+        )
+        .await
+}
+
 #[tauri::command]
 async fn export_logs(app: tauri::AppHandle) -> Result<bool, String> {
     use tauri_plugin_dialog::DialogExt;
@@ -1691,6 +1716,7 @@ pub fn run() {
             export_logs,
             get_logs,
             set_log_level,
+            frontend_log,
             is_store_version,
             get_autostart,
             set_autostart,

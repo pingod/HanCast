@@ -1,6 +1,21 @@
 # HanCast 开发进度
 
-## 2026-11-03 发布轮：v2.4.10（手机遥控器地址可见 + 令牌落盘复用）——待发布
+## 2026-11-03 发布轮：v2.4.11（前端错误落日志 + 区块错误边界 + 遥控页全量设备/手动刷新）
+
+用户报三件事 user said: "中间那个模块不知道为什么自己消失了,另外,手机控制页面无法准确列出局域网设备,而且你需要改成手动刷新方式"。
+
+- **问题①：首页媒体输入区自己消失，且事后查无可查**。逐层排除后确认代码路径不可能渲染成空：`HomeView.vue` 无条件渲染 `<MediaInput />`；`MediaInput.vue` 的 `v-if="state !== 'ready'"` / `v-else`（预览卡）覆盖了全部取值；CSS 里只有 `<input type="file" style="display:none">` 一处隐藏，没有能把整块压成高度 0 的规则（用截图逐行亮度扫描确认那块是真的没渲染，不是颜色太暗）。**唯一剩的解释是渲染期抛异常被 Vue 整块卸掉**，而这一类异常在 v2.4.10 之前哪都不落盘（`app.config.errorHandler` 没注册，`hancast.log` 是 Python 侧的）。
+- **根因仍未定位**：打包版 WKWebView 不便挂调试器（`safaridriver` 需用户手开 Safari「允许远程自动化」，`/status` ready 但 `POST /session` 500）；`npm run tauri dev` 试过，被四道构建门挡死（`externalBin` 缺 `hancast-sidecar-aarch64-apple-darwin`、以及后续三步）。**本轮做的是可观测性：让它下次能查、能看见、能重试**，不猜根因。
+- **修法（可观测）**：① Sidecar 新增 `frontend_log` 命令（`_frontend_log`，`commands.py:1716`），前端错误写进**同一份** `hancast.log`，行首 `[webview/<source>]`，message 截 2000 字、stack 截 4000 字；② `src/api/commands.ts` 新增 `frontendLog()`（`:1523`，整段 try/catch 吞异常——它本身在错误处理里被调用）；③ `src/main.ts` 注册 `app.config.errorHandler`（`:50`）+ `unhandledrejection`/`error`，为此把 `createApp`/`use()` 提到前面（否则 vue-tsc 报 TS2448/TS2454）；④ 新增 `src/components/SectionBoundary.vue`（89 行）用 `onErrorCaptured` 把出错区块原地换成「这块内容没能加载出来 + 具体错误 + 重试」，`return false` 是刻意的（上面还有 errorHandler，重复记一遍没意义、继续上抛会整页白）；⑤ `HomeView.vue` 用它包住媒体输入区，重试 `mediaKey += 1` 重挂载。
+- **问题②：遥控页设备列表只列「有活动会话」的**。`renderDevSel()` 吃 `state.sessions`。修法：`_remote_sessions_state()` 返回新增 `devices`（SSDP 全量设备表，跳过隐藏设备，逐台带 `online`/`session_status`；会话还在但 SSDP 已消失的标离线补进来）。
+- **问题③：页面自动轮询** → 改手动：页面新增 `refresh()`（`remote/server.py:443`）走 `refresh_devices` → `ssdp.scan()`，等 1.8 秒再拉一次 state，**去掉 state 的 setInterval 轮询**。
+- **全量测试抓到的自查回归（重要）**：`test_remote_commands.py` 两条用例单独跑绿、连跑红——`handler` fixture 会起真 SSDP 并发现局域网里真电视，于是 `state["devices"]` 非空、`state["focus"]` 退到「第一台真电视」，把测试里写死的 `cast_state.device_id = "d1"` 盖掉。三处取控制目标统一改成 `cast_state.device_id or state["focus"]`（`commands.py:1001/1046/1073`）——**权威聚焦点是 `cast_state.device_id`，`state["focus"]` 只是页面显示兜底**，反过来用会盖掉正在控制的那台。改后 26 passed、全量 **622 passed**。教训：涉 SSDP 的用例不能只单独跑，设备表内容取决于本机网络。
+- **新增测试**：`hancast-backend/tests/test_remote_device_list_refresh.py`（10 条，`git stash` 后 9 failed / 1 passed 负向验证）、`tools/verify-section-boundary.cjs`（5 条，把 `return false`→`true` 或换裸 `<MediaInput />` → 4/5 变红）。`tools/verify-app-lifecycle.cjs` 叶子白名单补 `SectionBoundary`。
+- **文档**：`docs/故障排查.md` 新增 **§5.9**「界面上有一块自己消失了」+ §5.8 补「设备下拉列的是谁」「改手动刷新」+ §2 索引两行；`docs/HanCast-Frontend-Spec.md` 组件 22→23 并重校 8 处 `HomeView.vue:NN`；`docs/开发指南.md` 测试地图 42→43 文件 10235→10401 行；`docs/HanCast-Frontend-API.md` 日志组 3→4 条并补 `frontend_log` 行；`docs/架构总览.md` 行数表（`commands.py` 1668→1734、`remote/server.py` 718→746）；`tools/README.md` 59→60。
+- **闸门**：audit 4098 处可疑 0；freshness 数字 11 处一致 FAIL 0/WARN 0（自动重锚 44 处 `commands.py`/`commands.ts`/`HomeView.vue`/locale 漂移 + 手工 4 处 `frontendLog` 行号）。**坑**：`commands.py` 里三处 `did = …` 从 4 行注释改成 5 行 → 之后所有行号 +1，第二次重锚才收敛；批量改校对戳会把正文「本轮（v2.4.10）」留在原地，必须逐份重写头部说明（本次命中 3 份）。
+- **口径变化**：`#[tauri::command]` 81→82、Sidecar 注册 74→75、`commands.ts` 导出 80→81、components 22→23、tools 顶层脚本 59→60、`test_*.py` 39→40、locale 各 400→403 键。
+
+## 2026-11-03 发布轮：v2.4.10（手机遥控器地址可见 + 令牌落盘复用）——已发布
 
 用户问 user said: "你好像还没告诉我手机端怎么访问页面,界面上我也没看到任何提示"。查下去发现是两个问题叠在一起。
 
@@ -12,6 +27,9 @@
 - **文档**：`docs/故障排查.md` 新增 **§5.8**「手机遥控器页：地址在哪、手机怎么连、连不上怎么办」（地址在界面哪、手机侧三件事、token 稳定性、连不上判据表 6 行），§5.7 按新行为重写并删掉「每次启动新 token」的谎话，§2 症状索引加两行；`docs/HanCast-Frontend-Spec.md` 组件清单 21→22；`docs/HanCast-Frontend-API.md` §7 三条遥控命令补 token 语义；`docs/架构总览.md` 行数表（`commands.py` 1668、`remote/server.py` 718，顺带校准 `security/guard.py` 701→714）；`docs/开发指南.md` 测试地图 41 文件 10127 行 → 42 文件 10235 行；`tools/README.md` 58→59 并登记新脚本。
 - **验证**：`npx vue-tsc --noEmit` 0 错、`npm run build` 通过（主包 374.08 kB）；verify-remote-entry **3/3**、verify-cast-ui **30/30**、verify-device-list-empty **4/4**、verify-app-lifecycle **2/2**；两道闸门 audit 4042 可疑 0、freshness 数字 11 处一致 FAIL 0/WARN 0（自动重锚 20 处 `commands.py`/locale 漂移 + 2 处手工：`HomeView.vue:53-57`→`:73-77`、API.md 把 `start_remote_control` 改成 TS 侧真名 `startRemoteControl`）。
 - **口径变化**：components 22、tools 顶层脚本 59、`test_*.py` 39、locale 各 400 键。
+- **发版**：commit `f91cdfd` → tag `v2.4.10` → CI **41621247311** 三平台全绿；dmg 85,661,674 字节 sha256 `c1269129284de9e30213214612e87c958b1d945f483f016fc695ee01f783efe8`；`install-macos-artifact.sh 2.4.10 <dmg>` + `accept-macos-artifact.sh 2.4.10` → ALL PASS；发布记录 commit `201ddd7`；`gh release edit --draft=false` → publishedAt 2026-11-03T11:09:43Z。后端全量 **612 passed / 0 failed**（290s）。
+- **真机复核（核心承诺）**：装好的 2.4.10 首启后配置里出现 `remote_control_token`，`curl http://127.0.0.1:8899/r/<token>/` → 200；quit 后重开读回**同一个 token**，同一地址仍 200。这是脚本测不到的那条线（进程重启）。
+- **未做**：首页按钮的像素截图复核——本机 HanCast 启动即隐藏到菜单栏，当时用户正在通话，不便抢焦点；该入口由 `tools/verify-remote-entry.cjs`（3 条断言 + 负向验证）与类型检查兜底。
 
 ## 2026-11-03 发布轮：v2.4.9（设备列表空状态误显示 + 遥控器镜像定时器泄漏）——已发布
 

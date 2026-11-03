@@ -9,7 +9,6 @@
   "home.subtitle": "选择媒体，连接你的设备",
   "home.screenCast": "屏幕投屏",
   "home.remote": "手机遥控",
-
   "devices.emptyTitle": "还没有发现设备",
   "devices.more": "管理 {name}",
   "theme.title": "外观",
@@ -399,5 +398,8 @@
   "cast.subtitleDone": "字幕已内封，已重新投到电视",
   "cast.subtitleFailed": "字幕内封失败",
   "cast.remoteAlwaysOn": "遥控器常驻运行中，地址固定不变，可加书签",
-  "cast.remoteNotRunning": "遥控器服务未启动（端口可能被占用）"
+  "cast.remoteNotRunning": "遥控器服务未启动（端口可能被占用）",
+  "home.sectionFailed": "这块内容没能加载出来，错误已记入日志",
+  "home.retry": "重试",
+  "home.mediaSection": "媒体输入区"
 }
