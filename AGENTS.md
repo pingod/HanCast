@@ -3,7 +3,7 @@
 > 旧名 `CLAUDE.md`（Claude Code 私有约定），2026-10-15 改名为跨工具的 `AGENTS.md`；
 > `CLAUDE.md` 现在只留三行指针指向本文件。
 
-> 最后校对：2026-11-03，对应版本 v2.4.8（`package.json:4`）。本轮（v2.4.8）：手机遥控器页升级——随应用常驻、加媒体选择（相册上传/粘链接/选目录）、队列/历史/多设备/进度条/防息屏/横屏，新增 `remote_update_ui` 命令，`#[tauri::command]` 80→81、Sidecar 注册 73→74、`remote/server.py` 343→713 行。上一轮（v2.4.7）：添加本机（自己投自己），`add_local_device`。
+> 最后校对：2026-11-03，对应版本 v2.4.9（`package.json:4`）。本轮（v2.4.9）：修 `DeviceList.vue` 的 `v-else` 错配（有设备时又显示空状态块，v2.4.4 引入）+ `cast.ts` 遥控器镜像去抖定时器泄漏 + 三处验收脚本桩/白名单失效（`verify-cast-ui.cjs`、`verify-app-lifecycle.cjs`），新增 `tools/verify-device-list-empty.cjs`，`tools/` 顶层脚本 57→58。上一轮（v2.4.8）：手机遥控器页升级，新增 `remote_update_ui` 命令，`#[tauri::command]` 80→81、Sidecar 注册 73→74。
 > 本文件是速览与硬约束；逐模块的深度内容在 **docs/README.md** 的索引里，别在这里找细节。
 
 ## 项目概述
@@ -12,7 +12,7 @@
 
 - **项目名**: HanCast
 - **作者**: lanzeweie@foxmail.com
-- **版本**: 2.4.8（版本 SSOT 是 `package.json` 的 `version`，`scripts/sync-version.cjs:4`；改版本只走 `npm run version:set`，见「版本管理」）
+- **版本**: 2.4.9（版本 SSOT 是 `package.json` 的 `version`，`scripts/sync-version.cjs:4`；改版本只走 `npm run version:set`，见「版本管理」）
 - **性质**: 二次开发（非原项目官方更新）
 - **原始代码**: [xfangfang/Macast](https://github.com/xfangfang/Macast)（原作者 xfangfang，最后更新 2022-01）。仓库里**不含** `Macast-main/`、`Macast-plugins-main/` 这些本地目录，1.x 源码只作为移植参考，见「原始代码复用情况」
 - **目标架构**: Tauri 2.0 前端 + Rust 桥接 + Python Sidecar（+ MPV 接收端播放、FFmpeg 屏幕抓取）
@@ -162,7 +162,7 @@ HanCast/
 │   ├── Cargo.toml / Cargo.lock  # --locked 构建；不依赖 GTK
 │   └── src/main.rs              # 886 行：list / capture --output --fps，帧按紧凑 BGRA 写 stdout
 ├── scripts/                     # 壳层脚本：sync-version / check-version / sync-sidecar / check-resources / build-arch-pkg（均为 .cjs）
-├── tools/                       # 57 个顶层脚本 + 1 个目录型验收包（browser-channel-livecheck/），索引与计数口径见 tools/README.md
+├── tools/                       # 58 个顶层脚本 + 1 个目录型验收包（browser-channel-livecheck/），索引与计数口径见 tools/README.md
 ├── mpv/                         # 本地放置的 MPV（`.gitignore:86-87` 只留 portable_config/）
 │   └── portable_config/mpv.conf # 入库：弹幕/OSD 脚本、着色器、字体
 ├── docs/                        # 设计文档，**入口是 docs/README.md**
@@ -677,7 +677,7 @@ python3 tools/audit-doc-refs.py        # 文档引用的 文件:行号 是否还
 python3 tools/check-doc-freshness.py   # 引用**内容**对不对 + 校对戳 + 硬数字（v2.3.23 起，见「文档维护约定」）
 ```
 
-`tools/` 下 57 个顶层脚本（+ `browser-channel-livecheck/` 目录型验收包）按用途分类见 tools/README.md（计数口径同那里，且由闸门逐行点名核对）；端到端验收脚本的判据写在
+`tools/` 下 58 个顶层脚本（+ `browser-channel-livecheck/` 目录型验收包）按用途分类见 tools/README.md（计数口径同那里，且由闸门逐行点名核对）；端到端验收脚本的判据写在
 docs/构建与发布.md §6 与各专题文档，不要凭脚本退出码 0 就当作功能可用。
 
 ## 窗口配置

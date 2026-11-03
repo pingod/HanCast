@@ -151,6 +151,9 @@ async function fixture(locale = 'en-US') {
     resumeCast: async () => {}, seekCast: async () => {}, setVolume: async v => v,
     setMute: async () => {}, getAutostart: async () => true,
     notify: async (title, body) => { notified.push({ title, body }) },
+    // v2.4.8 起 cast store 会把队列/历史镜像给手机遥控器页（setupRemoteUiSync，去抖 300ms）。
+    // 这个桩缺了会在 tick 里抛 TypeError，整套 30 个用例集体变红——所以它是必填项。
+    remoteUpdateUi: async () => {},
     resolveShare: async () => ({ ...media, uri: 'https://invalid.test/high.mp4', quality: 'high' }),
     // 屏幕投屏 store 的壳层命令：只为让真实 screencast.ts 能装起来，默认全走成功路径
     listScreenSources: async () => ({ screens: [], windows: [], audio_inputs: [], ffmpeg: { ok: true } }),
@@ -190,6 +193,12 @@ async function fixture(locale = 'en-US') {
     hasQueue: false, items: [], playingId: null, playingIndex: 0, total: 0,
     nextCalls: 0, resetCalls: 0, nextValue: null, stopAfterCurrent: false,
     folder: '', playMode: 'order',
+    // v2.4.8 的 setupRemoteUiSync 直接读 playlist.playableItems（真实现是
+    // computed(() => items.filter(it => selected.has(it.id)))，见 src/stores/playlist.ts:118-119）。
+    // 桩里没有它就会在去抖回调里抛 TypeError 并让整套用例变红；这里把 items 全当已选中，
+    // 与各用例“只放一条队列项”的写法一致。
+    selected: new Set(),
+    get playableItems() { return this.items },
     nextItem() { this.nextCalls += 1; return this.nextValue },
     manualNext: () => null,
     manualPrev: () => null,
@@ -593,6 +602,9 @@ test('unmount cleans seek fallback and volume debounce while root store stays al
   f.ui.onVolumeChange(event(40))
   f.showChild.value = false
   await flush()
+  // 根 store 自身有一个遥控器镜像去抖（v2.4.8 的 setupRemoteUiSync，挂载即排一个 300ms
+  // 一次性 timer），它不属于组件定时器，也不是泄漏。先让它烧掉，再断言组件侧已清干净。
+  await f.clock.tick(300)
   assert.ok([...f.clock.jobs.values()].every(job => job.repeat), 'no component timeouts remain')
   await f.clock.tick(50)
   assert.equal(f.count('setVolume'), 0)

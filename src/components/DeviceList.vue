@@ -79,6 +79,17 @@ const handleRefresh = () => {
       />
     </div>
 
+    <div v-else class="device-list__empty">
+      <svg aria-hidden="true" viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round">
+        <rect x="3" y="4" width="18" height="13" rx="2" /><path d="M8 21h8M12 17v4M8 10h.01M12 10h.01M16 10h.01" />
+      </svg>
+      <p>{{ t('devices.emptyTitle') }}</p>
+      <p class="device-list__empty-hint">{{ t('devices.emptyHint') }}</p>
+      <button class="device-list__empty-btn" @click="deviceStore.openAddModal()">
+        {{ t('devices.addDevice') }}
+      </button>
+    </div>
+
     <button
       v-if="deviceStore.hiddenDevices.length"
       class="device-list__hidden"
@@ -90,17 +101,6 @@ const handleRefresh = () => {
       <span>{{ t('devices.hiddenCount', { n: deviceStore.hiddenDevices.length }) }}</span>
       <span class="device-list__hidden-manage">{{ t('devices.hiddenManage') }}</span>
     </button>
-
-    <div v-else class="device-list__empty">
-      <svg aria-hidden="true" viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round">
-        <rect x="3" y="4" width="18" height="13" rx="2" /><path d="M8 21h8M12 17v4M8 10h.01M12 10h.01M16 10h.01" />
-      </svg>
-      <p>{{ t('devices.emptyTitle') }}</p>
-      <p class="device-list__empty-hint">{{ t('devices.emptyHint') }}</p>
-      <button class="device-list__empty-btn" @click="deviceStore.openAddModal()">
-        {{ t('devices.addDevice') }}
-      </button>
-    </div>
   </div>
 </template>
 

@@ -1,6 +1,6 @@
 # Changelog
 
-> 最后校对：2026-11-03，对应版本 v2.4.8（`package.json:4`）。
+> 最后校对：2026-11-03，对应版本 v2.4.9（`package.json:4`）。
 
 本文件记录 HanCast 的版本历史。口径说明：
 
@@ -8,6 +8,41 @@
 - 版本号唯一来源是 **`package.json` 的 `version`**（`scripts/sync-version.cjs:4,17`），`npm run version:set <x.y.z>` 把它刷进 7 处契约点：`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`（本地包那条，v2.3.8 起收进来——此前每版都靠人肉补）、`hancast-backend/pyproject.toml`、`hancast_sidecar/utils/config.py:39`、`src/api/commands.ts`（mock）、`src/stores/settings.ts`。`scripts/check-version.cjs` 自称以 `tauri.conf.json` 为源（口径相反），但全仓无人调用，是未接线的孤儿脚本——判定以 `sync-version.cjs` 为准。详见 [docs/构建与发布.md](docs/构建与发布.md) §1。
 - 下表「提交」列即 `git tag <版本>` 指向的提交；细节以 `git show <提交>` 为准，本文只留用户可感知的变化。
 - 新加版本时**同一次提交**里补这里，并按 [docs/README.md](docs/README.md) §4 的约定同步对应文档。
+
+---
+
+## v2.4.9 — 2026-11-03
+
+修三处「验收脚本静默失效」+ 一处用户可见的界面错配。产品行为只动一处：**设备列表不再在有设备时又显示空状态块**。
+
+### 为什么需要
+用户贴截图：设备列表里明明已经列出两台局域网设备（小度添添闺蜜机 Pro 4K Max、cl32，都是 192.168.175.227），下面却又叠着「还没有发现设备 / 没发现局域网设备？组播可能被防火墙或安全软件拦截，可按 IP 手动添加 / 手动添加设备」。一眼就该看出来的矛盾，v2.4.4 引入后一直没人发现——因为**没有任何一条验收脚本会渲染这个组件**。
+
+顺着这条线查出三个同类问题，都是「脚本本身坏了，于是坏了也没人知道」：
+
+| 问题 | 症状 | 引入版本 |
+|------|------|----------|
+| `DeviceList.vue` 的 `v-else` 配错对 | 空状态挂在**隐藏设备按钮**的 `v-if` 上，渲染条件是「没有隐藏设备」，与有没有设备无关 → 有设备 + 无隐藏设备时两者同现 | v2.4.4 |
+| `tools/verify-app-lifecycle.cjs` 叶子组件白名单没跟 | `App.vue` 新挂了 `HiddenDevicesModal`，白名单里没有 → 整脚本以 `Unexpected import @/components/HiddenDevicesModal.vue` 直接加载失败 | v2.4.4 |
+| `tools/verify-app-lifecycle.cjs` 少了 `getHiddenDevices` 桩 | `device.ts` 在 `onMounted` 里拉隐藏设备，触发「Unplanned API call」守卫 | v2.4.4 |
+| `tools/verify-cast-ui.cjs` 缺 `remoteUpdateUi` / `playableItems` 桩 | `setupRemoteUiSync` 去抖回调抛 `TypeError`，**30 个用例从 30/30 集体掉到 0/30** | v2.4.8 |
+
+### 改动
+1. `src/components/DeviceList.vue`：把空状态 `v-else` 块移回 `device-list__items` 的 `v-if` 之后，隐藏设备按钮移到空状态**之后**并改成独立 `v-if`。现结构：items(v-if) → empty(v-else) → hidden button(v-if)。
+2. `src/stores/cast.ts`：`setupRemoteUiSync()` 的 300ms 去抖 timer 原来是函数局部变量，`onUnmounted` 只置 `disposed = true`、从不 `clearTimeout`，卸载后仍会发一次 `remote_update_ui`。提到 store 作用域 `remoteUiTimer`，`onUnmounted` 里清掉，回调开头再挡一次 `disposed`。
+3. `tools/verify-app-lifecycle.cjs`：白名单补 `HiddenDevicesModal`，API 桩补 `getHiddenDevices`。
+4. `tools/verify-cast-ui.cjs`：桩补 `remoteUpdateUi` 与 `playlist.playableItems`；`unmount cleans …` 那条用例先 `tick(300)` 让根 store 的镜像去抖烧掉再断言组件定时器（它断言的是**组件**定时器，store 的常驻去抖不是泄漏）。
+5. 新增 `tools/verify-device-list-empty.cjs`：真 SFC 编译 + 真 Vue renderer，4 条断言钉住「列表与空状态互斥」——有设备绝不出现空状态、没设备才出现、隐藏按钮与空状态允许并存。
+
+### 验证
+- `node tools/verify-device-list-empty.cjs` → **ALL PASS (4/4)**；把 `DeviceList.vue` 还原成旧结构复查 → 4/4 变红（判据确实抓得住），恢复后回绿。
+- `node tools/verify-cast-ui.cjs` → **30/30**（修复前 0/30）。
+- `node tools/verify-app-lifecycle.cjs` → **2/2 pass**（修复前加载即失败）。
+- `npx vue-tsc --noEmit` 退出码 0；`npm run build` 通过（主包 `dist/assets/index-Bqehleyx.js` 371.40 kB）。
+- `tools/verify-playlist-advance.cjs` 10/10、`tools/verify-media-theme.cjs` 正常。
+
+### 行号与硬数字
+`tools/` 顶层脚本 57 → **58 个**（口径：顶层 `.py/.sh/.cmd/.ps1/.mjs/.cjs`，见 `tools/README.md` §1，闸门逐行点名核对）。
 
 ---
 
@@ -165,7 +200,7 @@ HanCast 本身既是控制端也能当接收端（DLNA 渲染端），但设备�
 
 ### 验收脚本
 - `tools/verify-params-ui.mjs` 的 `spawn` 补 `--no-sandbox --disable-gpu`（受限环境不加会 `sandbox initialization failed` → `GPU process isn't usable` 假崩，此前一直靠临时副本绕过）。
-- 新增 `tools/verify-tv-url-suffix.py`（57 个顶层脚本）：投屏直链**后缀门**的纯函数矩阵，钉死白名单/黑名单与 `player_safe_suffix` 回填；`test_tv_url_suffix.py` 补「按 mime 而非仅按路径判 m3u8」用例。
+- 新增 `tools/verify-tv-url-suffix.py`（当时是第 57 个 `tools/` 顶层脚本，现 58 个）：投屏直链**后缀门**的纯函数矩阵，钉死白名单/黑名单与 `player_safe_suffix` 回填；`test_tv_url_suffix.py` 补「按 mime 而非仅按路径判 m3u8」用例。
 
 ### 验证
 - 后端全量 `pytest` **563 passed**（含新增 `test_config_isolation.py` 5 项、`test_device_doors.py` 8 项）；`npx vue-tsc --noEmit` 0 错、`npm run build` 通过；`node tools/verify-cast-ui.cjs` 30/30；`node tools/verify-playlist-advance.cjs` 10/10；`python3 tools/verify-tv-url-suffix.py` ALL PASS。
@@ -393,7 +428,7 @@ HanCast 本身既是控制端也能当接收端（DLNA 渲染端），但设备�
 一轮只补一件事：**投屏失败的原因要送到用户眼前，而不是只留在看不见的那块屏上**。用户可感知面——窗口收进托盘后往电视投被拒，桌面会弹一条系统通知「投屏失败 / 设备名：电视返回的原文」。没有新能力、没有视觉改动。覆盖的是**五条失败出口**（媒体投屏两条 + 屏幕投屏三条），不是只修用户撞到的那一条。
 
 - **现象与真因**：2026-10-24 用户报「投 TCL 怎么没反应」，实际电视回的是 `HTTP 500 …请在电视上打开「多屏互动/无线投屏/DLNA」`。这条原因 v2.3.20 已经放进首页红条（`src/stores/cast.ts` 的 `lastError`），**但 HanCast 平时收在托盘里**——窗口不在前台时那条红字没人看得见，于是错误「产生了、没送达」。修的是投递，不是采集。
-- **五条失败出口进系统通知**：媒体投屏 ① `startCast` 抛错 → `notify.castFailed`（`src/stores/cast.ts:531`）；② 停止未送达（`stop_cast` 的 `control_failed`）→ `notify.stopNotDelivered`（`:478-479`）。屏幕投屏 ③ `start` 被拒或抛错、④ `stop` 未送达、⑤ **会话中途自己死了**（状态事件带 `error`）——三者统一经 `alertScreen()`（`src/stores/screencast.ts:197-203`）发出，调用点在 `:189-211`、`:212-249`、`:285-300`。正文原样带 Sidecar 给的失败原因，前端不改写、不翻译。
+- **五条失败出口进系统通知**：媒体投屏 ① `startCast` 抛错 → `notify.castFailed`（`src/stores/cast.ts:535`）；② 停止未送达（`stop_cast` 的 `control_failed`）→ `notify.stopNotDelivered`（`:478-479`）。屏幕投屏 ③ `start` 被拒或抛错、④ `stop` 未送达、⑤ **会话中途自己死了**（状态事件带 `error`）——三者统一经 `alertScreen()`（`src/stores/screencast.ts:197-203`）发出，调用点在 `:189-211`、`:212-249`、`:285-300`。正文原样带 Sidecar 给的失败原因，前端不改写、不翻译。
   ②与④是同一类坑的另一半：「本机停了、电视还在播」原本也只有红条说得出；⑤ 覆盖「投着投着采集进程退出」这种用户已经走开的场景。同一条 `error` 会被终止与停止各递一次，**按文本去重只弹第一条**（`:45` 的 `lastAlertedError`）；只投给浏览器（没有电视）时正文就是原因本身，不硬凑设备名。
 - **接线四处**：npm `@tauri-apps/plugin-notification@~2.4.0`（`package.json:20`）/ Rust `tauri-plugin-notification = "2.4"`，锁到 **2.4.0**（`src-tauri/Cargo.toml:26`）/ `.plugin(tauri_plugin_notification::init())`（src-tauri/src/lib.rs:1255，紧挨着插件链、带一句「窗口收进托盘时红条没人看得见」的为什么）/ capability `notification:default`（`src-tauri/capabilities/default.json:22`）。三平台后端由 `notify-rust 4.18.2` 分派，`Cargo.lock:2259-2268` 可见 `mac-notification-sys`（macOS）+ `zbus`（Linux DBus）+ `tauri-winrt-notification`（Windows Toast）。
   **版本配对是这轮唯一的返工**：第一次打的 tag 在三平台 `Tauri bundle` 步骤全部失败——`Found version mismatched Tauri packages … tauri (v2.11.5) : @tauri-apps/api (v2.12.4)` 与 `tauri-plugin-notification (v2.4.0) : @tauri-apps/plugin-notification (v2.7.0)`。根因是 npm 侧插件会拽着 `@tauri-apps/api` 往上涨（`plugin-notification@2.7.0` 要求 `api ^2.12.0`），而 `package.json` 里 `"@tauri-apps/api": "^2.0.0"` 这种宽范围让它在装依赖时飘到 2.12.4，`Cargo.lock` 的 `tauri` 却仍是 2.11.5。`cargo check`、`vue-tsc`、`vite build` **没有一个会报这件事**，只有 `tauri build` 在 bundle 阶段拒。所以把 `@tauri-apps/api` 收成 `~2.11.1`、通知插件收成 `~2.4.0`（Rust 侧 `2.4`）——**成对改**才对，单改一边照样失败；这条铁律写进 AGENTS.md 的 Rust 依赖块下面。

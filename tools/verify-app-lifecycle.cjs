@@ -21,6 +21,9 @@ const targetEvents = ['cast_state_changed', 'screen_cast_state_changed']
 const scopedEvents = [...targetEvents, 'cast_error', 'device_found', 'device_lost']
 const leafNames = new Set([
   'GuardConfirmModal', 'UpdateModal', 'LogsPanel', 'AddDeviceModal',
+  // v2.4.4 起 App.vue 还挂了隐藏设备管理弹窗；这里漏登记会让整个脚本以
+  // 「Unexpected import @/components/HiddenDevicesModal.vue」直接加载失败。
+  'HiddenDevicesModal',
   'TitleBar', 'MediaInput', 'DeviceList', 'CastController', 'ScreenCastPanel',
   'StopWarningBanner', 'Footer', 'AutostartPromptModal',
 ])
@@ -173,6 +176,10 @@ function fixture(t, delayed = false) {
     getGuardDevices: () => ({ trusted: [], blacklisted: [] }),
     getGuardSettings: () => ({ enabled: true, confirm_timeout: 15 }),
     isStoreVersion: () => false,
+    // v2.4.4 起 device store 在 onMounted 里顺手拉一次隐藏设备（用来决定要不要显示
+    // 「已隐藏 N 台」入口）。这是本用例不关心的旁路调用，给个空结果即可；
+    // 不登记就会被「Unplanned API call」守卫判红。
+    getHiddenDevices: () => ({ devices: [] }),
   }
   const commands = new Proxy({}, {
     get(_target, name) {

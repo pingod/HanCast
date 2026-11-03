@@ -2,7 +2,7 @@
 
 > 本文档回答：HanCast 桌面端（Tauri 2 + Vue 3）的界面层是怎么搭起来的——窗口壳层、路由视图、组件与 Store 全量清单、真实数据流时序、样式与国际化机制、浏览器 mock 模式，以及写代码前必须知道的约束与坑。
 >
-> 最后校对：2026-11-03，对应版本 v2.4.8（`package.json:4`）。本轮（v2.4.8）：遥控器页升级（常驻+相册上传/粘链接/选目录+队列/历史/多设备/防息屏/横屏），locale 键 395→399；`CastController.vue` 遥控器弹窗改为常驻地址展示。上一轮（v2.4.7）：添加本机（自己投自己）。
+> 最后校对：2026-11-03，对应版本 v2.4.9（`package.json:4`）。本轮（v2.4.8）：遥控器页升级（常驻+相册上传/粘链接/选目录+队列/历史/多设备/防息屏/横屏），locale 键 395→399；`CastController.vue` 遥控器弹窗改为常驻地址展示。上一轮（v2.4.7）：添加本机（自己投自己）。
 
 术语约定：**Sidecar** = Python 后台进程（`hancast-backend/`，打包为 `hancast-sidecar`）；**壳层** = Rust/Tauri 层（`src-tauri/`）；**规则包** = JS 解析插件 zip；**声明式规则** = JSON 站点规则；**屏幕投屏** = screencast（把电脑屏幕投出去）；**接收投屏** = 本机作为 DLNA 渲染端被别的设备投；**投屏确认** = Device Guard；**后台参数** = `params.py` 可调项。
 
@@ -374,7 +374,7 @@ default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src '
 
 v2.4.1 的队列投屏有两处让「停止」失效的缺陷，修法都在 `cast.ts`，不涉及后端：
 
-1. **点一次停止，下一集又被投上来**。根因是续播的触发口径分不清「这集播完了」和「用户喊停」：两者在 DLNA 事件流里都是设备自报 `STOPPED`，`advancePlaylistIfActive` 一律当成自然播完，于是立刻投下一集，用户得连点好几次。修法是显式记账：`stopCast` 在**发 Stop 之前**就给所有目标设备打上 `userStoppedDevices`（`cast.ts:51`）标记（`cast.ts:484`）——顺序很重要，设备自报的 STOPPED 常常早于 `stop_cast` 的响应回来，那时本地会话还在，晚一步打标记就拦不住；同时清掉 `queueAdvancing` 与 `playlist.playingId`。`advancePlaylistIfActive`（`cast.ts:843`）与 `castQueueItem`（`cast.ts:794`）进来先看这个标记，命中就直接放弃；标记在**下一次成功起播**时撤掉（`cast.ts:380`），所以停止后重新投屏不受影响。另外 `advancePlaylistIfActive` 还会再核一遍「设备当前 URI 仍是本队列的某一项」，陈旧事件拉不起已经停掉的会话。
+1. **点一次停止，下一集又被投上来**。根因是续播的触发口径分不清「这集播完了」和「用户喊停」：两者在 DLNA 事件流里都是设备自报 `STOPPED`，`advancePlaylistIfActive` 一律当成自然播完，于是立刻投下一集，用户得连点好几次。修法是显式记账：`stopCast` 在**发 Stop 之前**就给所有目标设备打上 `userStoppedDevices`（`cast.ts:51`）标记（`cast.ts:484`）——顺序很重要，设备自报的 STOPPED 常常早于 `stop_cast` 的响应回来，那时本地会话还在，晚一步打标记就拦不住；同时清掉 `queueAdvancing` 与 `playlist.playingId`。`advancePlaylistIfActive`（`cast.ts:847`）与 `castQueueItem`（`cast.ts:798`）进来先看这个标记，命中就直接放弃；标记在**下一次成功起播**时撤掉（`cast.ts:380`），所以停止后重新投屏不受影响。另外 `advancePlaylistIfActive` 还会再核一遍「设备当前 URI 仍是本队列的某一项」，陈旧事件拉不起已经停掉的会话。
 2. **停止后再投别的东西，投的还是旧文件夹的队列**。根因是 `playlist` 是全局单例，停止只清会话、不清队列，界面还挂着上一个文件夹的列表，再点投屏就照着旧队列又投一遍。修法在 `startCast`：只要这次起播**不是**队列自己发起的（`opts.fromQueue` 为假）而 `playlist.hasQueue` 为真，就先 `playlist.reset()`（`cast.ts:384`）把旧队列清掉。
 
 两条不变量都有回归用例（`tools/verify-cast-ui.cjs`：`manual stop suppresses the queue auto-advance` 与 `casting a new item drops the stale folder queue`），且都做过**变异验证**——把守卫去掉后这两条立刻红，说明它们真的钉住了缺陷而不是陪跑。第一条刻意按真实时序构造：让设备在 `stop_cast` 的响应回来之前发出 STOPPED，这正是「一次停不掉」的现场。

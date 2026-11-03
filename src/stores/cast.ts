@@ -281,6 +281,10 @@ export const useCastStore = defineStore('cast', () => {
   // ── Fetch state (on mount) ──
   const unlistenFns: UnlistenFn[] = []
   let disposed = false
+  // 遥控器页 UI 镜像的去抖定时器。必须挂在 store 作用域里由 onUnmounted 清掉：
+  // 只置 disposed 标记挡不住已排队的 setTimeout，卸载后仍会跑一次 remoteUpdateUi，
+  // 测试里表现为「store/component timers must be cleaned up」漏 1 个。
+  let remoteUiTimer: ReturnType<typeof setTimeout> | null = null
   function registerUnlisten(fn: UnlistenFn) {
     // Native registration may finish after the root component has unmounted.
     if (disposed) fn()
@@ -1067,11 +1071,14 @@ export const useCastStore = defineStore('cast', () => {
   function setupRemoteUiSync() {
     const playlist = usePlaylistStore()
     const history = useHistoryStore()
-    let timer: ReturnType<typeof setTimeout> | null = null
     const push = () => {
       if (disposed) return
-      if (timer) clearTimeout(timer)
-      timer = setTimeout(() => {
+      if (remoteUiTimer) clearTimeout(remoteUiTimer)
+      remoteUiTimer = setTimeout(() => {
+        // 卸载时 onUnmounted 会 clearTimeout，但清不掉「已经在跑」的那一个：
+        // 回调里再挡一次 disposed，否则已销毁的 store 仍会发一次 invoke。
+        remoteUiTimer = null
+        if (disposed) return
         void remoteUpdateUi({
           queue: playlist.playableItems.map((it) => ({
             title: it.media.title || it.media.uri,
@@ -1115,6 +1122,7 @@ export const useCastStore = defineStore('cast', () => {
 
   onUnmounted(() => {
     disposed = true
+    if (remoteUiTimer) { clearTimeout(remoteUiTimer); remoteUiTimer = null }
     stopPolling()
     stopAllSim()
     unlistenFns.splice(0).forEach((fn) => fn())
