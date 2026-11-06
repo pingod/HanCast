@@ -1,4 +1,20 @@
 # HanCast 开发进度
+## 2026-11-06 发布轮：v2.4.13 已 publish（含 ISSUE-026 队列图片项修复 + CI runner 标签）
+
+用户请求 user said: "我刚才从windows投整个文件夹到macos上不成功" → （诊断后）"提交 推送 打包 下载 安装。。。。。搞起 不要我再说了啊 这标准流程我每次都给你说很搞我啊"。**流程按 docs/构建与发布.md §5 的 runbook 走完，全程没再回头问用户。**
+
+- **修的那个 bug 见 issues.md ISSUE-026**（队列第一项是 `Cover.jpg`，图片永不自报 STOPPED ⇒ 整夹卡死；铁证是发送侧 `Image cast, skip progress polling: image/jpeg`）。用户先怀疑本轮的投屏确认，**三条硬证据排掉**：接收端 `device_guard.enabled=false`（`guard.check()` 直接 return "trusted" 不打日志）、今天日志里 0 条 guard 决策行、`git diff --name-only` 里 `guard.py`/`dlna.py` 一行没动。
+- **取证入口（下次直接用）**：Windows 那台 `ssh win`（`~/.ssh/config` → `192.168.1.68`，`amd-yes\administrator`，key 免密）。它的 `%APPDATA%\HanCast\logs\hancast.log` 有出站 `SOAP OUT ← 200 | <Action>` 逐条记录；投屏历史/队列存在 WebView2 leveldb（`%LOCALAPPDATA%\com.han.hancast\EBWebView\Default\Local Storage\leveldb\*`，值**UTF-16LE + snappy 块压缩**，`strings` 只能抠出没压缩的那份）；**更省事的是遥控器页** `http://192.168.1.68:8899/r/<token>/api/state` —— 设备表/会话/队列/历史一把出，token 在它的日志 `[Remote] 遥控器页随应用启动:` 那行。
+- **⚠️ 新踩的坑（issues.md ISSUE-027）**：GitHub **2026-11-02 退役 macOS 14 runner image**，矩阵里钉死的 `macos-14` 当场变不可用配置，`macos-arm64` 作业 **0 秒红**（`The configuration 'macos-14-arm64-us-default' is not supported`），v2.4.12 因此 tag 公开了却没有 Release。改成 `macos-latest`（与 windows/ubuntu 同规矩；latest 在 macOS 上是 ARM64），并把 v2.4.12 进 `DECLARED_UNRELEASED`（23→24）、内容原样往前发成 **v2.4.13**。
+- **标签存不存在别靠猜**：一次性分支 `ci/macos-label-probe` 上放最小探针工作流（矩阵 `[macos-latest, macos-15]` 只跑 `sw_vers`/`uname -m`），**push 触发**——`gh workflow run` 要求该工作流存在于**默认分支**，dispatch 走不通（工具性事实，记进 docs §4.1）。跑完删分支。
+- **发布链**：`npm run version:set 2.4.12` → commit `9e9259e` → tag/push → CI 挂 → `npm run version:set 2.4.13` → commit `44aedc1` → tag/push → **run `42182520558` 全绿**（macOS 11m22s / Windows 15m57s / Linux 18m34s / publish 25s），publish 08:00:28Z，10 项资产。
+- **下载**：GitHub 直连 ~1KB/s（8 分钟 460KB）——**走 `gh-proxy.com` 镜像**，并按 GitHub 声明的 sha256 逐字节核过（dmg `50d9721f…c2ec`、exe `76d00c7f…2580` 全对）。
+- **装端**：macOS `install-macos-artifact.sh 2.4.13` + `accept-macos-artifact.sh 2.4.13` → **88 PASS / 0 FAIL / 1 SKIP**（SKIP 是 FFmpeg 下载源要代理）。Windows 装前先用 `/api/state` 确认无在投会话再 `Stop-Process`，`setup.exe /S` **退出码 0、6 秒**，FileVersion 2.4.11→2.4.13 ⇒ §6.12 那条「静默装只是推断」变实测；「**旧版还开着时被 /S 撞上去**」仍未验。
+- **⚠️ 从 ssh 装完起不来 GUI**：会话 0 `Start-Process` 起的进程落不到交互窗口站、自己退了；必须**在交互会话里拉**（一次性计划任务 `schtasks /create … /sc once /st 00:00` + `/run`，跑完 `/delete`）。UIA 同理——`Get-Process` 能看到 pid，但 `RootElement.FindAll` 看不见别的会话的窗口，自动化脚本必须在交互会话里执行。
+- **产物级取证新手法（值得复用）**：Tauri 把前端**资源名明文**嵌进主二进制，Vite 资源名是内容哈希 ⇒ 本机对同一提交 `npm run build` 出 `assets/index-CQn_mGyI.js`，grep `/Applications/HanCast.app/Contents/MacOS/HanCast` 见同名 + 该 dist 里有 `imageDwellSeconds`/中文档位文案 ⇒ 证明装的就是这份代码。资源体本身是 brotli 压的，**别指望 grep 压缩流**；Windows runner 检出带 CRLF 会让哈希不同名，此招只对 macOS/Linux 有效。
+- **本轮没做完的**：① 应用内更新弹窗那条**按钮路径**（§6.12 #1/#2/#5）没在产物上点过；② ISSUE-026 的 **GUI 端到端**没跑成——UIA `InvokePattern.Invoke()` 点「📁 选文件夹」后系统目录选择框没弹出（只多出 Tauri 的 `com.han.hancast-siw` 隐形窗口），那台机器上开着用户的浏览器/文件管理器/Steam，**没继续硬试**（`SendKeys` 打偏就是骚扰别人）；③ 手机镜像真机未验；④ `audit-releases.py` 首跑撞 `IncompleteRead`（release 列表 ~390KB 被截断），重试即过。
+- **口径**：版本 2.4.11 → **2.4.13**（2.4.12 是发了 tag 没发产物那一版）；`DECLARED_UNRELEASED` 23→**24**；发布面 tag 65 / release 21 / draft 0 / latest=v2.4.13，`audit-releases.py` exit 0；文档：CHANGELOG 新增 v2.4.13 一节（含发布记录表）、docs/构建与发布.md §4.1 实测教训 + §6.12 执行记录、AGENTS.md 矩阵表与本轮小结、全部校对戳 v2.4.13。
+
 ## 2026-11-06 未发布轮：应用内更新 + 发布面对账（v2.4.12）
 
 用户请求 user said: "github上的版本有些乱啊，release和tag都不一致，另外为啥release里为啥会有draft标签？ 另外，实现下应用内更新，而且应用内可以选择是否走国内镜像地址来进行更新，现在每次都要去页面下载好麻烦，另外，现在点更新的时候还会出gitee这类的原始作者的地址"。经 ask_user_question 选定四条：删废弃 draft + CI 不再留孤儿 / 彻底删 gitee 源 / 下载+校验+一键装（分平台尽力）/ 镜像开关就放在更新弹窗里。**⚠️ 产物层未验**（`update_apply` 的三条平台脚本没在装好的产物上真装过一次）。

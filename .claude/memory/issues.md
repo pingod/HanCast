@@ -291,6 +291,37 @@
   撤掉 `clearImageDwell(id)` → 「点停止必须撤掉在途计时器」FAIL。
   另修 `tools/verify-cast-ui.cjs`：它的 `@/stores/playlist` 桩没跟住 cast.ts 新增的具名 import
   （`isImageMedia`），会炸在 `castQueueItem` 里——「桩要跟着 import 清单走」这个坑本仓库已踩三次。
+- **发布佐证（v2.4.13，2026-11-06）**: 装好的 macOS 产物里 `Contents/MacOS/HanCast` 明文嵌着
+  `assets/index-CQn_mGyI.js`，与该 tag 提交上 `npm run build` 产出的同名文件一致（Vite 文件名是内容哈希），
+  而那个 bundle 含 `imageDwellSeconds` 与「图片停」文案 ⇒ 改动确实进了产物。
+  **仍欠一次 GUI 端到端点击**：UIA `InvokePattern.Invoke()` 点「📁 选文件夹」后系统目录选择框没弹出
+  （只多出 Tauri 的 `com.han.hancast-siw` 隐形窗口），而那台机器上开着用户的浏览器/文件管理器/Steam，
+  没继续拿 `SendKeys` 硬试——打偏就是骚扰别人的窗口。
+
+### ISSUE-027: GitHub 退役 macOS 14 image，钉死 `macos-14` 的 CI 当场 0 秒红
+
+- **发现日期**: 2026-11-06（v2.4.12 的 tag 推上去 26 秒）
+- **严重程度**: 高（发布链路整个停摆，而且**与代码无关**，红得完全不像代码问题）
+- **状态**: 🟢 已解决
+- **描述**: `macos-arm64` 作业 0 秒失败，annotation 只有一句
+  `The configuration 'macos-14-arm64-us-default' is not supported`。根因是 GitHub 于
+  **2026-11-02 退役 macOS 14 runner image**（[changelog](https://github.blog/changelog/2026-10-01-github-actions-macos-14-runner-image-retirement)、
+  [runner-images#13518](https://github.com/actions/runner-images/issues/13518)）。
+  后果链：macOS 产物没产出 ⇒ release job 的 `Require a complete artifact set before publishing`
+  不建 Release ⇒ **tag 公开了、用户什么都拿不到**（与 v2.3.8 当年 windows 作业挂掉同形）。
+  而 `Resolve version` 绿、linux/windows 正常起跑，看上去一点都不像本地改坏了。
+- **复现步骤**: 任何仍写 `os: macos-14` 的 workflow，推个 tag 就红。
+- **解决方案**: `os: macos-latest`（macOS 的 latest 是 ARM64，与矩阵 `aarch64-apple-darwin` 一致），
+  与既有 `windows-latest` / `ubuntu-latest` 统一。**不要钉 image 版本号**——钉了就会被下一次退役打穿。
+  发布面处置按仓库既有三条规矩：不删 tag、不给旧版补一条空 release（`releases/latest` 认的是
+  「最近一次 publish」，补一条会把线上更新检查指回旧版，v2.3.8 实测踩过），改为把 `v2.4.12` 记进
+  `tools/audit-releases.py` 的 `DECLARED_UNRELEASED`（23→24），内容原样往前发成 v2.4.13。
+- **验证方法**: 标签能不能用别靠猜——一次性分支 `ci/macos-label-probe` 上放最小探针工作流
+  （矩阵 `[macos-latest, macos-15]`，只跑 `sw_vers` + `uname -m`），**push 触发**；
+  `gh workflow run` 要求该工作流存在于**默认分支**，所以 dispatch 这条路走不通（工具性事实）。
+  之后 v2.4.13 的 CI run `42182520558` 四格全绿并 publish（macOS 11m22s / Windows 15m57s / Linux 18m34s）；
+  `python3 tools/audit-releases.py` exit 0（`releases/latest` = v2.4.13，v2.4.12 只报 INFO）。
+  判据与教训记在 docs/构建与发布.md §4.1 与 §6.12 执行记录。
 
 ## 解决方案模板
 

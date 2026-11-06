@@ -44,6 +44,21 @@ The configuration 'macos-14-arm64-us-default' is not supported
 **`gh workflow run` 要求该工作流存在于默认分支**，所以探针只能走 push 触发，不能 dispatch；
 探针分支与文件跑完即删，主干历史里不留一次性脚本。
 
+### 发布记录（2026-11-06，装端与产物取证做完的都在这里）
+
+- **CI run `42182520558`**：`Resolve version` 5s → `macos-arm64` 11m22s ✓ / `windows-x64` 15m57s ✓ / `linux-x64` 18m34s ✓ → `Publish GitHub Release` 25s ✓。Release 已 publish（08:00:28Z，`draft: false`），**10 项资产**：dmg / setup.exe / deb / rpm / AppImage / `pkg.tar.zst` + 4 个规则包 zip。
+- **下载**：GitHub 直连只有 ~1KB/s（8 分钟 460KB，下不完），改走仓库自己的默认镜像 `gh-proxy.com`；**摘要照旧按 GitHub 声明的 sha256 逐字节核**，两台都对上：
+  - `HanCast_2.4.13_aarch64.dmg` 85,804,125 B → `50d9721f6d255b78f8ec04450365c9c24ed83785f70f76650d5f584e8612c2ec` ✓
+  - `HanCast_2.4.13_x64-setup.exe` 68,917,524 B → `76d00c7fb76a6d94462b548f2413d2ae14897c7c995a71ff09f94ac790012580` ✓
+- **macOS 装端**：`tools/install-macos-artifact.sh 2.4.13 <dmg>` → 装好（原 2.4.11 移到 `/tmp/HanCast_pre_2411_161936.app`，`Identifier=com.han.hancast` 没变）。
+  `tools/accept-macos-artifact.sh 2.4.13` → **88 PASS / 0 FAIL / 1 SKIP**（唯一 SKIP 是 FFmpeg 下载源线路故障、需导出 `HC_FFMPEG_PROXY` 重跑，与本轮改动无关）。
+- **Windows 装端（.68，v2.4.11 → v2.4.13）**：先用遥控器页 `/api/state` 确认**没有在投会话**，再 `Stop-Process` 关掉旧实例，`HanCast_2.4.13_x64-setup.exe /S` **退出码 0、6 秒**，`HanCast.exe` FileVersion 变 2.4.13。
+  → 这一条把 v2.4.12 节里「静默装走 `/S` 只是推断、不是实测」变成了实测；但**「应用还开着时被 /S 撞上去」这一支仍未验**（我是先关再装）。
+  装完新版没起来：从 ssh（会话 0）`Start-Process` 落不到交互窗口站，进程自己退了；改用一次性计划任务在交互会话里拉起才成功（跑完即删）。
+- **产物级取证（修复真进了产物）**：macOS 主二进制里明文嵌着资源名 `assets/index-CQn_mGyI.js`，与本仓库在该 tag 提交上 `npm run build` 产出的同名文件一致（Vite 文件名是内容哈希），而那个 bundle 里既有 `imageDwellSeconds` 也有中文档位文案「图片停」→ 装好的包里带的就是本次改动的代码。Windows 侧资源名不同（`index-CLSJ4cO9.js` 等，runner 的 CRLF 检出会改变产物内容），不能同法对照，只能靠版本号与同源 tag 佐证。
+- **发布面对账**：`python3 tools/audit-releases.py` → tag 65 / release 21（已发布 21、draft 0），`releases/latest` = v2.4.13，`v2.4.12` 走 `DECLARED_UNRELEASED`（24 个）只报 INFO，**exit 0**。
+  注：这脚本第一次跑撞上 `IncompleteRead`（release 列表 ~390KB 被截断），重试第二次才过——网络毛刺，不是判据问题。
+
 ### 数字与文档
 
 - 版本 2.4.12 → **2.4.13**（`npm run version:set`，7 处契约点）；
@@ -53,8 +68,11 @@ The configuration 'macos-14-arm64-us-default' is not supported
 
 ### 没做 / 待办
 
-- 探针只证明「标签能落到 ARM64 runner」，**没证明 macOS 那一版构建全绿**——真正的证明是这一版自己的 CI run 与装端验收，结果补在下面的发布记录里。
+- **应用内更新弹窗那条按钮路径仍未在产物上点过**（docs/构建与发布.md §6.12 的 #1/#2/#3/#5）：`update_apply` 的三条平台脚本这次是**由我从命令行等价执行的**（Windows 侧直接跑 `setup.exe /S`），不是用户点「退出并安装」走通的那条；「旧版里点检查更新 → 弹窗挑产物 → 下载 → 退出并安装 → 新版自起」这一整条还欠一次真机点击。
+- **「程序还开着时被 `/S` 撞上去」未验**：我是先 `Stop-Process` 再装。Tauri NSIS 默认 `oneClick` 下会不会弹「程序正在运行」仍然只是推断。
+- **ISSUE-026 的 GUI 端到端没跑成**：想用微信驱动（UIA）在那台 2.4.13 上点「📁 选文件夹」复现整夹投屏，`InvokePattern.Invoke()` 之后系统目录选择框没弹出来（顶层窗口只多出 Tauri 自己的 `com.han.hancast-siw` 隐形窗口）。那台机器上开着用户别的应用（浏览器、文件管理器、Steam），**我没继续硬试**——`SendKeys` 兜底一旦打偏就是骚扰别人的窗口。逻辑层已有 22 条断言 + 两次负向对照，产物层已证明改动进了包，差的正是这一下点击。
 - `macos-latest` 会随 GitHub 漂移（Xcode / SDK 版本可能变）。下一次它换 image 时如果构建挂了，先看这里，别先看代码。
+- 手机镜像（B 节）**真机未验**：本轮没有 Android 设备可接，adb/scrcpy 全链路只到代码与单测层。
 
 
 ## v2.4.12 — 未公开（tag 有、Release 无；内容随 v2.4.13 发布。本轮：应用内更新 + 发布面对账 + 手机镜像接收 + 队列图片项续播）
