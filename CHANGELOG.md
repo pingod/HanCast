@@ -1,6 +1,6 @@
 # Changelog
 
-> 最后校对：2026-11-06，对应版本 v2.4.12（`package.json:4`）。
+> 最后校对：2026-11-06，对应版本 v2.4.13（`package.json:4`）。
 
 本文件记录 HanCast 的版本历史。口径说明：
 
@@ -11,7 +11,53 @@
 
 ---
 
-## v2.4.12 — 2026-11-06（本轮：应用内更新 + 发布面对账 + 手机镜像接收 + 队列图片项续播）
+## v2.4.13 — 2026-11-06（本轮实际发布的那一版：v2.4.12 全部内容 + CI runner 标签修复）
+
+**内容等于 v2.4.12**（见下一节的 A/B/C/D/E 五节，此处不重复），多出来的只有一件：
+`.github/workflows/build.yml` 的 macOS 矩阵标签从钉死的 `macos-14` 改成 `macos-latest`。
+
+### 为什么要多发一版
+
+v2.4.12 的 tag 推上去 26 秒，`macos-arm64` 作业**0 秒红**：
+
+```
+The configuration 'macos-14-arm64-us-default' is not supported
+```
+
+原因与代码无关——GitHub 在 **2026-11-02 退役 macOS 14 runner image**
+（[changelog](https://github.blog/changelog/2026-10-01-github-actions-macos-14-runner-image-retirement)、
+[actions/runner-images#13518](https://github.com/actions/runner-images/issues/13518)），
+`macos-14` 从此是不可用配置。macOS 产物没产出 ⇒ release job 的
+`Require a complete artifact set before publishing` 不会建 Release ⇒
+**tag 公开了、用户什么都拿不到**——与 `v2.3.8` 当年 windows 作业挂掉后的情形同形。
+
+### 处置（三条口径都按仓库既有规矩走，没有临时发明）
+
+1. **不删 tag、不给旧版补一条空 release**。`releases/latest` 给的是「最近一次 publish」而不是版本号最大的那条，补一条说明性 release 会把线上更新检查当场指回旧版（`v2.3.8` 实测踩过，见 v2.4.12 节那条教训）。所以 `v2.4.12` 进 `tools/audit-releases.py` 的 `DECLARED_UNRELEASED`（23→**24** 个），对账时只报 INFO 不报 FAIL。
+2. **往前发一版修复**（docs/构建与发布.md §7.1 末段写的正是这条路）：版本号 2.4.12 → **2.4.13**，内容一致，用户拿到的是同一份代码。
+3. **标签不再钉 image 版本号**，与 `windows-latest` / `ubuntu-latest` 统一。macOS 的 `latest` 是 **ARM64**，与矩阵里的 `aarch64-apple-darwin` 一致。代价与理由记在 docs/构建与发布.md §4.1。
+
+### 验证方式（别再靠猜标签存不存在）
+
+先在一次性分支 `ci/macos-label-probe` 上加了个最小探针工作流（矩阵 `[macos-latest, macos-15]`，
+只跑 `sw_vers` + `uname -m`），push 触发两个都绿，才改主干。踩到的一个工具性事实记在文档里：
+**`gh workflow run` 要求该工作流存在于默认分支**，所以探针只能走 push 触发，不能 dispatch；
+探针分支与文件跑完即删，主干历史里不留一次性脚本。
+
+### 数字与文档
+
+- 版本 2.4.12 → **2.4.13**（`npm run version:set`，7 处契约点）；
+- `DECLARED_UNRELEASED` 23→**24**；
+- docs/构建与发布.md §4.1 矩阵表 + 新增实测教训一段、§5.1 名单数字，AGENTS.md 矩阵表，
+  全部校对戳刷到 v2.4.13。
+
+### 没做 / 待办
+
+- 探针只证明「标签能落到 ARM64 runner」，**没证明 macOS 那一版构建全绿**——真正的证明是这一版自己的 CI run 与装端验收，结果补在下面的发布记录里。
+- `macos-latest` 会随 GitHub 漂移（Xcode / SDK 版本可能变）。下一次它换 image 时如果构建挂了，先看这里，别先看代码。
+
+
+## v2.4.12 — 未公开（tag 有、Release 无；内容随 v2.4.13 发布。本轮：应用内更新 + 发布面对账 + 手机镜像接收 + 队列图片项续播）
 
 用户三条抱怨，指向同一件事：**「更新」这条路一直是交给别人走的**。
 

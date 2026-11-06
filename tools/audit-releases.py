@@ -68,6 +68,13 @@ DECLARED_UNRELEASED = frozenset({
     # release，实测把 `/releases/latest` 指回 2.3.8 并让更新检查从此报「已是最新」，
     # 5 分钟内删掉恢复。**不要**为「补齐 tag↔release 对应」而 publish 一条旧版无产物记录。
     "v2.3.8",
+    # v2.4.12：tag 推上去 26 秒就挂，且与代码无关——GitHub 于 2026-11-02 退役 macOS 14
+    # image，矩阵里钉死的 `macos-14` 变成不可用配置（作业 0 秒红：
+    # "The configuration 'macos-14-arm64-us-default' is not supported"），macOS 产物没产出，
+    # release job 的产物闸门因此没建 Release。处置与 v2.3.8 同一条路：**tag 保留、不补建
+    # 说明性 release**，内容原样往前发（v2.4.13 = v2.4.12 全部内容 + CI runner 标签修复）。
+    # 详见 docs/构建与发布.md §4.1 的实测教训。
+    "v2.4.12",
     "v2.2.21",
     "v2.2.22",
     "v2.2.23",

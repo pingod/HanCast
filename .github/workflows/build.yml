@@ -54,7 +54,11 @@ jobs:
         include:
           # ---- macOS ----
           - name: macos-arm64
-            os: macos-14
+            # 2026-11-02 GitHub 退役 macOS 14 image，`macos-14` 当场变成不可用配置：
+            # 作业 0 秒就红「The configuration 'macos-14-arm64-us-default' is not supported」。
+            # 这里跟着 windows/ubuntu 用 `-latest`（macOS 的 latest 是 ARM64，与本矩阵的
+            # aarch64-apple-darwin 一致），别再钉死某个 image 版本号——钉了就会被下一次退役打穿。
+            os: macos-latest
             runner-os: macOS
             arch: aarch64-apple-darwin
             # 只出 .app；dmg 必须等 sidecar 布局修好之后再打，见后面
