@@ -1,6 +1,6 @@
 # HanCast Python Sidecar
 
-> 最后校对：2026-11-03，对应版本 v2.4.11（`package.json:4`）。深度内容见 [../docs/README.md](../docs/README.md)。
+> 最后校对：2026-11-06，对应版本 v2.4.12（`package.json:4`）。深度内容见 [../docs/README.md](../docs/README.md)。
 
 `hancast-backend/` 是 HanCast 的 Python 后端，以 **Sidecar 子进程**形式被 Tauri 壳层拉起，
 通过 stdin/stdout 的行分隔 JSON 与 Rust 通信。它负责 DLNA/SSDP、媒体服务、mpv 渲染、
@@ -112,13 +112,20 @@ mpv 随包（开发时从 `src-tauri/mpv/` 取，见 [../docs/开发指南.md](.
 | 运行依赖 | `ffmpeg_status` `ffmpeg_download_start` `ffmpeg_download_status`（FFmpeg 检测与按需下载，`utils/ffmpeg_deps.py`） |
 | 投屏确认 | `get_guard_devices` `get_guard_settings` `save_guard_settings` `set_guard_policy` `respond_cast_confirm` `remove_guard_device` |
 | 规则包与失败台账 | `plugin_list` `plugin_import` `plugin_pull` `plugin_check_updates` `plugin_remove` `plugin_set_rule_enabled` `plugin_test`、**三条后台任务出口** `plugin_task_start` `plugin_task_result` `plugin_task_cancel`（v2.3.20 起，慢操作不再同步占住命令通道）、`rule_inventory` `failure_list` `failure_delete` `failure_clear` |
-| 配置与运维 | `get_settings` `save_settings` `get_params` `save_params` `get_logs` `set_log_level` `check_update` `exit`（`exit` 由主循环拦下，`export_logs` **不在注册表里**——它是 Rust 就地实现的 lib.rs:1025） |
+| 应用内更新（v2.4.12） | `check_update`（实现下沉 `update/manager.check_for_update`，**gitee 源已删**）、`ignore_update_version`、`update_release_info` `update_download_start` `update_download_status` `update_download_cancel` `update_install_plan`（下载与校验在 `update/manager.py`，**装由壳层 `update_apply` 执行**） |
+| 手机镜像接收（v2.4.12） | `mirror_status` `mirror_devices` `mirror_connect` `mirror_start` `mirror_stop` `mirror_set_tool_path`（`mirror/tools.py` 定位 adb/scrcpy，`mirror/manager.py` 编排外部 scrcpy 窗口） |
+| 排错与前端日志 | `probe_url` `cast_failure_list` `cast_failure_clear` `frontend_log`（v2.4.11：前端错误落进同一份 `hancast.log`） |
+| 配置与运维 | `get_settings` `save_settings` `get_params` `save_params` `get_logs` `set_log_level` `exit`（`exit` 由主循环拦下，`export_logs` **不在注册表里**——它是 Rust 就地实现的 lib.rs:1516） |
 
-`grep -rn "emit_event(" hancast_sidecar/` 能数出 **7 个事件名**：`ready`、`device_found`、`device_lost`、
-`cast_state_changed`、`cast_confirm_request`、`screen_cast_state_changed`，外加 `browser_request`
-（`utils/browser_channel.py:131`）——**最后这条只到壳层**，由 `sidecar.rs:361` 的专分支转给离屏渲染窗口，
-不转发前端。所以**回推前端的是 6 条**，加上壳层自己发的 `update-available`、`autostart-changed`，
-前端合计监听 **8 条**，逐条见 [../docs/HanCast-Frontend-API.md](../docs/HanCast-Frontend-API.md) §3。
+`grep -rn "emit_event(" hancast_sidecar/ --include=*.py` 数出 **10 个事件名**（2026-11-06 重数；
+历史一句：这句曾写「7 个」，漏了 `remote_command`，v2.4.12 又加了 `mirror_state_changed` 与
+`update_download_done`）：`ready`、`device_found`、`device_lost`、`cast_state_changed`、
+`cast_confirm_request`、`screen_cast_state_changed`、`remote_command`、`mirror_state_changed`、
+`update_download_done`，外加 `browser_request`（`utils/browser_channel.py`）——**最后这条只到壳层**，
+由 `sidecar.rs:361` 的专分支转给离屏渲染窗口，不转发前端。所以**回推前端的是 9 条**，加上壳层自己发的
+`update-available`、`autostart-changed`，前端合计监听 **10 条**（`ready` 无人订阅，只当握手痕迹；
+`update_download_done` 由 `src/stores/update.ts` 订阅，省掉一秒轮询等待），逐条见
+[../docs/HanCast-Frontend-API.md](../docs/HanCast-Frontend-API.md) §3。
 
 ## 打包
 

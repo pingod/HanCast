@@ -21,7 +21,7 @@ import type { StopWarning } from '@/api/commands'
 import { notify, remoteUpdateUi } from '@/api/commands'
 import { tt } from '@/i18n'
 import { useDeviceStore } from '@/stores/device'
-import { usePlaylistStore } from '@/stores/playlist'
+import { usePlaylistStore, isImageMedia, IMAGE_DWELL_DEFAULT } from '@/stores/playlist'
 import { useHistoryStore } from '@/stores/history'
 
 /** Parse "HH:MM:SS" to total seconds */
@@ -582,6 +582,9 @@ export const useCastStore = defineStore('cast', () => {
       // 打上「用户主动停」的记号：此后该设备自报的 STOPPED 不再被当成「一集播完」
       userStoppedDevices.add(id)
       queueAdvancing.delete(id)
+      // 图片项的停留计时也要撤掉，否则「点了停止、界面都关了」之后
+      // 计时器还会在几秒后把下一项投出去
+      clearImageDwell(id)
     })
     // 手动停止队列播放也要把队列的「当前项」清掉，免得下次事件误判仍在队列中
     usePlaylistStore().setPlayingId(null)
@@ -794,6 +797,54 @@ export const useCastStore = defineStore('cast', () => {
     return (castOpSeq.get(deviceId) ?? 0) === op
   }
 
+  // ── 队列里图片项的停留计时 ──
+  // 自动续播原本**只有一个**触发点：设备自报 STOPPED/IDLE（下面的 cast_state_changed 监听）。
+  // 图片永远等不到那一刻——接收端 mpv 挂着静帧不发 end-file，后端对图片直接跳过进度轮询
+  // （`hancast-backend/hancast_sidecar/models/session.py:88-91`），也就没有那次自报。
+  // 后果（2026-11-06 现场，Windows→macOS，`JOJO S05 黄金之风` 39 集 + 一张 Cover.jpg）：
+  // 自然序把 Cover.jpg 排在第 1 项，投出去后设备状态一直停在 playing，
+  // 39 集一集都不会续，用户看到的就是「投整个文件夹没反应」。
+  // 队列状态是前端权威（后端明确不复制一套队列逻辑，`commands.py:1011-1015`），
+  // 所以这个计时只能做在发送端。
+  const imageDwellTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+  function clearImageDwell(deviceId: string) {
+    const timer = imageDwellTimers.get(deviceId)
+    if (timer !== undefined) {
+      clearTimeout(timer)
+      imageDwellTimers.delete(deviceId)
+    }
+  }
+
+  /** 投的这项是图片：按用户选的停留时长计时，到点走和「播完」完全同一条续播链路 */
+  function armImageDwell(deviceId: string, castOp: number) {
+    const playlist = usePlaylistStore()
+    clearImageDwell(deviceId)
+    // 单曲循环一张图没有意义（每 N 秒把同一张重推一遍只会闪），不计时
+    if (playlist.playMode === 'repeat-one') return
+    const seconds = Math.max(1, playlist.imageDwellSeconds || IMAGE_DWELL_DEFAULT)
+    const timer = setTimeout(() => {
+      imageDwellTimers.delete(deviceId)
+      // 期间被手动切集/停止/新投屏取代过 → 这次计时作废
+      if (!isCastOpCurrent(deviceId, castOp)) return
+      if (userStoppedDevices.has(deviceId)) return
+      const session = sessions.value[deviceId]
+      if (!session) return
+      // 用户按了暂停就别自己跳走：重新计时，恢复播放后照样续下一项
+      if (session.status === 'paused') {
+        armImageDwell(deviceId, castOp)
+        return
+      }
+      if (session.status !== 'playing') return
+      advancePlaylistIfActive(deviceId)
+    }, seconds * 1000)
+    imageDwellTimers.set(deviceId, timer)
+  }
+
+  function clearAllImageDwell() {
+    for (const deviceId of [...imageDwellTimers.keys()]) clearImageDwell(deviceId)
+  }
+
   /** 把队列里的一项投给设备；用 beginCastOp 判断这次 startCast 是否仍是最新操作 */
   async function castQueueItem(
     deviceId: string,
@@ -822,6 +873,9 @@ export const useCastStore = defineStore('cast', () => {
     const session = sessions.value[deviceId]
     if (session && session.status === 'error') return false
     playlist.setPlayingId(item.id)
+    // 图片项设备等不到「播完」，由这里起计时；视频/音频项要清掉上一项可能残留的计时
+    if (isImageMedia(media)) armImageDwell(deviceId, castOp)
+    else clearImageDwell(deviceId)
     if (isQueueStart) {
       useHistoryStore().record({
         deviceId,
@@ -1125,6 +1179,7 @@ export const useCastStore = defineStore('cast', () => {
     if (remoteUiTimer) { clearTimeout(remoteUiTimer); remoteUiTimer = null }
     stopPolling()
     stopAllSim()
+    clearAllImageDwell()
     unlistenFns.splice(0).forEach((fn) => fn())
   })
 

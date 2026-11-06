@@ -72,6 +72,22 @@
   - 校对戳跟着版本走：bump 当轮把全仓 md 的戳一并盖到新号（`tools/check-doc-freshness.py` 的 `--max-lag 0` 就是这么要求的）。
 - **验证**: 首轮按此执行的是 v2.3.24（入站 SOAP 信封容错 + `test_ghmirror` 桩修复），流程见 docs/构建与发布.md §5。
 
+### DEC-006 边界③ 的执行方式变更（2026-11-06，v2.4.12 轮）
+
+publish 不再靠人点 `gh release edit --draft=false`：CI 改成**推 tag 即 publish**，
+所以「publish」这个动作与「装端验收做完了」从此**绑在 tag 上**——验收没做完就**不要打 tag**，
+而不是打了 tag 再留个 draft 等人点。理由（用户 2026-11-06 的选择）：draft-only 的实际结果是
+22 个 draft 烂在仓库里（1.67 GiB 无人可下载），而 `releases/latest` 不返回 draft，
+线上更新检查因此永远报旧版本。边界③的实质要求（「验收没完成就别让用户拿到」）**保留**，
+只是执行点从 publish 前移到打 tag 前。
+
+配套的三条新纪律：
+1. 产物不齐就不发（`build.yml` 的 `Require a complete artifact set before publishing`）。
+   **不要**发一条缺某平台产物的 release，也不要为旧版补一条无产物的 release——后者会把
+   `releases/latest` 指针拽回旧版（2026-11-06 实测）。
+2. 已打 tag 要撤回：`gh release delete <tag> --yes`，**保留 tag**（tag 指向发布提交，属代码历史）。
+3. 每轮收尾跑 `python3 tools/audit-releases.py`（另有 `release-audit.yml` 每周一自动跑）。
+
 ### DEC-006 执行补充（2026-10-30，v2.4.4）
 - 用户明确：**v2.4.4 保持 draft，等真机投屏一次成功后再 publish**（DEC-006 边界③照旧执行）。
 - 用户明确：**Linux(192.168.1.68) / Windows(win) 上线后自动装 2.4.4**。已建周期任务（this-session 提醒，每 2 小时）：

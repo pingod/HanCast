@@ -1,4 +1,42 @@
 # HanCast 开发进度
+## 2026-11-06 未发布轮：应用内更新 + 发布面对账（v2.4.12）
+
+用户请求 user said: "github上的版本有些乱啊，release和tag都不一致，另外为啥release里为啥会有draft标签？ 另外，实现下应用内更新，而且应用内可以选择是否走国内镜像地址来进行更新，现在每次都要去页面下载好麻烦，另外，现在点更新的时候还会出gitee这类的原始作者的地址"。经 ask_user_question 选定四条：删废弃 draft + CI 不再留孤儿 / 彻底删 gitee 源 / 下载+校验+一键装（分平台尽力）/ 镜像开关就放在更新弹窗里。**⚠️ 产物层未验**（`update_apply` 的三条平台脚本没在装好的产物上真装过一次）。
+
+- **发布面事实（对账当场数出来的）**：63 tag / 42 release，其中 **22 个 draft 从未 publish**、21 个 tag 无 release。draft 是 CI 写死 `draft: true` + 人工 `gh release edit --draft=false` 的产物；验收没做完就被下一版取代 → 永远烂着（1.67 GiB 没人能下载的产物）。`releases/latest` **不返回 draft** ⇒ 「draft 攒着不发」直接等于「线上更新检查永远报旧版本」。
+- **⚠️ 本轮最贵的实测教训**：GitHub 的 `releases/latest` 把 "latest" 给的是**最近一次 publish** 的那条，不是版本号最大的那条。给 v2.3.8 补了一条无产物的说明 release 之后，`/releases/latest` 当场回指 v2.3.8，2.4.11 的客户端从此报「已是最新版本」且不报错。5 分钟内删掉恢复。**结论：永远不要为旧版补 publish release**；`{tag 有, release 无}` 用文档记着即可。代码侧相应地改为拉 `/releases?per_page=100` 自己按语义版本挑。
+- **gitee 根因**：`check_update` 的 sources 硬编码 `["github","gitee"]`，而 `gitee.com/buxiangqumingzi/han-cast` 是**原作者（lanzeweie 线）**的仓库，它的 `releases/latest` 停在 **v2.1.0** 且正文是原作者 changelog。GitHub 不通时它就顶上来 → 用户被发到原作者下载页。前端 `DownloadModal.vue` 另有 GitHub/Gitee/商店三个外链按钮（`push-gitee.ps1` 早跑不通，gitee 从 v2.1.0 起没同步过）。
+- **已做的 GitHub 侧动作**：`gh release delete <tag> --yes` 删掉 22 个 draft（**tag 一个没删**）；备份清单 `/tmp/hancast-release-backup/drafts_manifest.txt`（tag/id/资产名/字节/sha256/时间）。现状 20 条已发布、0 draft、latest=v2.4.11。
+- **后端**：新增 `hancast_sidecar/update/`（`__init__.py` 转出 9 个名字 + `manager.py` 883 行）。要点：`parse_version` 从 `CommandHandler._parse_version` **整体搬来**当唯一实现（commands.py 里那份删了）；`_latest_release_raw` 翻页拉列表、排除 draft/prerelease、按语义版本挑；`classify_asset` 认 6 种安装包、排除规则包 zip；`describe_release` 只回本平台 + `arch_match`；Linux 默认包型按 `APPIMAGE` 环境变量 + dpkg/rpm/pacman 真问一遍；`check_for_update` 保持老字段不动、新增 `assets/selected/platform/no_asset_for_platform/via/error/ignored`；下载走单槽位任务表 + `.part` + `Range` 续传 + `_cancel_event`（取消是**请求**，终态由线程落）+ 整包 sha256 对照 asset `digest` + `_prune`（保住本次的 `.part`，只动 `hancast*` 命名形态）；`install_plan` 的 `kind` 决定壳层动作，deb/rpm/arch 只回 `command` 不代跑 sudo。
+- **命令/事件**：Sidecar 新增 5 条（注册 81→86，`commands.py:159-283`）+ Rust 新增 7 条（88→95，`lib.rs:2024-2120`，含 `update_apply` / `open_update_dir` / `update_install_plan` 转发）+ 事件 `update_download_done`（发出 9→10、转发 8→9、前端监听 9→10）。`check_update` 不再下发 `sources`。
+- **壳层**：`update_apply` 先向 Sidecar 取装法（路径不接受前端传参，同 `open_ffmpeg_dir`），再把四份 const 模板之一写进临时目录并 spawn 到**新进程组**（unix `process_group(0)` / Windows `DETACHED_PROCESS|CREATE_NEW_PROCESS_GROUP`）——脚本必须活过本进程。macOS 是 attach → 旧 `.app` 挪 /tmp 回滚位 → `cp -R` → 失败回滚 → detach → `touch` + `open`；开发布局只 `open` dmg。日志 `<updates>/update-apply.log`。**600ms 后才 `app.exit(0)`**，让命令的回包先到前端。
+- **前端**：**删除 `DownloadModal.vue`**（组件 24→23）；`UpdateModal.vue` 重写 593 行（挑产物 CustomSelect / 镜像开关与前缀 / 进度条 / 摘要校验 / 主按钮四态 + 提权产物给「复制安装命令」）；`stores/update.ts` 重写 451 行（1s 轮询 + `resumeDownload` + `epoch`/`starting` 代次守卫 + `refreshPlan` 本地兜底）；`types/update.ts` 补 `UpdateAsset/UpdateTask/UpdatePlan/UpdateApplyResult` 与 `error`/`ignored`/`via`；`SettingsView.vue` 不再把「没查到」说成「已是最新」；`commands.ts` 导出 87→94 + mock（`?mockUpdate=1|slow|fail`）。
+- **本轮抓出来的四个真 bug**（都有回归位）：① 勾选镜像开关会把用户配好的前缀清掉（改为只提交 enabled）；② `update.cancel` 文案键漏加，按钮直接显示键名 → 于是**新建了 `tools/verify-locale-keys.mjs` 闸门**（本仓此前只核对 zh 键数这个硬数字）；③ `epoch` 竞态：弹窗打开那次状态查询的回包比 start 晚到，把 `downloading` 按回 false ⇒ 后端在正常下载而界面没有进度条；④ `update_install_plan` 前端有封装、**Rust 没有那条命令** ⇒ 打包版下载完拿不到 plan，「退出并安装」永久置灰（浏览器 mock 有 case 所以测不出来）。另外 `_prune` 曾把本次的 `.part` 一起清掉，等于断点续传永远从 0 开始。
+- **收尾补的三处**：① CI deb 冒烟与 Arch 容器实跑都加到**三条命令**（第三条 `update_download_status` 断言返回含 `dir`，专抓 Nuitka 漏收 `hancast_sidecar/update/`——更新 handler 是函数内延迟 import，前两条照样绿）；② `download_status()` 空任务表也回 `dir`；③ `openReleasePage()` 改走 `plugin-shell.open`（Tauri 里 `window.open` 不交给系统浏览器，被删的 DownloadModal 用的就是它）。`build.yml` 因这三条新增变 **758 行**，全仓 `build.yml:` 行号引用已整体重数。
+- **装端验收步骤已写成文档但尚未执行**：docs/构建与发布.md §6.12（七步表：检查更新→镜像开关+下载→退出并装→续传→取消→deb/rpm/Arch 只给命令→装后回归；每步给「失败先看哪」）。本轮**没有打 tag、没有 bump 版本号**（用户 2026-11-06 选「先不打 tag，改动留在工作区」）。
+- **闸门**：新增 `tools/audit-releases.py`（12 项判据 + `--cleanup-commands` 只打印不执行 + `LEGACY_TAG_LINE=v2.2.19` / `DECLARED_UNRELEASED` 22 条 / `DECLARED_ASSETLESS` 留空并注明为什么空）与 `.github/workflows/release-audit.yml`（周一 03:10 UTC + 手动）。`build.yml` 改为 tag 即 publish、publish 前必须六种产物齐（`Require a complete artifact set before publishing`）。
+- **测试**：`tests/test_update_manager.py` 47 例（含真 http.server 的截断续传、篡改丢弃、取消删半份、无摘要如实标、明文 HTTP 拒绝、清理不碰用户文件、命令注册与 `install_plan` 原样透传）；`tests/test_ghmirror.py` 的更新那组重写（含 `test_no_gitee_anywhere_in_the_update_chain` 直接源码断言 + 403 必须说成「限流」）。全量 pytest 首跑 **686 passed / 1 failed**，唯一 FAIL 是 `tests/test_remote_commands.py::test_上传无聚焦设备报错`——**红的是测试自己依赖环境**：它只清了 `cast_state.device_id`，没桩 `_remote_upload` 会退回去读的遥控器 `focus`，而本机局域网有设备在（SSDP 真发现了 TCL / AMD-YES），`focus` 非空 → DID NOT RAISE。已把该用例改成显式桩空 sessions（不是放宽判据，是让它真的只测那一条分支），改后全量 **695 passed / 0 failed（3 subtests）· exit 0**，复跑一次仍是 695/0。
+- **验收**：`node tools/verify-update-ui.mjs` 32 项判据全绿（27 条断言 + 5 张截图落点）（真实 Chromium 驱动弹窗，含「弹窗内不得出现 gitee/原作者/商店地址」）；`node tools/verify-locale-keys.mjs` ALL PASS；`python3 tools/audit-releases.py` exit 0；`bash tools/rust-check.sh` 通过；`npm run build`（vue-tsc + vite）通过。
+- **文档**：AGENTS.md（新增「应用内更新的三条硬边界」+ 全套计数）、`docs/构建与发布.md`（§4.5 重写 + 新增「发布面对账」+ §7.4 划清 gitee 只是代码镜像）、`docs/HanCast-Frontend-API.md`、`docs/HanCast-Frontend-Spec.md`、`README.md` / `README_en.md`、`tools/README.md`、`docs/README.md`、CHANGELOG 新节。
+- **口径变化**：Rust 88→**95**、Sidecar 81→**86**、导出 87→**94**、组件 24→**23**、locale 456→**492**、顶层脚本 60→**63**、`test_*.py` 41→**42**、事件 10-9-10。
+- **剩余**：① 装好的产物上真装一次（Windows 静默装 / macOS dmg 替换+回滚 / Linux AppImage 改起、`pacman -U` 那条在 CachyOS 复验）；② release 正文目前只有 compare 链接，想把 CHANGELOG 小节自动填进 CI 的 release body；③ **本轮改动救不了正在被 gitee 误导的老客户端**，只能靠他们手动装一次新版。
+
+
+## 2026-11-05 未发布轮：手机镜像接收（Android → 本机，v2.4.12）
+
+用户请求 user said: "能添加手机及电脑屏幕镜像投屏的功能么"。经 ask_user_question 选定：方向＝手机/电脑屏 → 本机当接收端，平台＝Android。**⚠️ 真机未验（当前无 Android 设备）**。
+
+- **方案**：v1 = 调用**外部 scrcpy 独立窗口**（画面/触摸/声音/旋转现成；不自研传输协议）。曾评估 scrcpy `--record=<FIFO>` → 自带 mpv（`app/src/recorder.c` 的 `file:` 前缀只能写文件/FIFO、不能直接 stdout；`Streamer.java` 每包 12 字节头自研可解析但无真机可验、风险高），结论是 v1 不做。iOS 走 AirPlay，本机也不做 Miracast sink，都不在本轮范围。
+- **后端**：新增 `hancast-backend/hancast_sidecar/mirror/`（`__init__.py` 27 + `tools.py` 271 + `manager.py` 405）。`tools.py`：adb/scrcpy 定位（手填错不回退、`--version` 真跑才 found、30s 缓存）、版本解析、`SCRCPY_AUDIO_MIN_VERSION=(2,0,0)`、`install_commands`、`parse_adb_devices`。`manager.py`：`build_scrcpy_args`（夹 max_size≤4096 / max_fps≤240，老 scrcpy 不加 `--no-audio`）、`MirrorManager` 的 status/set_tool_path/devices/connect/start/stop/cleanup，Popen（POSIX `start_new_session=True`）、stderr 读线程、1s 启动宽限、`_watch` 退出发 `mirror_state_changed`、非主动非 0 退出写 `last_error`。
+- **命令/事件**：Sidecar 注册 6 条 `mirror_*`（`commands.py:251-256`，注册 75→81）+ Rust 6 条同名（`lib.rs:1035-1095`，82→88）+ 事件 `mirror_state_changed`。
+- **前端**：`src/types/mirror.ts`、`src/stores/mirror.ts`（309 行，`PREFS_KEY='hancast.mirror.settings'`）、`src/components/MirrorPanel.vue`（约 460 行，`mp-*`）、`HomeView.vue` 首页「手机镜像」按钮、`commands.ts` 6 封装（导出 81→87）+ 浏览器 mock、locale 各 403→456。
+- **测试**：`hancast-backend/tests/test_mirror.py` 25 例全绿（`FakeProcess` 必须用 `threading.Event` 让 wait 阻塞）。修 `manager.py:211` 真 bug：`{"ok":False,"error":…, **self._state_locked()}` 里 state 的 `error` 键覆盖了失败原因 → 改成 `{**self._state_locked(), "ok":False, "error":…}`。
+- **验证**：`hancast-backend/.venv/bin/python -m pytest tests/test_mirror.py` 25 passed；全量 pytest **647 passed**（318s，退出码 0）；`npx vue-tsc --noEmit` 0 错（曾修 TS2783 mock `ok` 重复 → `{ ...mockMirrorStatus(), ok: true }`，commands.ts:855/:859）；`bash tools/rust-check.sh` 通过。
+- **文档**：新建 `docs/手机镜像.md`（148 行）；改 AGENTS.md / README.md / README_en.md / docs/README.md / docs/架构总览.md / docs/HanCast-Frontend-API.md（§0 摘要表、§3.1 事件表加行、§7 #83-88）/ docs/HanCast-Frontend-Spec.md（组件 24、store 12、locale 456、§7.3 语言键数更正）/ CHANGELOG.md（`playlist.ts` 那条补「v2.4.12 起共 12 个 store」保留历史证据）。校对戳一律改 2026-11-05。硬数字：Rust 88 / Sidecar 81 / 导出 87 / 组件 24 / store 12 / locale 456 / test_*.py 41 / 事件 8-7-9。
+- **闸门**：`audit-doc-refs.py` 4180 处可疑 0；`check-doc-freshness.py` FAIL 0 / WARN 0（踩坑：`resolve("manager.py")` 会命中 `screencast/manager.py` 而非 mirror 的，必须写全路径 `hancast-backend/hancast_sidecar/mirror/manager.py`；`MirrorManager` 定义在 `manager.py:97`）。
+- **坑**：mock 里形似真机序列号的连续字面量会被网关替换成 `{{SERIAL_*}}` 占位符，必须用 `'mock' + '-phone-online'` 拼接。`uv run pytest` 在本沙箱 cache 目录不可写，改用 `.venv/bin/python -m pytest`。
+- **口径变化**：Sidecar 注册 75→81、Rust 82→88、导出 81→87、components 23→24、store 11→12、locale 403→456、`test_*.py` 40→41。
+- **剩余（待真机）**：真机 E2E 全流程（见专文 §9 验收清单）。
 
 ## 2026-11-03 发布轮：v2.4.11（前端错误落日志 + 区块错误边界 + 遥控页全量设备/手动刷新）
 
@@ -6,10 +44,10 @@
 
 - **问题①：首页媒体输入区自己消失，且事后查无可查**。逐层排除后确认代码路径不可能渲染成空：`HomeView.vue` 无条件渲染 `<MediaInput />`；`MediaInput.vue` 的 `v-if="state !== 'ready'"` / `v-else`（预览卡）覆盖了全部取值；CSS 里只有 `<input type="file" style="display:none">` 一处隐藏，没有能把整块压成高度 0 的规则（用截图逐行亮度扫描确认那块是真的没渲染，不是颜色太暗）。**唯一剩的解释是渲染期抛异常被 Vue 整块卸掉**，而这一类异常在 v2.4.10 之前哪都不落盘（`app.config.errorHandler` 没注册，`hancast.log` 是 Python 侧的）。
 - **根因仍未定位**：打包版 WKWebView 不便挂调试器（`safaridriver` 需用户手开 Safari「允许远程自动化」，`/status` ready 但 `POST /session` 500）；`npm run tauri dev` 试过，被四道构建门挡死（`externalBin` 缺 `hancast-sidecar-aarch64-apple-darwin`、以及后续三步）。**本轮做的是可观测性：让它下次能查、能看见、能重试**，不猜根因。
-- **修法（可观测）**：① Sidecar 新增 `frontend_log` 命令（`_frontend_log`，`commands.py:1716`），前端错误写进**同一份** `hancast.log`，行首 `[webview/<source>]`，message 截 2000 字、stack 截 4000 字；② `src/api/commands.ts` 新增 `frontendLog()`（`:1523`，整段 try/catch 吞异常——它本身在错误处理里被调用）；③ `src/main.ts` 注册 `app.config.errorHandler`（`:50`）+ `unhandledrejection`/`error`，为此把 `createApp`/`use()` 提到前面（否则 vue-tsc 报 TS2448/TS2454）；④ 新增 `src/components/SectionBoundary.vue`（89 行）用 `onErrorCaptured` 把出错区块原地换成「这块内容没能加载出来 + 具体错误 + 重试」，`return false` 是刻意的（上面还有 errorHandler，重复记一遍没意义、继续上抛会整页白）；⑤ `HomeView.vue` 用它包住媒体输入区，重试 `mediaKey += 1` 重挂载。
+- **修法（可观测）**：① Sidecar 新增 `frontend_log` 命令（`_frontend_log`，`commands.py:1756`），前端错误写进**同一份** `hancast.log`，行首 `[webview/<source>]`，message 截 2000 字、stack 截 4000 字；② `src/api/commands.ts` 新增 `frontendLog()`（`:1523`，整段 try/catch 吞异常——它本身在错误处理里被调用）；③ `src/main.ts` 注册 `app.config.errorHandler`（`:50`）+ `unhandledrejection`/`error`，为此把 `createApp`/`use()` 提到前面（否则 vue-tsc 报 TS2448/TS2454）；④ 新增 `src/components/SectionBoundary.vue`（89 行）用 `onErrorCaptured` 把出错区块原地换成「这块内容没能加载出来 + 具体错误 + 重试」，`return false` 是刻意的（上面还有 errorHandler，重复记一遍没意义、继续上抛会整页白）；⑤ `HomeView.vue` 用它包住媒体输入区，重试 `mediaKey += 1` 重挂载。
 - **问题②：遥控页设备列表只列「有活动会话」的**。`renderDevSel()` 吃 `state.sessions`。修法：`_remote_sessions_state()` 返回新增 `devices`（SSDP 全量设备表，跳过隐藏设备，逐台带 `online`/`session_status`；会话还在但 SSDP 已消失的标离线补进来）。
 - **问题③：页面自动轮询** → 改手动：页面新增 `refresh()`（`remote/server.py:443`）走 `refresh_devices` → `ssdp.scan()`，等 1.8 秒再拉一次 state，**去掉 state 的 setInterval 轮询**。
-- **全量测试抓到的自查回归（重要）**：`test_remote_commands.py` 两条用例单独跑绿、连跑红——`handler` fixture 会起真 SSDP 并发现局域网里真电视，于是 `state["devices"]` 非空、`state["focus"]` 退到「第一台真电视」，把测试里写死的 `cast_state.device_id = "d1"` 盖掉。三处取控制目标统一改成 `cast_state.device_id or state["focus"]`（`commands.py:1001/1046/1073`）——**权威聚焦点是 `cast_state.device_id`，`state["focus"]` 只是页面显示兜底**，反过来用会盖掉正在控制的那台。改后 26 passed、全量 **622 passed**。教训：涉 SSDP 的用例不能只单独跑，设备表内容取决于本机网络。
+- **全量测试抓到的自查回归（重要）**：`test_remote_commands.py` 两条用例单独跑绿、连跑红——`handler` fixture 会起真 SSDP 并发现局域网里真电视，于是 `state["devices"]` 非空、`state["focus"]` 退到「第一台真电视」，把测试里写死的 `cast_state.device_id = "d1"` 盖掉。三处取控制目标统一改成 `cast_state.device_id or state["focus"]`（`commands.py:1015/1046/1073`）——**权威聚焦点是 `cast_state.device_id`，`state["focus"]` 只是页面显示兜底**，反过来用会盖掉正在控制的那台。改后 26 passed、全量 **622 passed**。教训：涉 SSDP 的用例不能只单独跑，设备表内容取决于本机网络。
 - **新增测试**：`hancast-backend/tests/test_remote_device_list_refresh.py`（10 条，`git stash` 后 9 failed / 1 passed 负向验证）、`tools/verify-section-boundary.cjs`（5 条，把 `return false`→`true` 或换裸 `<MediaInput />` → 4/5 变红）。`tools/verify-app-lifecycle.cjs` 叶子白名单补 `SectionBoundary`。
 - **文档**：`docs/故障排查.md` 新增 **§5.9**「界面上有一块自己消失了」+ §5.8 补「设备下拉列的是谁」「改手动刷新」+ §2 索引两行；`docs/HanCast-Frontend-Spec.md` 组件 22→23 并重校 8 处 `HomeView.vue:NN`；`docs/开发指南.md` 测试地图 42→43 文件 10235→10401 行；`docs/HanCast-Frontend-API.md` 日志组 3→4 条并补 `frontend_log` 行；`docs/架构总览.md` 行数表（`commands.py` 1668→1734、`remote/server.py` 718→746）；`tools/README.md` 59→60。
 - **闸门**：audit 4098 处可疑 0；freshness 数字 11 处一致 FAIL 0/WARN 0（自动重锚 44 处 `commands.py`/`commands.ts`/`HomeView.vue`/locale 漂移 + 手工 4 处 `frontendLog` 行号）。**坑**：`commands.py` 里三处 `did = …` 从 4 行注释改成 5 行 → 之后所有行号 +1，第二次重锚才收敛；批量改校对戳会把正文「本轮（v2.4.10）」留在原地，必须逐份重写头部说明（本次命中 3 份）。
@@ -25,7 +63,7 @@
 - **修法（令牌）**：`RemoteControlServer.__init__` 加第 4 个参数 `token`，由 `CommandHandler` 从配置键 `remote_control_token` 读出来注入；新增 `_remember_remote_token()`（幂等，只在变化时 `config.save()`），首启生成后回写，之后所有启动复用。`stop_remote_control` **不删**落盘 token。
 - **新增测试**：`hancast-backend/tests/test_remote_token_persistence.py`（8 条，含「构造即可落盘」「重启复用同一令牌」「令牌未变不重复写盘」「真起服务后地址里的令牌仍是注入的那个」），并做 `git stash` 负向验证（8 failed → 恢复后 8 passed）。`tools/verify-remote-entry.cjs`（3 条，仿 compiler-sfc + createRenderer + node:vm，负向验证「删掉首页按钮 → 用例 1 变红」）。三个坑写进注释：`vue.createApp` 走 runtime-dom 会 `ReferenceError: window is not defined` 必须用 `renderer.createApp`；Proxy 作 imports 必须加 `has() { return true }` 否则 `name in imports` 短路成 `Unexpected import`；断言输出要打 `error.stack`。
 - **文档**：`docs/故障排查.md` 新增 **§5.8**「手机遥控器页：地址在哪、手机怎么连、连不上怎么办」（地址在界面哪、手机侧三件事、token 稳定性、连不上判据表 6 行），§5.7 按新行为重写并删掉「每次启动新 token」的谎话，§2 症状索引加两行；`docs/HanCast-Frontend-Spec.md` 组件清单 21→22；`docs/HanCast-Frontend-API.md` §7 三条遥控命令补 token 语义；`docs/架构总览.md` 行数表（`commands.py` 1668、`remote/server.py` 718，顺带校准 `security/guard.py` 701→714）；`docs/开发指南.md` 测试地图 41 文件 10127 行 → 42 文件 10235 行；`tools/README.md` 58→59 并登记新脚本。
-- **验证**：`npx vue-tsc --noEmit` 0 错、`npm run build` 通过（主包 374.08 kB）；verify-remote-entry **3/3**、verify-cast-ui **30/30**、verify-device-list-empty **4/4**、verify-app-lifecycle **2/2**；两道闸门 audit 4042 可疑 0、freshness 数字 11 处一致 FAIL 0/WARN 0（自动重锚 20 处 `commands.py`/locale 漂移 + 2 处手工：`HomeView.vue:53-57`→`:73-77`、API.md 把 `start_remote_control` 改成 TS 侧真名 `startRemoteControl`）。
+- **验证**：`npx vue-tsc --noEmit` 0 错、`npm run build` 通过（主包 374.08 kB）；verify-remote-entry **3/3**、verify-cast-ui **30/30**、verify-device-list-empty **4/4**、verify-app-lifecycle **2/2**；两道闸门 audit 4042 可疑 0、freshness 数字 11 处一致 FAIL 0/WARN 0（自动重锚 20 处 `commands.py`/locale 漂移 + 2 处手工：`HomeView.vue:72-76`→`:73-77`、API.md 把 `start_remote_control` 改成 TS 侧真名 `startRemoteControl`）。
 - **口径变化**：components 22、tools 顶层脚本 59、`test_*.py` 39、locale 各 400 键。
 - **发版**：commit `f91cdfd` → tag `v2.4.10` → CI **41621247311** 三平台全绿；dmg 85,661,674 字节 sha256 `c1269129284de9e30213214612e87c958b1d945f483f016fc695ee01f783efe8`；`install-macos-artifact.sh 2.4.10 <dmg>` + `accept-macos-artifact.sh 2.4.10` → ALL PASS；发布记录 commit `201ddd7`；`gh release edit --draft=false` → publishedAt 2026-11-03T11:09:43Z。后端全量 **612 passed / 0 failed**（290s）。
 - **真机复核（核心承诺）**：装好的 2.4.10 首启后配置里出现 `remote_control_token`，`curl http://127.0.0.1:8899/r/<token>/` → 200；quit 后重开读回**同一个 token**，同一地址仍 200。这是脚本测不到的那条线（进程重启）。
@@ -60,11 +98,11 @@
 
 在 v2.4.6 之上补「添加本机」能力：HanCast 自己也是 DLNA 渲染端，但设备列表只认 SSDP 发现的机器，本机被当「另一台设备」还常被隐藏。本版让用户一键把本机加进设备列表。
 
-- **Sidecar**：新增 `add_local_device`（`commands.py:437 _add_local_device`）——地址=本机 LAN IP + 自己的 DLNA 端口（`_get_local_ip` + `dlna_server.get_port()`），顺手 `guard.trust_device` 进信任列表，不写 `manual_devices`（本机 IP 每次启动重算，存下来会变死记录）。
+- **Sidecar**：新增 `add_local_device`（`commands.py:451 _add_local_device`）——地址=本机 LAN IP + 自己的 DLNA 端口（`_get_local_ip` + `dlna_server.get_port()`），顺手 `guard.trust_device` 进信任列表，不写 `manual_devices`（本机 IP 每次启动重算，存下来会变死记录）。
 - **Guard**：新增 `trust_device(ip, device_info, friendly_name)`（`security/guard.py`，直接 `_add_trusted`，friendly_name 可覆盖）。
 - **Rust**：`#[tauri::command] add_local_device`（`lib.rs:260`）+ generate_handler 登记。
 - **前端**：`AddDeviceModal.vue` 加「添加本机（自己投自己）」按钮（`addSelf`，成功 900ms 关弹窗）；`commands.ts` 导出 `addLocalDevice` + mock；`device.ts` `addLocalDevice()` 去重并入列表；locale 各 +2 键（`devices.addSelf`/`devices.addSelfHint`）。
-- **数字**：`#[tauri::command]` 79→**80**（lib.rs:1603-1687）、Sidecar 72→**73**（commands.py:143-252）、commands.ts 导出 78→**79**、locale 395→**397**；commands.py 1519 行、lib.rs 1687、commands.ts 1643、guard.py 714、device.ts 248、AddDeviceModal.vue 273。
+- **数字**：`#[tauri::command]` 79→**80**（lib.rs:1668-1752）、Sidecar 72→**73**（commands.py:144-264）、commands.ts 导出 78→**79**、locale 395→**397**；commands.py 1519 行、lib.rs 1687、commands.ts 1643、guard.py 714、device.ts 248、AddDeviceModal.vue 273。
 - **验证**：后端全量 **590 passed**；`npx vue-tsc --noEmit` exit 0；`npm run build` 通过（主包 369.21 kB）。两道文档闸门绿：audit 3942 处可疑 0；freshness FAIL 0/WARN 0、数字 13 处一致。
 - **文档坑（本轮返工教训）**：两遍 difflib remap 用「起点取新、终点取旧」混出 **85 处反向行号范围**（a>b），audit 报「行号越界」，用 `path` basename 全局 rglob 解析唯一路径后批量 swap 修好；freshness 的 `实现 A path:N、B path:M` 并列写法会把行号 N 的 right 窗口抓到 B → 假 FAIL，改用「`A` 见 path:N，`B` 见 path:M」隔断。
 - **发布**：提交 `7ace465`、tag `v2.4.7` 已推；CI run 41585153134 三平台全绿；dmg sha256 逐字节一致（`2c8cbb7f…08b2`）、`hdiutil verify` VALID；`install-macos-artifact.sh 2.4.7` 装好、`accept-macos-artifact.sh 2.4.7` **89 PASS / 0 FAIL / ALL PASS**；在装好的产物上喂 `add_local_device` 真返回本机设备、`get_devices` 查得到（端到端通）。Release 已 publish。
@@ -86,7 +124,7 @@
 - **播完即停 / 睡眠定时**：`cast.ts` 收到 `stopped` 且到结尾时若 `stopAfterCurrent` 就停队列；`CastController.vue` 开关 + 睡眠下拉（15/30/60/90/取消），deadline 持久化，秒级 tick 用 `setInterval` 并随卸载清理。
 - **手机遥控器页**：新增 `remote/server.py`（343 行），每会话一次性 token `/r/<token>/`，页面 + `api/state` + `api/cmd`，token 不符 404；命令 `start_remote_control`/`stop_remote_control`/`remote_status`。
 - **外挂字幕内封**：新增 `media/subtitles.py`（173 行），`-c copy` 不重编码、mp4→`mov_text`、其它→`srt`，产物按内容哈希缓存 `subtitle_cache/`；命令 `subtitle_apply`/`subtitle_status`；`CastController.vue`「💬 字幕」按钮，完成后重投同设备并从原进度继续。
-- **数字**：`#[tauri::command]` 74→**79**（lib.rs:1603-1675）、Sidecar 67→**72**（`commands.py:143-251`）、`commands.ts` 导出 73→**78**、locale 375→**395**；`commands.py` 1492 行、`lib.rs` 1678、`commands.ts` 1635、tests 39 文件 9813 行。
+- **数字**：`#[tauri::command]` 74→**79**（lib.rs:1668-1740）、Sidecar 67→**72**（`commands.py:144-263`）、`commands.ts` 导出 73→**78**、locale 375→**395**；`commands.py` 1492 行、`lib.rs` 1678、`commands.ts` 1635、tests 39 文件 9813 行。
 - **验证**：后端全量 **586 passed**（新增 `test_remote_control.py` 68、`test_subtitles.py` 76）；`npm run build` 通过；`tools/verify-cast-ui.cjs` **30/30**（队列桩补齐新 API + 修 `window.setInterval` 桩环境崩溃）；两道文档闸门绿（audit 3920 处可疑 0；freshness FAIL 0/WARN 0、数字 13 处一致）。
 - **文档**：CHANGELOG v2.4.6 节；故障排查新增 §5.7 + §11 三行 + §2 索引；架构总览行数表加 subtitles.py/remote/server.py；Frontend-API §0/§7（79 行）/§2 新增 5 条命令；Frontend-Spec §8.3 locale 395；全仓校对戳 2026-10-31/v2.4.6。
 - **发布**：提交 `46d2ee0`（43 files）→ tag `v2.4.6` → 推 main；CI run 41163007137 全绿。dmg `HanCast_2.4.6_aarch64.dmg` 85,600,687 字节、sha256 `a1fe8f71…55b8` 与 GitHub 一致、`hdiutil verify` VALID；`install-macos-artifact.sh 2.4.6` 装好；`accept-macos-artifact.sh 2.4.6` **89 PASS / 0 FAIL / 0 SKIP**。产物上实测：`start_remote_control` 起 `http://<ip>:8899/r/<token>/`，页面 200、`api/state` 200、`stop_remote_control` success；`subtitle_status` idle；`cast_failure_list` 正常。
@@ -98,8 +136,8 @@
 
 - **出站 INFO**：`protocol/dlna.py` `_send_action` 成功分支打 `SOAP OUT ← <status> | <action> | <device> | <ms>ms`（`dlna.py:1256-1258`），请求侧仍 DEBUG（`:1184`）。
 - **投屏失败台账**：新增 `media/cast_failures.py`（132 行，阶段 connect/set_uri/play/stop/media_ready/cast；只写本机 `cast_failures.json`，上限 100 条/保留 14 天）；Sidecar `cast_failure_list`/`cast_failure_clear`；`LogsPanel.vue` 内「投屏失败台账」区（locale `logs.castFailures*`）。
-- **预检 + 自动重解**：Sidecar `probe_url`（commands.py:853）；`MediaInput.vue:601` 历史条目重投前探直链；url 条目重投自动回来源页重解（`media.historyDead`/`media.historyDeadHint`）。
-- **数字**：命令 71→74（lib.rs:1547-1615）、Sidecar 64→67（`commands.py:131-228`）、`commands.ts` 导出 70→73、locale 369→375；`commands.py` 1320 行、`dlna.py` 1310 行、`lib.rs` 1617、`commands.ts` 1591。
+- **预检 + 自动重解**：Sidecar `probe_url`（commands.py:867）；`MediaInput.vue:601` 历史条目重投前探直链；url 条目重投自动回来源页重解（`media.historyDead`/`media.historyDeadHint`）。
+- **数字**：命令 71→74（lib.rs:1612-1680）、Sidecar 64→67（`commands.py:132-232`）、`commands.ts` 导出 70→73、locale 369→375；`commands.py` 1320 行、`dlna.py` 1310 行、`lib.rs` 1617、`commands.ts` 1591。
 - **验证**：后端全量 `pytest` **577 passed**（新增 `test_cast_failures.py` 214 行）；`npm run build` 通过；`tools/verify-cast-ui.cjs` 30/30；两道文档闸门绿。
 - **文档**：CHANGELOG v2.4.5 节；故障排查 §5.6（出站可观测/台账/判据）+ §11 两行 + §2 索引；架构总览行数表加 `media/cast_failures.py`；Frontend-API §0/§7（74 行）/§2 新增命令；Frontend-Spec §8.3 locale 375；全仓 `文件:行号` 按 diff 重映射（脚本 `/tmp/remap_v245.py` + `/tmp/remap_v245b.py`），全仓校对戳 2026-10-31/v2.4.5。
 - **发布**：提交 `c783437`（39 files, +1212/−363）→ tag `v2.4.5` → 推 main；CI run 41159185441 全绿（macos 10m54s / linux 17m36s / windows 13m48s）。dmg sha256 `fc123f3a…07030` 已校验、`hdiutil verify` VALID；`install-macos-artifact.sh 2.4.5` 装好；`accept-macos-artifact.sh 2.4.5` **88 PASS / 1 FAIL / 0 SKIP**（唯一 FAIL = SSDP 心跳采样窗口落在网卡组播暂不可用的广播兜底期，20s 后自行恢复 multicast，非回归）。新命令在产物上实测 probe_url / cast_failure_list / cast_failure_clear 均正常。docs 跟进提交 `e16c51b`（装端记录 + README_en 计数）。
@@ -120,7 +158,7 @@
 
 **验证**：后端全量 `pytest` **563 passed**；`npm run build`（vue-tsc+vite）通过；`verify-cast-ui.cjs` 30/30；`verify-playlist-advance.cjs` 10/10；`verify-tv-url-suffix.py` ALL PASS；`build-rule-packs.py --check` 4 包同步；两道文档闸门 FAIL 0/可疑 0。
 
-**文档**：全仓行号按 diff equal 段重映射；locale 引用 `zh-CN.json:346→357`；模块行数表校准（commands 1257、ssdp 1343、mpv 662、media/server 706，并顺带修 parser 163→214、jsruntime 761→845）；Frontend-API §0 统计表 71/61/70/64、§2.1 补 3 条命令、§6.10 重写、§7 快速表 67→71 行；Frontend-Spec §4 组件 20→21、device.ts 179→228、locale 358→369；19 份校对戳 → 2026-10-30/v2.4.4；CHANGELOG 新增 v2.4.4 节。
+**文档**：全仓行号按 diff equal 段重映射；locale 引用 `zh-CN.json:348→357`；模块行数表校准（commands 1257、ssdp 1343、mpv 662、media/server 706，并顺带修 parser 163→214、jsruntime 761→845）；Frontend-API §0 统计表 71/61/70/64、§2.1 补 3 条命令、§6.10 重写、§7 快速表 67→71 行；Frontend-Spec §4 组件 20→21、device.ts 179→228、locale 358→369；19 份校对戳 → 2026-10-30/v2.4.4；CHANGELOG 新增 v2.4.4 节。
 
 **装端**：CI run 41052359324 macos 首轮 `hdiutil create failed - Resource busy`（runner 抖动），rerun --failed 后全绿；dmg sha256 3d178a1f… 与 GitHub 一致、hdiutil verify VALID；install 2.4.4 成功（adhoc, com.han.hancast），accept 88 PASS/0 FAIL/1 SKIP（SKIP 为 FFmpeg 下载源需代理）；产物内 4 份 sidecar 源 sha256 与仓库一致；实装探针三条新命令 success。
 
@@ -143,7 +181,7 @@ v2.3.24 → **2.4.0**（minor，用户选）。合并两笔未发布改动：投
 
 用户反馈："能否对投屏本地文件时候再丰富下场景…可以投屏整个文件夹，而且可以调整文件夹中文件的列队顺序"。四项全选（文件夹队列+排序+上下一集 / 顺序记忆 / 勾选子集 / 随机+单曲循环）。
 
-实现：后端 `list_folder_media`（`media/parser.py:27` `MediaParser.list_folder`，自然序、只列当前层、跳过隐藏/`._`/非媒体、不探时长）；壳层 `lib.rs:247`；Sidecar commands.py:689。前端新增 `src/stores/playlist.ts`（Pinia 第 10 个）、`MediaInput.vue` 的📁入口 + 队列面板（拖拽/↑↓排序/勾选/全选/播放模式切换）、`CastController.vue` 上/下一集按钮、`cast.ts` 的 `advancePlaylistIfActive`/`skipToNext`/`skipToPrev`/`castQueueItem`（`queueAdvancing` Set + 1.5s 窗口吞 STOPPED 抖动防重复起播）。i18n 加一组 `media.*`（两语言各 346 键），清掉脚手架期未引用 key。
+实现：后端 `list_folder_media`（`media/parser.py:27` `MediaParser.list_folder`，自然序、只列当前层、跳过隐藏/`._`/非媒体、不探时长）；壳层 `lib.rs:247`；Sidecar commands.py:703。前端新增 `src/stores/playlist.ts`（Pinia 第 10 个）、`MediaInput.vue` 的📁入口 + 队列面板（拖拽/↑↓排序/勾选/全选/播放模式切换）、`CastController.vue` 上/下一集按钮、`cast.ts` 的 `advancePlaylistIfActive`/`skipToNext`/`skipToPrev`/`castQueueItem`（`queueAdvancing` Set + 1.5s 窗口吞 STOPPED 抖动防重复起播）。i18n 加一组 `media.*`（两语言各 346 键），清掉脚手架期未引用 key。
 
 测试：新增 `tests/test_folder_playlist.py` 6 项；后端全量 **549 passed**；vue-tsc / vite build 通过；`tools/verify-cast-ui.cjs` 补 `@/stores/playlist` 空队列桩后 **23/23**。命令数 67→68（壳层）/ 62→63（Sidecar）。
 
@@ -268,7 +306,7 @@ ffmpeg_manager 1156→1243、ffmpeg_deps 524→541、开发指南 test_jsplugins
 同一工作区（未提交、未 bump、未打 tag）。四项全部落地并有离线并发用例：
 
 1. 规则包三条慢操作任务化（`media/rules/tasks.py` 新增；`commands.py` 注册
-   `plugin_task_start/result/cancel`，Sidecar 注册表 59 → **62**，`commands.py:131-223`）；
+   `plugin_task_start/result/cancel`，Sidecar 注册表 59 → **62**，`commands.py:132-227`）；
    壳层 `run_plugin_task` 轮询（lib.rs:332-390），前端封装与 Tauri 命令名不变。
    安装改为「暂存目录 → rename」，失败退回旧包；取消与提交互斥。
 2. 轮询每代独立取消令牌 + `callback(session, event_type, generation)`，

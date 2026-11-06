@@ -5,12 +5,14 @@ import DeviceList from '@/components/DeviceList.vue'
 import CastController from '@/components/CastController.vue'
 import ScreenCastPanel from '@/components/ScreenCastPanel.vue'
 import RemoteControlPanel from '@/components/RemoteControlPanel.vue'
+import MirrorPanel from '@/components/MirrorPanel.vue'
 import StopWarningBanner from '@/components/StopWarningBanner.vue'
 import SectionBoundary from '@/components/SectionBoundary.vue'
 import Footer from '@/components/Footer.vue'
 import AutostartPromptModal from '@/components/AutostartPromptModal.vue'
 import { useCastStore } from '@/stores/cast'
 import { useScreenCastStore } from '@/stores/screencast'
+import { useMirrorStore } from '@/stores/mirror'
 import { useI18n } from 'vue-i18n'
 import { ref } from 'vue'
 import { storeToRefs } from 'pinia'
@@ -18,8 +20,10 @@ import { storeToRefs } from 'pinia'
 const { t } = useI18n()
 const castStore = useCastStore()
 const screenCastStore = useScreenCastStore()
+const mirrorStore = useMirrorStore()
 const { showAutostartPrompt } = storeToRefs(castStore)
 const { isRunning: screenCastRunning } = storeToRefs(screenCastStore)
+const { isRunning: mirrorRunning } = storeToRefs(mirrorStore)
 
 // 手机遥控入口常驻首页：这个地址不该只在「正在投屏」的控制器里才看得到
 const remoteOpen = ref(false)
@@ -49,6 +53,21 @@ const mediaKey = ref(0)
               <path d="M8 21h8M12 17v4" />
             </svg>
             <span>{{ screenCastRunning ? t('screencast.entryRunning') : t('home.screenCast') }}</span>
+          </button>
+          <button
+            class="home__screencast-btn"
+            :class="{ 'home__screencast-btn--live': mirrorRunning }"
+            type="button"
+            :title="t('mirror.subtitle')"
+            @click="mirrorStore.openPanel()"
+          >
+            <span v-if="mirrorRunning" class="home__screencast-dot"></span>
+            <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="6" y="2" width="12" height="20" rx="2" />
+              <path d="M10 5h4" />
+              <path d="M3.5 9.5a9 9 0 0 1 0 5M6 11a6 6 0 0 1 0 2" />
+            </svg>
+            <span>{{ mirrorRunning ? t('home.mirrorRunning') : t('home.mirror') }}</span>
           </button>
           <button
             class="home__screencast-btn"
@@ -93,6 +112,8 @@ const mediaKey = ref(0)
     <CastController />
     <!-- 屏幕投屏面板 -->
     <ScreenCastPanel />
+    <!-- 手机镜像（Android → 本机） -->
+    <MirrorPanel />
     <!-- 手机遥控器地址（常驻入口，不依赖是否正在投屏） -->
     <RemoteControlPanel :visible="remoteOpen" @close="remoteOpen = false" />
     <!-- Autostart prompt (first successful cast) -->

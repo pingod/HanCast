@@ -1,0 +1,54 @@
+# 发布面对账（tag / Release / CHANGELOG 三方一致性）
+#
+# 为什么要有这条：2026-11-06 数过一次现状 —— 63 个 tag、42 个 Release，其中 **22 个是从未
+# publish 的 draft**，21 个 tag 一个 Release 都没有。draft 不公开而 `releases/latest` 又
+# 看不见 draft，于是「已经发了版，程序却说已是最新」；而 release 与 tag 的对应关系缺哪一段，
+# 后来人只能翻 CI 日志才知道是当时构建失败还是忘了发。
+#
+# 判据脚本是 `tools/audit-releases.py`（只读），本工作流只是每周把它跑一遍并把 FAIL 摊开。
+# 它同时钉住另一件事：GitHub 的 `releases/latest` 把 "latest" 给的是**最近一次 publish**
+# 的 release，不是版本号最大的那条 —— 为旧版补一条说明 release 就会把指针拽回去。
+
+name: Release consistency audit
+
+on:
+  schedule:
+    # 周一 03:10 UTC。发版通常在周末白天之后，这条正好在新版本落定前跑一次
+    - cron: "10 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      stale_drafts:
+        description: "额外打印「该删的 draft」的 gh 命令清单（只打印，不执行）"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Audit tags / releases / CHANGELOG
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 匿名访问 api.github.com 只有 60 次/小时，而一次对账要翻 tag + release + latest。
+      # 用本工作流自带的只读 token，顺带也让私密信息（无）保持私密。
+      - name: Run tools/audit-releases.py
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 默认 shell 是 `bash -e {0}`：直接写 `python3 …; rc=$?` 会在非 0 那一刻就退出，
+          # rc 永远抓不到，也就永远打印不出清理清单。用 `|| rc=$?` 把失败接住。
+          rc=0
+          python3 tools/audit-releases.py || rc=$?
+          if [ "${{ inputs.stale_drafts }}" = "true" ]; then
+            echo
+            echo "=== 清理清单（脚本只打印，删除由人点名执行）==="
+            python3 tools/audit-releases.py --cleanup-commands || true
+          fi
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::发布面对账不通过（rc=$rc）。判据与修法见 tools/audit-releases.py 的文件头。"
+          fi
+          exit $rc

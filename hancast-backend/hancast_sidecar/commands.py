@@ -34,6 +34,7 @@ from .utils import browser_channel
 from .utils import protocol_io
 from .screencast import ScreenCastManager
 from .remote import RemoteControlServer
+from .mirror import MirrorManager
 
 import requests
 
@@ -151,6 +152,9 @@ class CommandHandler:
             token=str(self.config.get('remote_control_token') or ''),
         )
 
+        # 手机镜像接收（Android → 本机）：只做 adb/scrcpy 的编排，窗口由 scrcpy 自己开
+        self.mirror = MirrorManager(self.config)
+
         # 注册命令
         self._commands: Dict[str, callable] = {
             # 设备管理
@@ -220,6 +224,12 @@ class CommandHandler:
             # 更新检查
             "check_update": self._check_update,
             "ignore_update_version": self._ignore_update_version,
+            # 应用内更新的下半程：挑产物 → 下载 → 校验 → 交给壳层装
+            "update_release_info": self._update_release_info,
+            "update_download_start": self._update_download_start,
+            "update_download_status": self._update_download_status,
+            "update_download_cancel": self._update_download_cancel,
+            "update_install_plan": self._update_install_plan,
 
             # 设备投屏确认
             "respond_cast_confirm": self._respond_cast_confirm,
@@ -242,6 +252,14 @@ class CommandHandler:
             "ffmpeg_status": self._ffmpeg_status,
             "ffmpeg_download_start": self._ffmpeg_download_start,
             "ffmpeg_download_status": self._ffmpeg_download_status,
+
+            # 手机镜像接收（Android → 本机）
+            "mirror_status": self._mirror_status,
+            "mirror_devices": self._mirror_devices,
+            "mirror_connect": self._mirror_connect,
+            "mirror_start": self._mirror_start,
+            "mirror_stop": self._mirror_stop,
+            "mirror_set_tool_path": self._mirror_set_tool_path,
 
             # 投屏失败台账 + 地址有效性预检（排错）
             "cast_failure_list": self._cast_failure_list,
@@ -348,6 +366,8 @@ class CommandHandler:
         """清理资源（退出路径，幂等）"""
         # 先关规则包任务：关闭后不再准入，迟到的提交不能把包写到退出流程之后
         self._plugin_tasks.close()
+        # 结束手机镜像会话（scrcpy 是独立进程组，不显式收尸会留窗口）
+        self.mirror.cleanup()
         # 停止屏幕投屏
         self.screencast.cleanup()
         # 停止所有投屏会话
@@ -1397,57 +1417,6 @@ class CommandHandler:
         except Exception as e:
             logger.error(f"SSDP 重启失败: {e}")
 
-    # ── 更新检查 ──
-
-    @staticmethod
-    def _parse_version(v: str) -> tuple:
-        """将版本号解析为可比较的元组，符合语义化版本（SemVer）排序
-
-        返回 `(major, minor, patch, prerelease_key)`：
-
-        * 正式版（无 `-` 后缀）的 prerelease_key 为 `(1, ())`，预发布版为
-          `(0, ids)`。首位 1 > 0，所以 "2.1.0" > "2.1.0-beta.1"。
-        * 预发布版之间按标识符逐段比较，所以 "2.1.0-rc.2" > "2.1.0-rc.1"。
-        * `+` 之后的构建元数据按规范忽略，所以 "2.1.0+build.5" == "2.1.0"。
-
-        此前实现是 `re.findall(r'\\d+', v)`，会把 "2.1.0-beta.1" 解析成
-        (2, 1, 0, 1)，比正式版 "2.1.0" 的 (2, 1, 0) 还大——于是用户装了
-        正式版 2.1.0，却被提示"有新版本 2.1.0-beta.1"，被推向 beta。
-        """
-        import re
-        core = v.strip().lstrip('vV')
-        # 忽略 + 之后的构建元数据（SemVer 规范：不参与优先级比较）
-        core = core.split('+', 1)[0]
-
-        m = re.match(r'^\s*(\d+(?:\.\d+)*)\s*(?:-([0-9A-Za-z.\-]*))?\s*$', core)
-        if not m:
-            # 兜底：抓出所有数字，按正式版处理
-            nums = tuple(int(n) for n in re.findall(r'\d+', core)) or (0,)
-            nums = (nums + (0, 0, 0))[:3]
-            return nums + (1, ())
-
-        nums = tuple(int(n) for n in m.group(1).split('.'))
-        nums = (nums + (0, 0, 0))[:3]
-
-        pre = m.group(2)
-        if not pre:
-            # 正式版：用 (1, ()) 表示，排在所有预发布版之上
-            return nums + (1, ())
-
-        # 预发布标识符逐段比较：数字按数值比，其余按字典序；
-        # 数字标识符优先级低于非数字标识符（SemVer 规则 11.4）。
-        ids = []
-        for part in pre.split('.'):
-            if part == '':
-                continue
-            if part.isdigit():
-                ids.append((0, int(part), ''))
-            else:
-                ids.append((1, 0, part))
-        # 预发布版：用 (0, ids) 表示。正式版首元素 1 > 预发布版 0，
-        # 所以 2.1.0 > 2.1.0-beta.1；同为预发布版时再比 ids。
-        return nums + (0, tuple(ids))
-
     def _browser_result(self, params: dict) -> dict:
         """浏览器通道的渲染结果回传（Rust → sidecar，唤醒正在等的那条解析线程）
 
@@ -1456,113 +1425,27 @@ class CommandHandler:
         """
         return browser_channel.deliver(params or {})
 
+    # ── 更新检查 ──
+
     def _check_update(self, params: dict) -> dict:
         """
-        检查是否有新版本。
+        检查是否有新版本（实现下沉到 `update/manager.py`，这里只做参数与配置的搬运）。
+
         params:
             current_version: str  当前版本号 (来自 tauri.conf.json)
-            sources: list[str]    检查源，可选 "github" / "gitee"，默认 ["github"]
+            sources: list[str]    **已忽略**，见下方注释；保留入参只为兼容旧壳层
             force: bool           是否忽略用户设置的"此版本不提示"
         返回:
-            { has_update, current, latest, url, body, source }
+            { has_update, current, latest, url, body, source, assets, selected, ... }
         """
         current_version = params.get("current_version", "0.0.0")
-        sources = params.get("sources", ["github"])
-        force = params.get("force", False)
-        ignored_version = self.config.ignored_update_version
-
-        # 更新源配置: (api_url, timeout)
-        source_configs = {
-            "github": (
-                "https://api.github.com/repos/pingod/HanCast/releases/latest",
-                1,   # GitHub 超时 1 秒
-            ),
-            "gitee": (
-                "https://gitee.com/api/v5/repos/buxiangqumingzi/han-cast/releases/latest",
-                3,   # Gitee 超时 3 秒
-            ),
-        }
-
-        for source in sources:
-            if source not in source_configs:
-                continue
-            api_url, timeout = source_configs[source]
-            # 镜像开关只改写 GitHub 那条源（Gitee 不是 GitHub，原样通过）
-            for via, fetch_url in ghmirror.candidates(api_url):
-                # 直连留 1 秒是给启动检查的（GitHub 不通时不该拖住界面）；
-                # 走镜像时国内往返本来就 1~2 秒，照抄 1 秒等于开关无效
-                wait = 3 if via != "直连" else timeout
-                try:
-                    result = self._fetch_github_release(fetch_url, current_version, timeout=wait)
-                    if result:
-                        # 检查是否被用户忽略（除非 force=True）
-                        if not force and ignored_version and result["latest"] == ignored_version:
-                            logger.info(f"Update {result['latest']} ignored by user")
-                            return {
-                                "has_update": False,
-                                "current": current_version,
-                                "latest": result["latest"],
-                                "url": "",
-                                "body": "",
-                                "source": source,
-                            }
-                        result["source"] = source
-                        if via != "直连":
-                            result["via"] = via
-                        return result
-                except Exception as e:
-                    logger.warning(f"Update check failed ({source}/{via}): {e}")
-                    continue
-
-        # 所有源都失败或无更新
-        return {
-            "has_update": False,
-            "current": current_version,
-            "latest": current_version,
-            "url": "",
-            "body": "",
-            "source": "",
-            "error": "无法连接更新服务器",
-        }
-
-    def _fetch_github_release(self, api_url: str, current_version: str, timeout: int = 2) -> Optional[dict]:
-        """从 GitHub/Gitee releases API 获取最新版本
-
-        走统一 HTTP 客户端而不是裸 requests：设置里配了代理的用户，裸 requests
-        只认环境变量代理，程序内代理形同不存在，表现为「能投屏但永远查不到更新」。
-        """
-        headers = {"Accept": "application/vnd.github.v3+json"}
-        from .utils import httpclient
-        session = httpclient.make_session()
-        try:
-            resp = session.get(api_url, headers=headers, timeout=timeout)
-            resp.raise_for_status()
-        finally:
-            try:
-                session.close()
-            except Exception:
-                pass
-        data = resp.json()
-
-        tag = data.get("tag_name", "")
-        latest_version = tag.lstrip("vV")
-        html_url = data.get("html_url", "")
-        body = data.get("body", "") or ""
-
-        # 比较版本
-        current_tuple = self._parse_version(current_version)
-        latest_tuple = self._parse_version(latest_version)
-
-        if latest_tuple > current_tuple:
-            return {
-                "has_update": True,
-                "current": current_version,
-                "latest": latest_version,
-                "url": html_url,
-                "body": body[:500],  # 截断过长的 changelog
-            }
-
-        return None
+        force = bool(params.get("force", False))
+        from .update import manager as app_update
+        return app_update.check_for_update(
+            current_version,
+            ignored_version=str(self.config.ignored_update_version or ""),
+            force=force,
+        )
 
     def _ignore_update_version(self, params: dict) -> bool:
         """用户选择'此版本不再提示'，记录到配置"""
@@ -1690,9 +1573,63 @@ class CommandHandler:
         from .utils import ffmpeg_deps
         return ffmpeg_deps.start_download()
 
+    def _update_release_info(self, params: dict) -> dict:
+        """某版本的产物清单（`version` 为空 = 语义最新的已发布版）
+
+        与 `check_update` 分开是有意为之：界面上「换一种安装包」（Linux 的 deb /
+        rpm / AppImage / Arch 四选一）要在**不重新判版本**的前提下拿到清单。
+        """
+        from .update import manager as app_update
+        return app_update.get_release(str(params.get("version") or ""))
+
+    def _update_download_start(self, params: dict) -> dict:
+        """起一次安装包下载（立即返回，进度靠 `update_download_status` 轮询）"""
+        from .update import manager as app_update
+        return app_update.start_download(
+            str(params.get("asset") or ""), str(params.get("version") or ""))
+
+    def _update_download_status(self, params: dict) -> dict:
+        from .update import manager as app_update
+        return app_update.download_status()
+
+    def _update_download_cancel(self, params: dict) -> dict:
+        from .update import manager as app_update
+        return app_update.cancel_download()
+
+    def _update_install_plan(self, params: dict) -> dict:
+        """已下好的产物该怎么装（`kind` 决定壳层动作，见 update/manager.install_plan）"""
+        from .update import manager as app_update
+        return app_update.install_plan()
+
     def _ffmpeg_download_status(self, params: dict) -> dict:
         from .utils import ffmpeg_deps
         return ffmpeg_deps.download_status()
+
+    # ── 手机镜像接收（Android → 本机）──
+
+    def _mirror_status(self, params: dict) -> dict:
+        """工具链 + 会话状态（refresh=true 时重新探测 adb / scrcpy）"""
+        return self.mirror.status(refresh=bool(params.get("refresh")))
+
+    def _mirror_devices(self, params: dict) -> dict:
+        """`adb devices -l` 的解析结果（USB 与无线调试设备都在里面）"""
+        return self.mirror.devices()
+
+    def _mirror_connect(self, params: dict) -> dict:
+        """adb connect <IP:端口>（已配对过的无线调试）"""
+        return self.mirror.connect(params)
+
+    def _mirror_start(self, params: dict) -> dict:
+        """启动镜像会话（scrcpy 独立窗口）"""
+        return self.mirror.start(params)
+
+    def _mirror_stop(self, params: dict) -> dict:
+        """停止镜像会话"""
+        return self.mirror.stop()
+
+    def _mirror_set_tool_path(self, params: dict) -> dict:
+        """手动指定 adb / scrcpy 路径（空值＝恢复自动检测）"""
+        return self.mirror.set_tool_path(params)
 
     # ── 日志查看（排错）──
 

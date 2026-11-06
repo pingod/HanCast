@@ -130,6 +130,18 @@ async function testHomeHasPersistentRemoteEntry() {
       openPanel() { seen.screenPanelOpened = (seen.screenPanelOpened || 0) + 1 },
     })),
   }
+  // 手机镜像那轮在 HomeView 里加了 useMirrorStore + MirrorPanel（首页那颗
+  // 「手机镜像」按钮与在跑时的小圆点）。不登记这个 store，脚本会以
+  // 「Unexpected import: @/stores/mirror」直接加载失败。
+  imports['@/stores/mirror'] = {
+    useMirrorStore: pinia.defineStore('mirror', () => ({
+      isRunning: vue.ref(false),
+      status: vue.ref(null),
+      showPanel: vue.ref(false),
+      openPanel() { seen.mirrorPanelOpened = (seen.mirrorPanelOpened || 0) + 1 },
+      closePanel() {},
+    })),
+  }
   const HomeView = loadSfc(path.join(root, 'src/views/HomeView.vue'), new Proxy(imports, {
     has() { return true },
     get(target, name) {
@@ -149,7 +161,13 @@ async function testHomeHasPersistentRemoteEntry() {
   const label = messages['zh-CN']['home.remote']
   assert.ok(label, 'locale 缺 home.remote 文案')
   const buttons = allNodes(container).filter(n => hasClass(n, 'home__screencast-btn'))
-  assert.equal(buttons.length, 2, '首页应有两个常驻按钮：屏幕投屏 + 手机遥控')
+  // 手机镜像那轮在首页加了第三颗常驻按钮，所以这里是 3 而不是 2。
+  // 判据不放宽：三颗都点名，少一颗就红。
+  assert.equal(buttons.length, 3, '首页应有三颗常驻按钮：屏幕投屏 + 手机镜像 + 手机遥控')
+  const mirrorLabel = messages['zh-CN']['home.mirror']
+  assert.ok(mirrorLabel, 'locale 缺 home.mirror 文案')
+  assert.ok(buttons.find(b => textOf(b).includes(mirrorLabel)),
+    `首页没有「${mirrorLabel}」入口（手机镜像）`)
   const remoteBtn = buttons.find(b => textOf(b).includes(label))
   assert.ok(remoteBtn, `首页没有「${label}」入口——不投屏时用户就看不到遥控器地址`)
   const stub = allNodes(container).find(n => n.props.class === 'remote-panel-stub')

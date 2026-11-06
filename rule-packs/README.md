@@ -2,7 +2,7 @@
 
 > 这个目录回答一个问题：**官方解析规则包的「源 / 产物 / 索引」三件套是怎么组织的、怎么打包发布、用户机器上怎么装到**。写规则包的 API 细节不在这里。
 >
-> 最后校对：2026-11-03，对应版本 v2.4.11（`package.json:4`。本轮只重跑闸门：引用行号与「4 个官方包 / 32 项后台参数」的实测口径都还成立）
+> 最后校对：2026-11-06，对应版本 v2.4.12（`package.json:4`。本轮只重跑闸门：引用行号与「4 个官方包 / 32 项后台参数」的实测口径都还成立）
 
 ---
 
@@ -254,20 +254,21 @@ python3 tools/build-rule-packs.py --clean    # 删掉 dist 里源目录已不存
 
 **摘要不符 = 用户装不上包**：`pull` 下载完先比索引里的 sha256，不符直接拒装（`jsplugins.py:548-553`）。所以改了包里任何字节，都必须抬 `manifest.version` 并重跑打包脚本，把新 zip 与新 `index.json` 一起提交。
 
-### 4.3 zip 怎么随 draft Release 发布
+### 4.3 zip 怎么随 Release 发布（v2.4.12：推 tag 即 publish）
 
-CI 的 `release` job（`.github/workflows/build.yml:588-646`）：
+CI 的 `release` job（`.github/workflows/build.yml:663-758`）：
 
 | 步骤 | 行号 | 做什么 |
 | --- | --- | --- |
-| 触发条件 | `:556-559` | `build` 成功 **且** `github.ref_type == 'tag'` **且**（是 push 事件 **或** `workflow_dispatch` 勾了 `make_release`） |
-| `Checkout this tag` | `:566-567` | 检出 tag 工作区 |
-| `Check rule-pack assets match the index` | `:569-571` | `python3 tools/build-rule-packs.py --check`，产物或索引与源不一致就非 0 退出，Release 不发 |
-| `Stage rule-pack zips for the release` | `:573-578` | `mkdir -p artifacts/rule-packs && cp rule-packs/dist/*.zip artifacts/rule-packs/` |
-| `Download all build artifacts` | `:580-588` | `pattern: bundle-*` + `merge-multiple: true`，只取每平台「全格式合一」的那份，避免同一安装包被上传两次 |
-| `Publish draft release` | `:595-609` | `softprops/action-gh-release@v2`，`draft: true`，`files:` 九个 glob，最后一个是 **`artifacts/rule-packs/*.zip`**（`:609`） |
+| 触发条件 | `:666-669` | `build` 成功 **且** `github.ref_type == 'tag'` **且**（是 push 事件 **或** `workflow_dispatch` 勾了 `make_release`） |
+| `Checkout this tag` | `:676-677` | 检出 tag 工作区 |
+| `Check rule-pack assets match the index` | `:679-681` | `python3 tools/build-rule-packs.py --check`，产物或索引与源不一致就非 0 退出，Release 不发 |
+| `Stage rule-pack zips for the release` | `:683-688` | `mkdir -p artifacts/rule-packs && cp rule-packs/dist/*.zip artifacts/rule-packs/` |
+| `Download all build artifacts` | `:690-698` | `pattern: bundle-*` + `merge-multiple: true`，只取每平台「全格式合一」的那份，避免同一安装包被上传两次 |
+| `Require a complete artifact set before publishing` | `:711-740` | v2.4.12 新增的产物闸门：dmg / `-setup.exe` / deb / rpm / AppImage / `pkg.tar.zst` 缺任一项就失败，**缺产物的 release 不发** |
+| `Publish release` | `:742-758` | `softprops/action-gh-release@v2`，**`draft: ${{ github.event_name != 'push' }}`（`:746`）**——推 tag 直接 publish，只有手动 dispatch 勾 `make_release` 才留 draft；`files:` 九个 glob，最后一个是 **`artifacts/rule-packs/*.zip`**（`:758`） |
 
-**为什么值得为 zip 单独加这两步**（`build.yml:604-607` 注释原文大意 + 提交 `356f6eb`「ci(release): 官方规则包 zip 随 draft Release 发布」）：规则包 zip 是被「设置页 → 检查规则包更新 → 安装」下载的，索引里的 sha256 必须和实际下载到的字节逐位一致；而 zip 是固定时间戳/固定顺序生成的，所以从 tag 工作区直接上传的字节和重跑 `build-rule-packs.py` 的字节相同——**不需要另建一条产线**。
+**为什么值得为 zip 单独加这两步**（`build.yml:672-675` 注释原文大意 + 提交 `356f6eb`「ci(release): 官方规则包 zip 随 draft Release 发布」（当时是 draft，v2.4.12 起随 publish 一起出））：规则包 zip 是被「设置页 → 检查规则包更新 → 安装」下载的，索引里的 sha256 必须和实际下载到的字节逐位一致；而 zip 是固定时间戳/固定顺序生成的，所以从 tag 工作区直接上传的字节和重跑 `build-rule-packs.py` 的字节相同——**不需要另建一条产线**。
 
 ### 4.4 索引 URL 为什么指向 `main` 分支的 raw 路径
 

@@ -1037,6 +1037,16 @@ function clearHistory(deviceId: string) {
           >
             🔁 {{ modeLabel }}
           </button>
+          <!-- 图片不会「播完」：队列里有图片项才露出这个档位（纯视频队列不该看见它） -->
+          <button
+            v-if="playlist.hasImageItems"
+            class="queue-panel__chip queue-panel__chip--dwell"
+            type="button"
+            :title="t('media.queueImageDwellHint')"
+            @click="playlist.cycleImageDwell()"
+          >
+            🖼 {{ t('media.queueImageDwell', { n: playlist.imageDwellSeconds }) }}
+          </button>
           <span v-if="playlist.playingIndex" class="queue-panel__nowplaying">
             {{ t('media.queueNowPlaying', { n: playlist.playingIndex, total: playlist.total }) }}
           </span>

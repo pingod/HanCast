@@ -3,7 +3,8 @@
 > 旧名 `CLAUDE.md`（Claude Code 私有约定），2026-10-15 改名为跨工具的 `AGENTS.md`；
 > `CLAUDE.md` 现在只留三行指针指向本文件。
 
-> 最后校对：2026-11-03，对应版本 v2.4.11（`package.json:4`）。本轮（v2.4.11）：前端错误落进同一份 `hancast.log`（新增 Sidecar 命令 `frontend_log`，注册 74→75、Rust 侧 81→82、`commands.ts` 导出 80→81）＋新增 `SectionBoundary.vue` 区块错误边界（组件 22→23）＋遥控器页改列全量局域网设备并**改手动刷新**（去掉页面自动轮询）＋新增 `tools/verify-section-boundary.cjs` 与 `tests/test_remote_device_list_refresh.py`（顶层脚本 59→60、`test_*.py` 39→40、locale 各 400→403 键）。上一轮（v2.4.10）：手机遥控器地址在首页常驻可见（新增 `src/components/RemoteControlPanel.vue`，组件 21→22）＋遥控器令牌落盘复用（原来每次启动换一段，界面却写「可加书签」）＋新增 `tools/verify-remote-entry.cjs`。修 `DeviceList.vue` 的 `v-else` 错配（有设备时又显示空状态块，v2.4.4 引入）+ `cast.ts` 遥控器镜像去抖定时器泄漏 + 三处验收脚本桩/白名单失效，新增 `tools/verify-device-list-empty.cjs`。
+> 最后校对：2026-11-06，对应版本 v2.4.12（`package.json:4`）。
+> 本轮（v2.4.12，2026-11-06 发布：应用内更新 + 发布面对账 + 手机镜像接收 + 队列图片项续播）：**更新不再把用户丢到网页**。新增 Sidecar `update/` 模块（`manager.py` 883 行：Release 清单取数、本平台产物挑选、带 sha256 校验/断点续传/可取消的下载、`install_plan`）＋ 5 条 Sidecar 命令 `update_release_info`/`update_download_start`/`update_download_status`/`update_download_cancel`/`update_install_plan`（注册 81→86，`commands.py:159-283`）＋ 7 条 Rust 命令（上述 5 条转发 + `update_apply` + `open_update_dir`，`generate_handler!` 88→95，lib.rs:2024-2120）＋ 事件 `update_download_done`（Sidecar 发出 9→10、转发前端 8→9、前端监听 9→10）＋ `UpdateModal.vue` 重写（挑产物 / 镜像开关 / 进度 / 校验 / 退出并安装，593 行）＋ **删除 `DownloadModal.vue`**（组件 24→23）＋ `src/stores/update.ts` 重写（下载状态机 + 代次守卫，451 行）＋ locale 各 456→492 键＋ `tests/test_update_manager.py`（`test_*.py` 41→42）＋ `tools/audit-releases.py`、`tools/verify-update-ui.mjs`、`tools/verify-locale-keys.mjs`（顶层脚本 60→63）。**gitee 源从更新链路彻底删除**：`gitee.com/buxiangqumingzi/han-cast` 是原作者那条线，它的 `releases/latest` 停在 v2.1.0，GitHub 一不通就顶上来，用户于是被发到原作者的下载页——这正是「点更新还会出 gitee 这类原始作者的地址」的根因。发布面：删掉 22 个从未公开的 draft（**tag 全留**），CI 从「推 tag 建 draft」改成「推 tag 直接 publish、产物不齐就不发」，新增 `release-audit.yml` 与 `tools/audit-releases.py` 两道对账；`releases/latest` 那条实测教训（GitHub 把 latest 给**最近 publish** 的那版而不是版本号最大的那版）记在 docs/构建与发布.md 的「发布面对账」一节。同一轮（手机镜像）：新增「手机屏镜像接收（Android → 本机）」——Sidecar `mirror/` 模块（`tools.py` 工具定位 adb/scrcpy + `manager.py` 进程编排，窗口由外部 scrcpy 打开）＋ 6 条 Sidecar 命令 `mirror_status/mirror_devices/mirror_connect/mirror_start/mirror_stop/mirror_set_tool_path`（注册 75→81）＋ 6 条同名 Rust 命令（82→88）＋ 事件 `mirror_state_changed`（Sidecar 发出 7→8）＋ `src/stores/mirror.ts`（store 11→12）＋ `src/components/MirrorPanel.vue`（组件 23→24）＋ `src/types/mirror.ts` ＋首页入口 ＋ `commands.ts` 导出 81→87 ＋ locale 各 403→456 键 ＋ `tests/test_mirror.py`（40→41）。**真机未验**（当前无 Android 设备）。上一轮（v2.4.11）：前端错误落进同一份 `hancast.log`（新增 Sidecar 命令 `frontend_log`，注册 74→75、Rust 侧 81→82、`commands.ts` 导出 80→81）＋新增 `SectionBoundary.vue` 区块错误边界（组件 22→23）＋遥控器页改列全量局域网设备并**改手动刷新**（去掉页面自动轮询）＋新增 `tools/verify-section-boundary.cjs` 与 `tests/test_remote_device_list_refresh.py`（顶层脚本 59→60、`test_*.py` 39→40、locale 各 400→403 键）。上一轮（v2.4.10）：手机遥控器地址在首页常驻可见（新增 `src/components/RemoteControlPanel.vue`，组件 21→22）＋遥控器令牌落盘复用（原来每次启动换一段，界面却写「可加书签」）＋新增 `tools/verify-remote-entry.cjs`。修 `DeviceList.vue` 的 `v-else` 错配（有设备时又显示空状态块，v2.4.4 引入）+ `cast.ts` 遥控器镜像去抖定时器泄漏 + 三处验收脚本桩/白名单失效，新增 `tools/verify-device-list-empty.cjs`。**同日修 ISSUE-026（文件夹投屏卡死在封面图）**：队列自动续播原先只认设备自报 `STOPPED`，而图片永不自报（后端对图片跳过进度轮询 `models/session.py:88-91`），`list_folder` 又认 `.jpg` 且自然序把 `Cover.jpg` 排在剧名之前，于是带封面的目录投出去只显示一张静帧——现场是 Windows 投 `JOJO S05` 39 集 + Cover.jpg。修法在发送端：`cast.ts` 新增 `armImageDwell`/`clearImageDwell`/`clearAllImageDwell`（:809-846，到点调同一条 `advancePlaylistIfActive`，停止/卸载/新起播三条撤除路径，暂停不跳走、`repeat-one` 不计时）＋ `playlist.ts` 新增 `isImageMedia`/`IMAGE_DWELL_STEPS`/`imageDwellSeconds`/`hasImageItems`/`cycleImageDwell`（:18-32、:151、:164、:353-366，随队列落盘）＋队列面板一枚档位按钮（`MediaInput.vue:1043`）＋ locale 各 492→494 键。`tools/verify-playlist-advance.cjs` 断言 10→22（图片组⑥～⑨，两处做过负向对照证明有牙齿），`tools/verify-cast-ui.cjs` 的 playlist 桩补上新增具名 import（又是「桩没跟住 import 清单」这同一类坑）。文档同轮跟：docs/故障排查.md §2 症状索引 +§5.7、docs/HanCast-Frontend-Spec.md §6.5 与 store 表、tools/README.md，locale 插行导致的 `zh-CN.json:NNN` 位移一并校准（4 处）。
 > 本文件是速览与硬约束；逐模块的深度内容在 **docs/README.md** 的索引里，别在这里找细节。
 
 ## 项目概述
@@ -12,7 +13,7 @@
 
 - **项目名**: HanCast
 - **作者**: lanzeweie@foxmail.com
-- **版本**: 2.4.11（版本 SSOT 是 `package.json` 的 `version`，`scripts/sync-version.cjs:4`；改版本只走 `npm run version:set`，见「版本管理」）
+- **版本**: 2.4.12（版本 SSOT 是 `package.json` 的 `version`，`scripts/sync-version.cjs:4`；改版本只走 `npm run version:set`，见「版本管理」）
 - **性质**: 二次开发（非原项目官方更新）
 - **原始代码**: [xfangfang/Macast](https://github.com/xfangfang/Macast)（原作者 xfangfang，最后更新 2022-01）。仓库里**不含** `Macast-main/`、`Macast-plugins-main/` 这些本地目录，1.x 源码只作为移植参考，见「原始代码复用情况」
 - **目标架构**: Tauri 2.0 前端 + Rust 桥接 + Python Sidecar（+ MPV 接收端播放、FFmpeg 屏幕抓取）
@@ -66,14 +67,15 @@ HanCast/
 │   │   ├── GuardConfirmModal.vue / GuardDeviceList.vue  # 投屏确认与信任管理
 │   │   ├── PluginSettings.vue   # 规则包管理（导入、更新、启停）
 │   │   ├── LogsPanel.vue        # 后台日志面板
-│   │   ├── UpdateModal.vue / DownloadModal.vue / AutostartPromptModal.vue
+│   │   ├── UpdateModal.vue      # 应用内更新：挑产物 → 镜像开关 → 进度/校验 → 退出并安装（v2.4.12）
+│   │   ├── AutostartPromptModal.vue
 │   │   ├── StopWarningBanner.vue / Modal.vue / CustomSelect.vue / Footer.vue
 │   │   ├── SectionBoundary.vue  # 区块错误边界（onErrorCaptured → frontend_log + 可见失败提示/重试，v2.4.11）
 │   ├── views/
 │   │   ├── HomeView.vue         # 主视图
 │   │   ├── SettingsView.vue     # 设置页（语言、DLNA 名称、后台参数、关于）
 │   │   └── CastControllerView.vue # 整窗控制器变体，无路由/无 import（死代码，见 docs/HanCast-Frontend-Spec.md §10.11）
-│   ├── stores/                  # 11 个 Pinia store
+│   ├── stores/                  # 12 个 Pinia store
 │   │   ├── cast.ts              # 投屏状态 + 事件订阅
 │   │   ├── device.ts            # 设备列表（30s 自动刷新）
 │   │   ├── media.ts             # 媒体输入状态机
@@ -83,8 +85,9 @@ HanCast/
 │   │   ├── screencast.ts        # 屏幕投屏状态
 │   │   ├── guard.ts             # 投屏确认 / 信任设备
 │   │   ├── logs.ts              # 日志面板取数
-│   │   ├── update.ts            # 自更新与规则包更新
-│   │   └── theme.ts             # 主题检测
+│   │   ├── update.ts            # 自更新（下载/校验/装的状态机）与规则包更新
+│   │   ├── theme.ts             # 主题检测
+│   │   └── mirror.ts            # 手机镜像接收（Android→本机 scrcpy 会话状态，v2.4.12 未发布）
 │   ├── types/                   # TypeScript 类型定义（与 store 一一对应）
 │   ├── locales/                 # zh-CN.json / en-US.json
 │   ├── router/index.ts          # Hash 路由：/ (Home), /settings（仅这两条，src/router/index.ts:8,13）
@@ -101,7 +104,7 @@ HanCast/
 │   ├── icons/                   # 应用图标
 │   └── src/
 │       ├── main.rs              # 入口，调用 hancast_lib::run()
-│       ├── lib.rs               # Tauri 应用设置 + 82 个 #[tauri::command]（清单见 generate_handler!，lib.rs:1631-1713）
+│       ├── lib.rs               # Tauri 应用设置 + 95 个 #[tauri::command]（清单见 generate_handler!，lib.rs:2024-2120）
 │       └── sidecar.rs           # Python Sidecar 管理器（stdin/stdout JSON，COMMAND_TIMEOUT=60s）
 │
 ├── hancast-backend/              # Python Sidecar 后端
@@ -110,7 +113,7 @@ HanCast/
 │   ├── README.md                # Sidecar 范围速查（协议信封、三条铁律、命令分组）
 │   ├── hancast_sidecar/
 │   │   ├── main.py              # Sidecar 入口（148 行：UTF-8 stdio、stdin/stdout JSON 循环、双击兜底）
-│   │   ├── commands.py          # CommandHandler — 命令路由（75 条注册表 commands.py:153-262）
+│   │   ├── commands.py          # CommandHandler — 命令路由（86 条注册表 commands.py:159-283）
 │   │   ├── params.py            # 后台参数 PARAM_SPECS（32 项，params.py:41-265）
 │   │   ├── ssdp.py              # SSDP 设备发现（1343 行；投屏准入见 _provides_cast_service）
 │   │   ├── protocol/
@@ -137,6 +140,12 @@ HanCast/
 │   │   │   ├── pulse.py         # Linux 音频枚举（pactl JSON + pw-dump 可读名 + pactl info 默认项）
 │   │   │   ├── httpd.py         # 观看页 HTTP 服务（默认 8765，绑 0.0.0.0）
 │   │   │   └── www/             # 观看页（index.html + hls.min.js）
+│   │   ├── update/
+│   │   │   └── manager.py       # 应用内更新：Release 清单取数（**不用** /releases/latest）、本平台产物挑选、
+│   │   │                        # 带 sha256/续传/取消的下载、install_plan（v2.4.12 未发布）
+│   │   ├── mirror/
+│   │   │   ├── tools.py        # adb/scrcpy 定位、版本、设备枚举、安装指引（tools.py）
+│   │   │   └── manager.py      # 镜像会话编排：拼 scrcpy 参数、Popen、退出事件与 last_error（manager.py）
 │   │   ├── remote/server.py     # 手机遥控器页 HTTP 服务（局域网 + 每会话 token；v2.4.8 常驻+上传/粘贴/队列/历史/多设备）
 │   │   ├── security/guard.py    # Device Guard：未知设备投屏确认、信任/黑名单
 │   │   ├── models/              # cast / device / media / mpv / session dataclass
@@ -153,17 +162,17 @@ HanCast/
 │   ├── scripts/
 │   │   ├── build_sidecar.py     # Nuitka 构建脚本 + flatten_dependencies()
 │   │   └── run_sidecar.py       # 独立 Sidecar 运行器
-│   └── tests/                   # 40 个 test_*.py + 2 个 smoke_*.py + conftest.py + data/（清单见 docs/开发指南.md）
+│   └── tests/                   # 42 个 test_*.py + 2 个 smoke_*.py + conftest.py + data/（清单见 docs/开发指南.md）
 │
 ├── rule-packs/                  # 官方规则包源码与产物
 │   ├── hancast-bilibili / hancast-douyin / hancast-template
 │   ├── index.json               # 官方索引；线上地址是 main 分支 raw 路径 `https://raw.githubusercontent.com/pingod/HanCast/main/rule-packs/index.json`（`params.py:21`）
-│   └── dist/                    # 打包 zip（CI 随 draft Release 发布）
+│   └── dist/                    # 打包 zip（CI 随 Release 一起发布）
 ├── linux-capture/               # hancast-wlgrab 源码（Rust，仅 wayland-client；Wayland 抓屏 helper）
 │   ├── Cargo.toml / Cargo.lock  # --locked 构建；不依赖 GTK
 │   └── src/main.rs              # 886 行：list / capture --output --fps，帧按紧凑 BGRA 写 stdout
 ├── scripts/                     # 壳层脚本：sync-version / check-version / sync-sidecar / check-resources / build-arch-pkg（均为 .cjs）
-├── tools/                       # 60 个顶层脚本 + 1 个目录型验收包（browser-channel-livecheck/），索引与计数口径见 tools/README.md
+├── tools/                       # 63 个顶层脚本 + 1 个目录型验收包（browser-channel-livecheck/），索引与计数口径见 tools/README.md
 ├── mpv/                         # 本地放置的 MPV（`.gitignore:86-87` 只留 portable_config/）
 │   └── portable_config/mpv.conf # 入库：弹幕/OSD 脚本、着色器、字体
 ├── docs/                        # 设计文档，**入口是 docs/README.md**
@@ -236,16 +245,18 @@ HanCast/
    中文日志行会先被编码器吞掉，v2.2.18 就是这么撞到 `'ascii' codec can't encode characters` 的。
 
 事件总账（两个口径别混）：`grep -rn "emit_event(" hancast_sidecar/ | grep -o '"[a-z_]*"' | sort -u` 数出
-**Sidecar 发出的事件名 7 条**（`ready`、`device_found`、`device_lost`、`cast_state_changed`、
-`cast_confirm_request`、`screen_cast_state_changed`、`browser_request`），但 **`browser_request` 不转发前端**——
-它是壳层↔Sidecar 的反向 RPC，`sidecar.rs:361` 的专分支转给离屏渲染窗口。所以**回推前端 6 条**，
-Rust 侧另发 2 条（`update-available`、`autostart-changed`），**前端合计监听 8 条**。
-`ready` 两侧都没有订阅者（只作握手痕迹），`cast_error` 是前端遗留的死监听（`src/stores/cast.ts:787`）。
+**Sidecar 发出的事件名 10 条**（`ready`、`device_found`、`device_lost`、`cast_state_changed`、
+`cast_confirm_request`、`screen_cast_state_changed`、`remote_command`、`mirror_state_changed`、
+`update_download_done`、`browser_request`），但 **`browser_request` 不转发前端**——
+它是壳层↔Sidecar 的反向 RPC，`sidecar.rs:361` 的专分支转给离屏渲染窗口。所以**回推前端 9 条**，
+Rust 侧另发 2 条（`update-available`、`autostart-changed`），**前端合计监听 10 条**
+（`ready` 与 `update_download_done` 的语义不同：前者只作握手痕迹没人订阅，后者由 `stores/update.ts:398` 订阅）。
+`ready` 两侧都没有订阅者（只作握手痕迹），`cast_error` 是前端遗留的死监听（`src/stores/cast.ts:992`，v2.4.12 重数：原写 :787 已漂）。
 完整清单与触发时机见 docs/HanCast-Frontend-API.md。
 
-### Tauri 命令列表（节选，完整清单以 `src-tauri/src/lib.rs` 的 `generate_handler!`（lib.rs:1631-1713，**82 条**）为准）
+### Tauri 命令列表（节选，完整清单以 `src-tauri/src/lib.rs` 的 `generate_handler!`（lib.rs:2024-2120，**95 条**）为准）
 
-Sidecar 侧的注册表是 **75 条**（`commands.py:153-262`；v2.4.11 新增 `frontend_log`，v2.4.8 新增 `remote_update_ui`，v2.4.7 新增 `add_local_device`，v2.4.6 新增 `start_remote_control`/`stop_remote_control`/`remote_status`/`subtitle_apply`/`subtitle_status`，v2.4.5 新增 `cast_failure_list`/`cast_failure_clear`/`probe_url`，v2.4.4 新增 `remove_manual_device`，v2.4.1 起有文件夹投屏 `list_folder_media`）——差的那几条由 Rust 自己实现（窗口、剪贴板、开机自启、
+Sidecar 侧的注册表是 **86 条**（`commands.py:159-283`；v2.4.12 新增应用内更新 `update_release_info`/`update_download_start`/`update_download_status`/`update_download_cancel`/`update_install_plan` 与手机镜像 `mirror_status`/`mirror_devices`/`mirror_connect`/`mirror_start`/`mirror_stop`/`mirror_set_tool_path`，v2.4.11 新增 `frontend_log`，v2.4.8 新增 `remote_update_ui`，v2.4.7 新增 `add_local_device`，v2.4.6 新增 `start_remote_control`/`stop_remote_control`/`remote_status`/`subtitle_apply`/`subtitle_status`，v2.4.5 新增 `cast_failure_list`/`cast_failure_clear`/`probe_url`，v2.4.4 新增 `remove_manual_device`，v2.4.1 起有文件夹投屏 `list_folder_media`）——差的那几条由 Rust 自己实现（窗口、剪贴板、开机自启、
 Store 版判定、日志导出等），不下发 Python；`exit` 由 Sidecar 主循环拦下（`main.py:126-128`）。
 Rust 命令名与 Sidecar `cmd` 名不一定同名（例如 Rust 的 `plugin_list` 下发的是 Sidecar 的规则包命令），
 逐条对应关系见 docs/HanCast-Frontend-API.md。
@@ -278,14 +289,16 @@ Rust 命令名与 Sidecar `cmd` 名不一定同名（例如 Rust 的 `plugin_lis
 | 日志 | `get_logs` / `export_logs` / `set_log_level` | 面板取数、导出、级别 |
 | 播放环境 | `check_mpv` / `set_mpv_path` | 捆绑 MPV 探测与自定义路径 |
 | 更新与自启 | `check_update` / `ignore_update_version` / `is_store_version` / `get_autostart` / `set_autostart` | 自更新、Store 版判定、开机自启 |
+| 应用内更新 | `update_release_info` / `update_download_start` / `update_download_status` / `update_download_cancel` | 产物清单、起下载（后台线程 + 轮询）、取消（v2.4.12） |
+| 应用内更新 | `update_install_plan` / `update_apply` / `open_update_dir` | 该怎么装、真的退出并装、打开存放目录（路径一律由 Sidecar 报） |
 
 ### Python 后端服务
 
 | 服务 | 端口 | 说明 |
 |------|------|------|
-| DLNA Server | 默认 8080，占用则回退随机 | 描述 XML、SCPDXML、入站 SOAP 处理。端口由 `commands.py:86-90` 传入，冲突回退见 `protocol/server.py:356-363`；**真实端口回灌给 SSDP**（commands.py:286 `self.ssdp._port = self.dlna_server.get_port()`），否则设备抓到 8080 却取不到描述文件 |
+| DLNA Server | 默认 8080，占用则回退随机 | 描述 XML、SCPDXML、入站 SOAP 处理。端口由 `commands.py:121-125` 传入，冲突回退见 `protocol/server.py:356-363`；**真实端口回灌给 SSDP**（commands.py:304 `self.ssdp._port = self.dlna_server.get_port()`），否则设备抓到 8080 却取不到描述文件 |
 | SSDP Service | 1900 | UDP 多播，设备发现（NOTIFY + M-SEARCH）；组播被系统阻断时回退子网广播（`ssdp.py:32,416,556-557`），NOTIFY 周期 30s 对齐 `CACHE-CONTROL: max-age=66`（`ssdp.py:6`）。**发现不扫描端口**，且描述必须声明 `AVTransport` 服务才登记（`ssdp.py:1095`、`ssdp.py:1190-1196`，v2.3.13），路由器/NAS 不进列表，判据 `tools/verify-ssdp-cast-gate.py` |
-| Media Server | 0 = 自动选择 | 本地文件 HTTP 服务（Range + 边下边播代理），`config.media_port` 默认 0（`utils/config.py:112-114`、commands.py:229） |
+| Media Server | 0 = 自动选择 | 本地文件 HTTP 服务（Range + 边下边播代理），`config.media_port` 默认 0（`utils/config.py:112-114`、commands.py:314） |
 | Screencast HTTP | 默认 8765 | 观看页 + HLS 供流（`screencast/httpd.py:32,84`），观看链接带每会话新生成的短随机段 `/r/<session_id>` |
 | MPV Renderer | IPC | 通过 named pipe (Windows) / unix socket (Linux/macOS) 控制 MPV。定位顺序：手动指定 → 随包 → 系统 PATH（`utils/mpv_manager.py:31-67`）；**随包候选必须先真跑一次 `--version`**，跑不起来就让位系统 mpv——随包那份是 Ubuntu runner 的构建，Arch/CachyOS 上 13 条 soname 缺失（`libavcodec.so.60` 等，全清单见 docs/故障排查.md §10.7）（v2.3.17，判据见 docs/故障排查.md §10.7） |
 | FFmpeg | 子进程 | 屏幕抓取切片成 HLS，由 `screencast/ffmpeg_manager.py` 拼装命令；**不随包**，可执行文件由 `utils/ffmpeg_deps.py` 在运行时定位（手动路径 → 本机 PATH/常见安装目录 → 本程序下载的 `<配置目录>/bin/`） |
@@ -407,7 +420,7 @@ npm run tauri build            # 或 npx tauri build --bundles <targets>
 #   4. npm run build:sidecar           （Nuitka standalone → 依赖由 flatten_dependencies()
 #                                       提升到 src-tauri/ 根；Linux 连 sidecar exe 一起提升）
 #   4b. (仅 Linux) cd linux-capture && cargo build --release --locked
-#       && cp target/release/hancast-wlgrab ../src-tauri/   （CI: build.yml:259-280，
+#       && cp target/release/hancast-wlgrab ../src-tauri/   （CI: build.yml:269-290，
 #       构建后还要在无 Wayland 会话下真 exec 一次 `list`，要求退出码 3 + 「连不上 Wayland」）
 #   5. node scripts/check-resources.cjs（Preflight：逐个 glob 验命中；
 #      Linux 还额外验 sidecar 的装端布局——exe 是文件、带执行位、由 resources 承载且
@@ -419,17 +432,17 @@ npm run tauri build            # 或 npx tauri build --bundles <targets>
 ```
 
 步骤 3/4/4b 的产物就是 `bundle.resources` 的 glob 目标，所以 Preflight 必须排在它们之后、
-`tauri build` 之前——放太晚只能等 `build.rs` 报含糊的 glob 错误（`.github/workflows/build.yml:238-284`）。
+`tauri build` 之前——放太晚只能等 `build.rs` 报含糊的 glob 错误（`.github/workflows/build.yml:291-294`）。
 
 **构建前还需要手工准备**（CI 里由 workflow 步骤自动下载）：
 
 1. `src-tauri/mpv/` 里要有 mpv 可执行文件；仓库根 `mpv/` 被 gitignore，只有 `portable_config/` 入库，
-   CI 会先把已提交的 `mpv/portable_config/` 补进 `src-tauri/mpv/portable_config/`（`build.yml:156-160`）。
+   CI 会先把已提交的 `mpv/portable_config/` 补进 `src-tauri/mpv/portable_config/`（`build.yml:166-170`，Linux 侧 `:212-215`）。
 2. macOS 只有 `mpv.app/` 是有效载荷：`mpv/*` 这种非递归 glob 能看见目录却不会递归，
    历史上因此打出过不含 mpv 的 app，`scripts/check-resources.cjs:11-23` 专门记录了这一坑。
 3. **Linux 还要 `src-tauri/hancast-wlgrab`**：那是构建产物、不入库（`.gitignore:72-78` 同时忽略它和
    `linux-capture/target/`，`linux-capture/` 的源与 `Cargo.lock` 入库），本地不构建就只是 Preflight 少一条
-   glob 命中——CI 里由 `build.yml:259-280` 现建现验（构建后真 exec 一次 `list`，要求退出码 3）。
+   glob 命中——CI 里由 `build.yml:269-290` 现建现验（构建后真 exec 一次 `list`，要求退出码 3）。
 
 > **FFmpeg 不在准备清单里**：v2.3.11 起不再捆绑，`bundle.resources` 的 `ffmpeg/*` 与 CI 的
 > 「Download & unpack FFmpeg」步骤（曾从 `eugeneware/ffmpeg-static` 的 `b6.1.1` 取静态单文件）
@@ -455,20 +468,26 @@ npm run tauri build            # 或 npx tauri build --bundles <targets>
   为此 CI 把 `beforeBuildCommand` 拆成了独立步骤（frontend → sync-sidecar →
   Nuitka sidecar → Preflight → tauri bundle），所以 base 配置的
   `beforeBuildCommand` 已简化为只做版本同步。
-- **Linux 装端冒烟**（v2.3.17 补、v2.3.19 扩，`build.yml:294-343`）：`tauri build` 之后把 deb `dpkg-deb -x`
+- **Linux 装端冒烟**（v2.3.17 补、v2.3.19 扩，`build.yml:304-381`）：`tauri build` 之后把 deb `dpkg-deb -x`
   解出来，断言 `/usr/bin/hancast-sidecar` **不存在**、`/usr/lib/HanCast/hancast-sidecar` 可执行、
-  `libpython3.12.so.1.0` 同级、**`hancast-wlgrab` 与它同级且带执行位**（`build.yml:314-315`），然后
-  **真喂两条命令给解包出来的 sidecar**：`get_settings` 要求回 `"success": true` 且 stderr 没有
-  `error while loading shared libraries` / `ImportError`；`list_screen_sources`（`build.yml:335-341`）要求返回里
-  有 `"capture"` 字段——`screencast/wlgrab.py` 与 `pulse.py` 是函数内延迟 import，Nuitka 漏收时第一条照样绿。
+  `libpython3.12.so.1.0` 同级、**`hancast-wlgrab` 与它同级且带执行位**（`build.yml:324-325`），然后
+  **真喂三条命令给解包出来的 sidecar**：`get_settings` 要求回 `"success": true` 且 stderr 没有
+  `error while loading shared libraries` / `ImportError`；`list_screen_sources`（`build.yml:341-351`）要求返回里
+  有 `"capture"` 字段——`screencast/wlgrab.py` 与 `pulse.py` 是函数内延迟 import，Nuitka 漏收时第一条照样绿；
+  `update_download_status`（`build.yml:353-369`）要求返回里带 `dir`——`commands.py` 的更新 handler 也是
+  函数内 `from .update import manager`，不收这条就只有用户点「检查更新」时才炸（v2.4.12 起加）。
   这条存在的理由是 v2.3.16 的教训：CI 只验「文件在不在」，四条检查全绿，装到 CachyOS 上却是
   `exit 127` 的秒崩——存在性证明不了运行时依赖解析。Arch 侧同一套断言在
   `scripts/build-arch-pkg.cjs` 的容器里用 `pacman -U` 真装完再跑一遍。
-  ⚠️ CI 这三条（helper 自检退出码 3 / Preflight / 装端 capture 字段）**证明不了画面**：构建机没有 Wayland
+  ⚠️ CI 这几条（helper 自检退出码 3 / Preflight / 装端 capture 与 update 模块）**证明不了画面**：构建机没有 Wayland
   会话。像素判据只有真机那条线，`tools/verify-linux-wayland-cast.py`（判据表见 docs/构建与发布.md §6.8）。
-- **Release**：仅在 `build` 成功、**ref 是 tag**、且（tag 推送 或 `make_release=true`）
-  时创建 draft release。`make_release` 输入默认 **false**——在 `main` 上手动
-  dispatch 只构建、不发布（曾用 `refs/heads/main` 当 tag 发 release，被 API 400 拒掉）。
+- **Release**（v2.4.12 改）：`build` 成功且 **ref 是 tag** 时，先过一道「产物齐不齐」闸门
+  （`Require a complete artifact set before publishing`：dmg / -setup.exe / deb / rpm / AppImage /
+  pkg.tar.zst 缺一就失败），齐了才**直接 publish**。
+  手动 dispatch 勾选 `make_release` 才建 draft（留给人工验收）。**为什么不再默认 draft**：
+  draft 要人来点 publish，验收没做完就被下一版取代，2026-11-06 数过这样烂着的 draft 有 22 个；
+  而 `releases/latest` 根本不看见 draft，于是线上「检查更新」永远报旧版本。
+  曾用 `refs/heads/main` 当 tag 发 release，被 API 400 拒掉（这条历史保留）。
 
 ### 构建产物路径
 
@@ -674,11 +693,14 @@ bash tools/rust-check.sh
 
 # 前端没有测试脚本（package.json 里没有 test）；类型检查走 npm run build 的 vue-tsc
 node tools/verify-params-ui.mjs        # 参数表与 tag 源码逐键比对（UI 侧验收）
+node tools/verify-locale-keys.mjs      # t() 用到的键在 zh/en 都在、两份键集一致（v2.4.12 起）
+node tools/verify-update-ui.mjs        # 应用内更新弹窗的浏览器验收（要 chrome-headless-shell）
+python3 tools/audit-releases.py        # 发布面对账：tag / Release / CHANGELOG / latest 指针
 python3 tools/audit-doc-refs.py        # 文档引用的 文件:行号 是否还成立（只查文件在不在、越不越界）
 python3 tools/check-doc-freshness.py   # 引用**内容**对不对 + 校对戳 + 硬数字（v2.3.23 起，见「文档维护约定」）
 ```
 
-`tools/` 下 60 个顶层脚本（+ `browser-channel-livecheck/` 目录型验收包）按用途分类见 tools/README.md（计数口径同那里，且由闸门逐行点名核对）；端到端验收脚本的判据写在
+`tools/` 下 63 个顶层脚本（+ `browser-channel-livecheck/` 目录型验收包）按用途分类见 tools/README.md（计数口径同那里，且由闸门逐行点名核对）；端到端验收脚本的判据写在
 docs/构建与发布.md §6 与各专题文档，不要凭脚本退出码 0 就当作功能可用。
 
 ## 窗口配置
@@ -688,13 +710,13 @@ docs/构建与发布.md §6 与各专题文档，不要凭脚本退出码 0 就�
 | 来源 | 值 | 作用 |
 |------|----|------|
 | `src-tauri/tauri.conf.json` `app.windows[0]` | 434×634，min 346×472，max 800×900，`decorations:false`、`transparent:true`、`visible:false`、`dragDropEnabled:true` | 首启的声明尺寸 |
-| `src-tauri/src/lib.rs:32-36` `WindowConfig::default()` | 434×634；最小尺寸在 Rust 侧硬编码 `MIN_WIDTH=346 / MIN_HEIGHT=472`（lib.rs:1175-1182，恢复与记录时各 clamp 一次，`lib.rs:1165,1118-1119`） | Rust 恢复/写入 `window_config.json` 时的默认值与下限 |
+| `src-tauri/src/lib.rs:32-36` `WindowConfig::default()` | 434×634；最小尺寸在 Rust 侧硬编码 `MIN_WIDTH=346 / MIN_HEIGHT=472`（lib.rs:1240-1247，恢复与记录时各 clamp 一次，`lib.rs:1230,1118-1119`） | Rust 恢复/写入 `window_config.json` 时的默认值与下限 |
 | `src-tauri/tauri.linux.conf.json` `app.windows[0]` | **整份重写** base 那一条，只把 `transparent` 改成 `false` 并补不透明 `backgroundColor` `{22,20,50,255}` | Linux 必须用不透明窗口，原因见「跨平台 WebView 兼容性」 |
 
 ⚠️ 平台配置合并是 RFC 7386，**数组整体替换**——所以 Linux 那份不能只写 `{transparent:false}`，
 必须把 base 的窗口对象整份抄过去再改，否则 `minWidth` / `dragDropEnabled` 之类会静默消失。
 
-用户拖过窗口后，真实尺寸记在 AppData 的 `window_config.json`（lib.rs:1158），启动时优先读它，
+用户拖过窗口后，真实尺寸记在 AppData 的 `window_config.json`（lib.rs:1223），启动时优先读它，
 写入带 **500ms 防抖**（`lib.rs:84,90`）。所以「改了 tauri.conf.json 但界面尺寸没变」通常是本机
 `window_config.json` 在覆盖，删掉该文件再看。
 
@@ -746,7 +768,7 @@ alpha 保持 0，Hyprland 直接把后面的桌面（还带模糊）透出来，
 5. **投屏失败必须让用户看见**：窗口收进托盘时界面红条没人看得到，所以媒体投屏的 `start_cast`
    失败、「停止未送达」，以及屏幕投屏的被拒 / 未送达 / 会话中途报错，**五条路径**都发系统通知，
    并把**隐藏的窗口带回前台**（`src/api/commands.ts` 的 `notify()` → `raiseIfHidden()` `:1401` +
-   壳层 `notify_os` lib.rs:1067——**UN 的调用必须排到主线程**（`run_on_main_thread`），从命令的工作
+   壳层 `notify_os` lib.rs:1450——**UN 的调用必须排到主线程**（`run_on_main_thread`），从命令的工作
    线程直接调会被系统判成「不允许」；授权状态与投递错误都落进程序日志（`src-tauri/src/macos_notify.rs`
    的 `log()`，与 Python 侧同一份 `hancast.log`、同一行格式，后台日志面板读得到）。
    屏幕投屏那侧的去重在 `src/stores/screencast.ts:45`）。
@@ -760,6 +782,15 @@ alpha 保持 0，Hyprland 直接把后面的桌面（还带模糊）透出来，
 6. **规则包沙箱**：站点脚本跑在 QuickJS 里（`media/rules/jsruntime.py`），只有 `host.*` 受限接口，
    拿不到 Python 运行时；导入侧限额见 `media/rules/jsplugins.py:44-47`
    （ZIP ≤2MB、条目 ≤128、解压后 ≤8MB、单文件 ≤2MB），官方索引产物按 sha256 校验后才落盘。
+7. **应用内更新的三条硬边界**（v2.4.12）：
+   ① 版本清单**只认自仓 GitHub Releases 的列表接口**——既不许出现原作者的 gitee 仓库
+      （它的 `releases/latest` 停在 v2.1.0，会把用户打发到原作者页面），也不许用 `/releases/latest`
+      （GitHub 按「最近 publish」而不是版本号给结果，补一条旧版 release 就能把更新检查整体废掉，
+      2026-11-06 实测；判据在 `tools/audit-releases.py` 与 `tests/test_ghmirror.py::TestUpdateCheckMirror`）；
+   ② 安装包**必须按 GitHub 声明的 asset `digest`（sha256）校验**，摘要不符就当坏字节丢弃——
+      镜像是加速器不是新真相源，退回直连不构成放宽；
+   ③ 装的动作**只在壳层**，且路径一律由 Sidecar 报（同 `open_ffmpeg_dir` 的规矩）：前端传路径等于
+      开放「用应用的权限覆盖任意文件」。要提权的产物（deb/rpm/Arch）一律只给命令不代跑 sudo。
 
 ## 代码风格
 
@@ -806,10 +837,10 @@ alpha 保持 0，Hyprland 直接把后面的桌面（还带模糊）透出来，
    两类例外由闸门承认，别硬盖章：已被取代的历史稿在**前 15 行**声明「已被…取代/仅作留档」即可放行
    （给退役稿盖「校对过」反而是说谎）；门面 `README.md` / `README_en.md` 用 **HTML 注释**藏这一行
    （GitHub 上不可见，但 `check-doc-freshness.py` 读得到）。
-4. **数字必须写口径**。例：`#[tauri::command]` 82 条（lib.rs:1631-1713）/ Sidecar 注册 75 条
-   （`commands.py:153-262`）/ 前端 `commands.ts` 导出 81 个；
-   事件是**三个数**：Sidecar 发出 7 个事件名、其中 6 条转发前端（`browser_request` 只到壳层）、
-   壳层自加 2 条 ⇒ 前端监听 8 条。不写口径，下次改动看起来就像文档坏了。
+4. **数字必须写口径**。例：`#[tauri::command]` 95 条（lib.rs:2024-2120）/ Sidecar 注册 86 条
+   （`commands.py:159-283`）/ 前端 `commands.ts` 导出 94 个；
+   事件是**三个数**：Sidecar 发出 10 个事件名、其中 9 条转发前端（`browser_request` 只到壳层）、
+   壳层自加 2 条 ⇒ 前端监听 10 条（`ready` 没人订阅）。不写口径，下次改动看起来就像文档坏了。
    `tools/` 的顶层脚本数也一样要写口径，且由闸门逐行点名核对（漏一行就报）。
 5. **别静默删证据**。被推翻的结论保留「历史一句」（为什么曾经这么做、哪一版改的），
    就像本文件「安全约束」第 3 条那样标注更正来源。

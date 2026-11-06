@@ -818,12 +818,15 @@ async fn check_update(
     current_version: String,
     force: Option<bool>,
 ) -> Result<serde_json::Value, String> {
+    // v2.4.11 及之前这里硬编码 `"sources": ["github", "gitee"]`，gitee 那条源已在
+    // Sidecar 里删除（`gitee.com/buxiangqumingzi/han-cast` 是**原作者**那条线，
+    // 它的 releases/latest 停在 v2.1.0，GitHub 一不通就顶上来，用户看到的「新版本」
+    // 指向原作者的下载页），入参不再下发。
     sidecar
         .send_command(
             "check_update",
             serde_json::json!({
                 "current_version": current_version,
-                "sources": ["github", "gitee"],
                 "force": force.unwrap_or(false),
             }),
         )
@@ -1027,6 +1030,386 @@ async fn ffmpeg_download_status(
     sidecar
         .send_command("ffmpeg_download_status", serde_json::json!({}))
         .await
+}
+
+// ── 手机镜像接收（Android → 本机，adb + scrcpy）──
+
+#[tauri::command]
+async fn mirror_status(
+    sidecar: State<'_, SidecarManager>,
+    refresh: Option<bool>,
+) -> Result<serde_json::Value, String> {
+    sidecar
+        .send_command(
+            "mirror_status",
+            serde_json::json!({"refresh": refresh.unwrap_or(false)}),
+        )
+        .await
+}
+
+#[tauri::command]
+async fn mirror_devices(
+    sidecar: State<'_, SidecarManager>,
+) -> Result<serde_json::Value, String> {
+    sidecar
+        .send_command("mirror_devices", serde_json::json!({}))
+        .await
+}
+
+#[tauri::command]
+async fn mirror_connect(
+    sidecar: State<'_, SidecarManager>,
+    address: String,
+) -> Result<serde_json::Value, String> {
+    sidecar
+        .send_command("mirror_connect", serde_json::json!({"address": address}))
+        .await
+}
+
+#[tauri::command]
+async fn mirror_start(
+    sidecar: State<'_, SidecarManager>,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    sidecar.send_command("mirror_start", params).await
+}
+
+#[tauri::command]
+async fn mirror_stop(
+    sidecar: State<'_, SidecarManager>,
+) -> Result<serde_json::Value, String> {
+    sidecar
+        .send_command("mirror_stop", serde_json::json!({}))
+        .await
+}
+
+#[tauri::command]
+async fn mirror_set_tool_path(
+    sidecar: State<'_, SidecarManager>,
+    tool: String,
+    path: String,
+) -> Result<serde_json::Value, String> {
+    sidecar
+        .send_command(
+            "mirror_set_tool_path",
+            serde_json::json!({"tool": tool, "path": path}),
+        )
+        .await
+}
+
+// ── 应用内更新（挑产物 → 下载 → 校验 → 装）──
+//
+// 分工：Sidecar 负责「取清单、下文件、算摘要、说该怎么装」，本文件只负责真的动手。
+// 理由是权限与顺序：替换正在运行的 app 必须**在我们退出之后**发生，而孩子（Sidecar）
+// 去覆盖父亲（主程序）的二进制、再把父亲叫醒，两头都不对。
+// 路径一律由 Sidecar 给出（它自己下的文件），不接受前端传路径——同 `open_ffmpeg_dir`。
+
+#[tauri::command]
+async fn update_release_info(
+    sidecar: State<'_, SidecarManager>,
+    version: Option<String>,
+) -> Result<serde_json::Value, String> {
+    sidecar
+        .send_command(
+            "update_release_info",
+            serde_json::json!({"version": version.unwrap_or_default()}),
+        )
+        .await
+}
+
+#[tauri::command]
+async fn update_download_start(
+    sidecar: State<'_, SidecarManager>,
+    asset: Option<String>,
+    version: Option<String>,
+) -> Result<serde_json::Value, String> {
+    sidecar
+        .send_command(
+            "update_download_start",
+            serde_json::json!({
+                "asset": asset.unwrap_or_default(),
+                "version": version.unwrap_or_default(),
+            }),
+        )
+        .await
+}
+
+#[tauri::command]
+async fn update_download_status(
+    sidecar: State<'_, SidecarManager>,
+) -> Result<serde_json::Value, String> {
+    sidecar
+        .send_command("update_download_status", serde_json::json!({}))
+        .await
+}
+
+#[tauri::command]
+async fn update_download_cancel(
+    sidecar: State<'_, SidecarManager>,
+) -> Result<serde_json::Value, String> {
+    sidecar
+        .send_command("update_download_cancel", serde_json::json!({}))
+        .await
+}
+
+/// 已下好的产物该怎么装（Sidecar 的 `update_install_plan` 原样转发）。
+///
+/// 这条必须有：前端在 `download_status` 落到 done 之后会单独取一次装法，好把
+/// 「退出并安装」与「复制 sudo apt install …」两种主按钮分开渲染。少这一条转发，
+/// 打包版里那次 invoke 直接 reject，界面拿不到 plan 就把「退出并安装」永久置灰
+/// ——浏览器 mock 有 `case 'update_install_plan'`，所以只有装好的产物上才暴露。
+#[tauri::command]
+async fn update_install_plan(
+    sidecar: State<'_, SidecarManager>,
+) -> Result<serde_json::Value, String> {
+    sidecar
+        .send_command("update_install_plan", serde_json::json!({}))
+        .await
+}
+
+/// 把安装脚本写到临时目录，返回脚本路径。
+///
+/// 必须是**脚本**而不是直接 spawn 安装包：主程序一退出，安装程序就得在我们已经
+/// 不在的时候继续干活，而 `Command::spawn` 的子进程会跟着父进程的退出被留在原地——
+/// 谁也不知道它等到没有。脚本里那句 `sleep` 就是给退出流程留的余量。
+/// macOS 尤其明显：`cp -R` 覆盖一个正在运行的 .app，轻则报「设备忙」，
+/// 重则把半份新包留在 /Applications 里。
+fn write_apply_helper(kind: &str, path: &str, log_path: &str) -> Result<String, String> {
+    let script = if cfg!(windows) {
+        let exe = std::env::current_exe()
+            .map_err(|e| format!("取不到自身可执行路径: {e}"))?
+            .to_string_lossy()
+            .replace('/', "\\");
+        WIN_APPLY
+            .replace("{{INSTALLER}}", &path.replace('/', "\\"))
+            .replace("{{EXE}}", &exe)
+    } else if kind == "dmg" {
+        // 替换目标 = 我们自己所在的 .app。倒推不出来就是开发布局（`cargo run` 跑的是
+        // target/debug 里的裸二进制），那时**只把 dmg 打开**让用户自己拖——
+        // 去动 target 里那份会立刻毁掉下一次调试，而且装完也起不来。
+        match macos_bundle_path() {
+            Some(bundle) => MAC_APPLY
+                .replace("{{DMG}}", path)
+                .replace("{{DST}}", &bundle)
+                .replace("{{LOG}}", log_path),
+            None => DEV_FALLBACK
+                .replace("{{DMG}}", path)
+                .replace("{{LOG}}", log_path),
+        }
+    } else {
+        LINUX_APPLY
+            .replace("{{IMG}}", path)
+            .replace("{{LOG}}", log_path)
+    };
+
+    let mut file = std::env::temp_dir();
+    file.push(if cfg!(windows) {
+        "hancast-apply.cmd"
+    } else {
+        "hancast-apply.sh"
+    });
+    std::fs::write(&file, script.as_bytes()).map_err(|e| format!("写安装脚本失败: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755))
+            .map_err(|e| format!("安装脚本不可执行: {e}"))?;
+    }
+    Ok(file.to_string_lossy().to_string())
+}
+
+// 三份模板都**先备份再替换、失败就回滚**：装坏了还能起来，比留下一份半包强。
+// 路径一律加引号——macOS 的配置目录里就有空格（Application Support）。
+
+const WIN_APPLY: &str = r#"@echo off
+timeout /t 3 /nobreak >nul
+start "" /wait "{{INSTALLER}}" /S
+if %ERRORLEVEL%==0 start "" "{{EXE}}"
+del "%~f0"
+"#;
+
+const MAC_APPLY: &str = r#"#!/bin/sh
+LOG="{{LOG}}"
+DMG="{{DMG}}"
+DST="{{DST}}"
+BAK="/tmp/HanCast_prev_$(date +%s).app"
+echo "=== $(date) 自更新 $DMG -> $DST" >> "$LOG" 2>&1
+# 等父进程退干净：正在运行的 .app 里做 mv/cp，轻则 Device busy，重则半份新包留在原地
+sleep 2
+MOUNT=$(hdiutil attach -nobrowse -noverify -noautoopen "$DMG" | awk -F'\t' '/\/Volumes\// {print $NF; exit}')
+if [ -z "$MOUNT" ]; then
+  echo "挂载失败，改为打开镜像由你手动拖拽" >> "$LOG" 2>&1
+  open "$DMG"
+  exit 1
+fi
+SRC="$MOUNT/HanCast.app"
+if [ ! -d "$SRC" ]; then
+  echo "镜像里找不到 HanCast.app（$MOUNT）" >> "$LOG" 2>&1
+  hdiutil detach "$MOUNT" -force >> "$LOG" 2>&1
+  open "$DMG"
+  exit 1
+fi
+if ! mv "$DST" "$BAK"; then
+  echo "旧版挪不动（多半是 /Applications 权限），改为打开镜像" >> "$LOG" 2>&1
+  hdiutil detach "$MOUNT" -force >> "$LOG" 2>&1
+  open "$DMG"
+  exit 1
+fi
+if ! cp -R "$SRC" "$(dirname "$DST")"; then
+  echo "复制失败，回滚旧版" >> "$LOG" 2>&1
+  mv "$BAK" "$DST"
+  hdiutil detach "$MOUNT" -force >> "$LOG" 2>&1
+  open "$DMG"
+  exit 1
+fi
+hdiutil detach "$MOUNT" -force >> "$LOG" 2>&1
+rm -rf "$BAK"
+# linker-signed 的包换过一次磁盘位置，Launch Services 未必认新 inode；touch 让它重新登记
+touch "$DST"
+echo "替换完成：$DST" >> "$LOG" 2>&1
+open "$DST"
+"#;
+
+/// 开发布局的兜底：不替换任何东西，只把 dmg 打开。
+const DEV_FALLBACK: &str = r#"#!/bin/sh
+echo "=== $(date) 当前不是 .app 布局，跳过替换，改为打开镜像" >> "{{LOG}}" 2>&1
+sleep 2
+open "{{DMG}}"
+"#;
+
+const LINUX_APPLY: &str = r#"#!/bin/sh
+LOG="{{LOG}}"
+IMG="{{IMG}}"
+echo "=== $(date) 改起新 AppImage $IMG" >> "$LOG" 2>&1
+sleep 2
+chmod +x "$IMG"
+nohup "$IMG" >/dev/null 2>&1 &
+"#;
+
+/// macOS：从自身可执行路径倒推 .app 包路径（`/Applications/HanCast.app`）。
+/// 不在 .app 里（开发构建）就回 None —— 那条路上没有可替换的包。
+fn macos_bundle_path() -> Option<String> {
+    let exe = std::env::current_exe().ok()?;
+    let parents = exe.parent()?.parent()?.parent()?;
+    let name = parents.file_name()?.to_string_lossy().to_string();
+    if name.ends_with(".app") {
+        Some(parents.to_string_lossy().to_string())
+    } else {
+        None
+    }
+}
+
+/// spawn 一个**活过本进程**的脚本：新进程组 + Windows 侧 DETACHED_PROCESS。
+/// 用 `app.shell().command()` 那条路（sidecar.rs 用的同一个插件）在这里不合适：
+/// 壳层退出时插件会收拾它 spawn 的东西，而我们要的恰恰是「我们走了它还得继续」。
+fn spawn_survivor(script: &str) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        std::process::Command::new("cmd")
+            .args(["/C", script])
+            .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
+            .spawn()
+            .map_err(|e| format!("启动安装程序失败: {e}"))?;
+        Ok(())
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let mut cmd = std::process::Command::new("/bin/sh");
+        cmd.arg(script);
+        // 新进程组：本程序退出时发出的信号不会顺带把安装脚本打死
+        cmd.process_group(0);
+        cmd.spawn()
+            .map_err(|e| format!("启动安装脚本失败: {e}"))?;
+        Ok(())
+    }
+}
+
+/// 应用刚下好的产物。`kind == "command"`（deb/rpm/Arch）不代跑：
+/// 那要提权，壳层不该替用户 sudo，于是把计划原样退回，让界面给复制按钮。
+#[tauri::command]
+async fn update_apply(
+    app: tauri::AppHandle,
+    sidecar: State<'_, SidecarManager>,
+) -> Result<serde_json::Value, String> {
+    let plan = sidecar
+        .send_command("update_install_plan", serde_json::json!({}))
+        .await?;
+    let kind = plan
+        .get("kind")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let path = plan
+        .get("path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    if path.is_empty() {
+        return Err("更新产物路径为空".to_string());
+    }
+    if kind == "command" {
+        return Ok(serde_json::json!({"ok": false, "manual": true, "plan": plan}));
+    }
+
+    // 日志落在产物旁边：应用已经退了，程序日志没人再看，而这条链最需要事后取证
+    let mut log_path = std::path::PathBuf::from(&path);
+    log_path.set_file_name("update-apply.log");
+    let helper = write_apply_helper(&kind, &path, &log_path.to_string_lossy())?;
+    spawn_survivor(&helper)?;
+
+    // 先回话再退出：退出是异步的（600ms），前端要能收到「已开始安装」这条回复，
+    // 否则界面停在按钮上转圈，用户以为程序挂了。
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        handle.exit(0);
+    });
+    Ok(serde_json::json!({
+        "ok": true,
+        "kind": kind,
+        "path": path,
+        "log": log_path.to_string_lossy(),
+        "helper": helper,
+    }))
+}
+
+/// 打开存放更新产物的目录（路径由 Sidecar 的任务表给出，同 `open_ffmpeg_dir` 的理由）
+#[tauri::command]
+async fn open_update_dir(
+    sidecar: State<'_, SidecarManager>,
+) -> Result<serde_json::Value, String> {
+    let task = sidecar
+        .send_command("update_download_status", serde_json::json!({}))
+        .await?;
+    // 优先用任务表里的 `dir`（Sidecar 每次都会报，包括还没下载的时候）；
+    // 只剩 `dest` 的旧 sidecar 就取它的父目录，两条都拿不到才失败。
+    let dir = task
+        .get("dir")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .or_else(|| {
+            task.get("dest")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .and_then(|p| std::path::Path::new(p).parent())
+                .map(|d| d.to_string_lossy().to_string())
+        })
+        .ok_or_else(|| "Sidecar 未返回更新产物目录".to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("目录创建失败: {e}"))?;
+    if cfg!(target_os = "macos") {
+        std::process::Command::new("open").arg(&dir).spawn()
+    } else if cfg!(windows) {
+        std::process::Command::new("explorer").arg(&dir).spawn()
+    } else {
+        std::process::Command::new("xdg-open").arg(&dir).spawn()
+    }
+    .map_err(|e| format!("无法打开目录: {e}"))?;
+    Ok(serde_json::json!({"ok": true, "path": dir}))
 }
 
 /// 在系统文件管理器里打开「本程序下载 FFmpeg 用的目录」。
@@ -1553,7 +1936,8 @@ pub fn run() {
                 match sidecar
                     .send_command(
                         "check_update",
-                        serde_json::json!({"current_version": current_version, "sources": ["github"]}),
+                        // 启动自检同样不带 sources：见 `check_update` 命令里的说明
+                        serde_json::json!({"current_version": current_version}),
                     )
                     .await
                 {
@@ -1711,6 +2095,19 @@ pub fn run() {
             ffmpeg_status,
             ffmpeg_download_start,
             ffmpeg_download_status,
+            mirror_status,
+            mirror_devices,
+            mirror_connect,
+            mirror_start,
+            mirror_stop,
+            mirror_set_tool_path,
+            update_release_info,
+            update_download_start,
+            update_download_status,
+            update_download_cancel,
+            update_install_plan,
+            update_apply,
+            open_update_dir,
             open_ffmpeg_dir,
             notify_os,
             export_logs,

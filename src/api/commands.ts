@@ -7,7 +7,7 @@ import type { MediaInfo } from '@/types/media'
 import type { CastState, CastUrlInfo } from '@/types/cast'
 import type { AppSettings, NetworkInterfacesInfo, ParamSpec, SaveParamsResult } from '@/types/settings'
 import type { GuardDevicesResponse, GuardSettings } from '@/types/guard'
-import type { UpdateInfo } from '@/types/update'
+import type { UpdateAsset, UpdateApplyResult, UpdateInfo, UpdatePlan, UpdateTask } from '@/types/update'
 import type { LogPage, LogQuery } from '@/types/logs'
 import type {
   ScreenSources,
@@ -16,6 +16,14 @@ import type {
   FfmpegStatus,
   FfmpegDownloadTask,
 } from '@/types/screencast'
+import type {
+  MirrorStatus,
+  MirrorDevicesReport,
+  MirrorConnectResult,
+  MirrorStartParams,
+  MirrorStartResult,
+  MirrorState,
+} from '@/types/mirror'
 
 // ── Helpers ──
 
@@ -39,6 +47,66 @@ async function initInvoke() {
 }
 
 // ── Mock fallback for browser dev ──
+
+// 浏览器 dev 的手机镜像内存态：一台在线、一台未授权，面板能演示两种分支
+let mockMirrorRunning = false
+const mockMirrorDevices = [
+  {
+    serial: 'mock' + '-phone-online',
+    state: 'device',
+    online: true,
+    model: 'Pixel 7',
+    product: 'panther',
+    transport_id: '1',
+    wireless: false,
+  },
+  {
+    serial: '192.168.1.23:5555',
+    state: 'unauthorized',
+    online: false,
+    model: 'Xiaomi 13',
+    product: 'fuxi',
+    transport_id: '2',
+    wireless: true,
+  },
+]
+function mockMirrorTools() {
+  return [
+    {
+      key: 'adb' as const,
+      found: true,
+      path: '/opt/homebrew/bin/adb',
+      version: '1.0.41',
+      source: 'system' as const,
+      error: null,
+    },
+    {
+      key: 'scrcpy' as const,
+      found: true,
+      path: '/opt/homebrew/bin/scrcpy',
+      version: '5.0.1',
+      source: 'system' as const,
+      error: null,
+    },
+  ]
+}
+function mockMirrorStatus() {
+  return {
+    ok: true,
+    running: mockMirrorRunning,
+    serial: mockMirrorRunning ? 'mock' + '-phone-online' : null,
+    model: mockMirrorRunning ? 'Pixel 7' : null,
+    started_at: mockMirrorRunning ? new Date().toISOString() : null,
+    pid: mockMirrorRunning ? 4242 : null,
+    window: 'external' as const,
+    error: null,
+    platform: /Mac|iPhone|iPad/.test(navigator.platform) ? 'darwin' : 'win32',
+    tools: mockMirrorTools(),
+    install_commands: ['brew install scrcpy', 'brew install android-platform-tools'],
+    scrcpy_audio_supported: true,
+    scrcpy_audio_min_version: '2.0.0',
+  }
+}
 
 /** 浏览器 dev 的插件仓库（plugin_* 命令的内存态）
  *
@@ -200,7 +268,7 @@ const MOCK_DEVICES: Device[] = [
 const MOCK_SETTINGS: AppSettings = {
   usn: 'hancast-uuid-001',
   friendly_name: 'HanCast',
-  version: '2.4.11',
+  version: '2.4.12',
   media_port: 8080,
   default_device: null,
   network_interface: '',
@@ -264,6 +332,97 @@ function mockParamSpecs(): ParamSpec[] {
     value: mockParamOverrides[s.key] ?? s.default,
     overridden: s.key in mockParamOverrides,
   }))
+}
+
+// ── 应用内更新的 dev mock ────────────────────────────────────────────────
+// 默认「已是最新版」，与其他流程互不干扰；URL 加 ?mockUpdate=1 演「有新版」整条链路
+// （挑产物 → 下载进度 → 校验 → 装），?mockUpdate=slow 让下载停在半路方便验取消，
+// ?mockUpdate=fail 让下载失败（错误原文要能显示出来）。
+// 浏览器模式下没有壳层，「装」这一步只回 manual，不当成成功。
+let mockUpdateMode: 'off' | 'available' | 'slow' | 'fail' = 'off'
+if (typeof window !== 'undefined') {
+  const q = new URLSearchParams(window.location.search).get('mockUpdate') || ''
+  if (q === '1' || q === 'available' || q === 'slow' || q === 'fail') mockUpdateMode = q as typeof mockUpdateMode
+}
+// 远端版本不参与 sync-version 的版本替换（它替换的是字面量 `latest: 'x.y.z'`）：
+// 本机版本会被刷成当前版本，而「远端有 2.5.0」这件事必须由 mock 自己编出来。
+const MOCK_UPDATE_REMOTE = '2.5.0'
+const mockUpdateDownload = { active: false, ticks: 0, done: false, asset: '' }
+
+function mockUpdateOs(): string {
+  const ua = typeof navigator !== 'undefined' ? navigator.userAgent : ''
+  if (/Windows/.test(ua)) return 'windows'
+  if (/Mac|iPhone|iPad/.test(ua)) return 'macos'
+  return 'linux'
+}
+
+function mockUpdateAssets(os: string): UpdateAsset[] {
+  const url = (name: string) => `https://github.com/pingod/HanCast/releases/download/v${MOCK_UPDATE_REMOTE}/${name}`
+  const sha = (n: number) => n.toString(16).padStart(64, '0')
+  if (os === 'windows') {
+    return [{ name: `HanCast_${MOCK_UPDATE_REMOTE}_x64-setup.exe`, url: url(`x.exe`), size: 68_773_696,
+      sha256: sha(1), kind: 'nsis', os, arch: 'x86_64', arch_match: true, priority: 0 }]
+  }
+  if (os === 'macos') {
+    return [{ name: `HanCast_${MOCK_UPDATE_REMOTE}_aarch64.dmg`, url: url(`x.dmg`), size: 85_684_153,
+      sha256: sha(2), kind: 'dmg', os, arch: 'arm64', arch_match: true, priority: 0 }]
+  }
+  return [
+    { name: `HanCast_${MOCK_UPDATE_REMOTE}_amd64.AppImage`, url: url(`x.AppImage`), size: 203_909_624,
+      sha256: sha(3), kind: 'appimage', os, arch: 'x86_64', arch_match: true, priority: 0 },
+    { name: `HanCast_${MOCK_UPDATE_REMOTE}_amd64.deb`, url: url(`x.deb`), size: 55_858_054,
+      sha256: sha(4), kind: 'deb', os, arch: 'x86_64', arch_match: true, priority: 1 },
+    { name: `HanCast-${MOCK_UPDATE_REMOTE}-1.x86_64.rpm`, url: url(`x.rpm`), size: 55_864_152,
+      sha256: sha(5), kind: 'rpm', os, arch: 'x86_64', arch_match: true, priority: 2 },
+    { name: `hancast-${MOCK_UPDATE_REMOTE}-1-x86_64.pkg.tar.zst`, url: url(`x.pkg.tar.zst`), size: 52_701_758,
+      sha256: sha(6), kind: 'arch', os, arch: 'x86_64', arch_match: true, priority: 3 },
+  ]
+}
+
+function mockUpdateTask(): UpdateTask {
+  const os = mockUpdateOs()
+  const assets = mockUpdateAssets(os)
+  const picked = assets.find((a) => a.name === mockUpdateDownload.asset) || assets[0]
+  const base = {
+    status: 'pending' as const, asset: picked.name, kind: picked.kind,
+    version: MOCK_UPDATE_REMOTE, dest: `/mock/updates/${picked.name}`, url: picked.url,
+  }
+  if (mockUpdateDownload.done) {
+    return {
+      ...base, status: 'done', stage: 'done', percent: 100,
+      received: picked.size, total: picked.size, speed: 0, elapsed: 8,
+      via: '', resumed_from: 0,
+      sha256_expected: picked.sha256, sha256_actual: picked.sha256, verified: true,
+      note: '已按 GitHub 声明的 sha256 校验', error: null,
+    }
+  }
+  const ticks = mockUpdateDownload.ticks
+  if (mockUpdateMode === 'fail' && ticks >= 3) {
+    return {
+      ...base, status: 'error', stage: 'failed', percent: Math.min(99, ticks * 12),
+      received: ticks * 1_200_000, total: picked.size,
+      error: '下载安装包失败：直连 下载被截断（远端只给了一半，通常是连接被掐）—— 再点一次会从断点接着下',
+    }
+  }
+  // slow：卡在 45% 不动，专门给「取消」留窗口（取消之后由 cancel 分支落 cancelled）
+  if (mockUpdateMode === 'slow') {
+    const percent = Math.min(45, ticks * 9)
+    return { ...base, stage: 'downloading', percent, received: Math.round(picked.size * percent / 100),
+      total: picked.size, speed: 1_100_000, elapsed: ticks }
+  }
+  // 9 个轮询点走完一条完整链路：下载 → 校验摘要 → done
+  if (ticks >= 9) {
+    mockUpdateDownload.done = true
+    return mockUpdateTask()
+  }
+  if (ticks >= 8) {
+    return { ...base, stage: 'verifying', percent: 100, received: picked.size, total: picked.size, speed: 0, elapsed: ticks }
+  }
+  const percent = ticks * 12
+  return {
+    ...base, stage: 'downloading', percent, received: Math.round(picked.size * percent / 100),
+    total: picked.size, speed: 1_100_000, elapsed: ticks, resumed_from: 0,
+  }
 }
 
 // FFmpeg 运行依赖的 dev mock。默认「本机已装」，免得其他流程被牵动；
@@ -674,15 +833,99 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
       return true as T
     case 'save_guard_settings':
       return {} as T
-    case 'check_update':
+    case 'check_update': {
+      if (mockUpdateMode === 'off') {
+        return {
+          has_update: false,
+          current: '2.4.12',
+          latest: '2.4.12',
+          url: '',
+          body: '',
+          source: 'github',
+        } as T
+      }
+      const os = mockUpdateOs()
+      const assets = mockUpdateAssets(os)
       return {
-        has_update: false,
-        current: '2.4.11',
-        latest: '2.4.11',
-        url: '',
-        body: '',
+        has_update: true,
+        current: '2.4.12',
+        // 远端版本刻意不用字面量，见 MOCK_UPDATE_REMOTE
+        latest: MOCK_UPDATE_REMOTE,
+        url: `https://github.com/pingod/HanCast/releases/tag/v${MOCK_UPDATE_REMOTE}`,
+        body: '### 变更\n- 应用内更新：发现新版可以直接下、直接装\n- 国内镜像开关搬进更新弹窗',
         source: 'github',
+        platform: { os, arch: 'x86_64' },
+        assets,
+        selected: assets[0],
+        no_asset_for_platform: '',
       } as T
+    }
+    case 'update_release_info': {
+      const os = mockUpdateOs()
+      const assets = mockUpdateAssets(os)
+      return {
+        tag: `v${MOCK_UPDATE_REMOTE}`, version: MOCK_UPDATE_REMOTE,
+        release_url: `https://github.com/pingod/HanCast/releases/tag/v${MOCK_UPDATE_REMOTE}`,
+        platform: { os, arch: 'x86_64' }, assets, selected: assets[0],
+        no_asset_for_platform: '', via: '',
+      } as T
+    }
+    case 'update_download_start': {
+      mockUpdateDownload.active = true
+      mockUpdateDownload.done = false
+      mockUpdateDownload.ticks = 0
+      mockUpdateDownload.asset = String(args?.asset || '')
+      const picked = mockUpdateAssets(mockUpdateOs()).find((a) => a.name === mockUpdateDownload.asset)
+        || mockUpdateAssets(mockUpdateOs())[0]
+      mockUpdateDownload.asset = picked.name
+      return { ...mockUpdateTask(), status: 'pending', stage: 'connecting', percent: 0,
+        received: 0, speed: 0, asset: picked.name, kind: picked.kind } as T
+    }
+    case 'update_download_status': {
+      if (!mockUpdateDownload.active && !mockUpdateDownload.done) return { status: 'idle' } as T
+      if (!mockUpdateDownload.done) mockUpdateDownload.ticks += 1
+      return mockUpdateTask() as T
+    }
+    case 'update_download_cancel':
+      mockUpdateDownload.active = false
+      mockUpdateDownload.done = false
+      mockUpdateDownload.ticks = 0
+      return { status: 'cancelled', stage: 'cancelled', error: '已取消下载（半份文件已删除）' } as T
+    case 'update_install_plan': {
+      const task = mockUpdateTask()
+      // 与壳层同一分叉：能自动装的回真实 kind，要提权的回 'command' + 命令原文
+      const commandKind = ['deb', 'rpm', 'arch', 'msi']
+      const manual = commandKind.includes(String(task.kind))
+      return {
+        ok: true, kind: manual ? 'command' : task.kind, asset_kind: task.kind,
+        path: task.dest || '', asset: task.asset, version: task.version,
+        sha256: task.sha256_actual, verified: true, auto: !manual,
+        command: manual ? `sudo apt install "${task.dest || ''}"` : undefined,
+      } as T
+    }
+    case 'update_apply': {
+      const task = mockUpdateTask()
+      // 浏览器里没有壳层：能自动装的那条按「已开始安装」回（真应用会直接退出，
+      // 界面就停在「正在退出并安装…」，这条正是要验的形态）；要提权的回 manual
+      const commandKind = ['deb', 'rpm', 'arch', 'msi']
+      if (commandKind.includes(String(task.kind))) {
+        // manual 这条与壳层同形：把 plan 一起带回，界面直接从里面取命令
+        return {
+          ok: false, manual: true,
+          plan: {
+            kind: 'command', asset_kind: task.kind, path: task.dest || '',
+            asset: task.asset, version: task.version, auto: false,
+            command: `sudo apt install "${task.dest || ''}"`,
+          },
+        } as T
+      }
+      return {
+        ok: true, kind: task.kind, path: task.dest || '',
+        log: '/mock/updates/update-apply.log', helper: '/tmp/hancast-apply.sh',
+      } as T
+    }
+    case 'open_update_dir':
+      return { ok: true, path: '/mock/updates' } as T
     case 'ignore_update_version':
       return true as T
     case 'is_store_version':
@@ -769,6 +1012,35 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
     }
     case 'open_ffmpeg_dir':
       return { ok: true, path: mockFfmpegStatus().managed_dir } as T
+    case 'mirror_status':
+      return mockMirrorStatus() as T
+    case 'mirror_devices':
+      return { devices: mockMirrorDevices, error: null, tools: mockMirrorTools() } as T
+    case 'mirror_connect': {
+      const address = String(args?.address ?? '').trim()
+      if (!/^([A-Za-z0-9._\-]+|\[[0-9a-fA-F:]+\]):\d{1,5}$/.test(address)) {
+        return { ok: false, error: '地址格式应为 IP:端口（例如 192.168.1.20:5555）' } as T
+      }
+      return { ok: true, address, message: `connected to ${address}` } as T
+    }
+    case 'mirror_start': {
+      const serial = String((args?.params as { serial?: string } | undefined)?.serial ?? '')
+      if (!serial) return { ok: false, error: '请先选择一台设备' } as T
+      mockMirrorRunning = true
+      return { ...mockMirrorStatus(), ok: true } as T
+    }
+    case 'mirror_stop':
+      mockMirrorRunning = false
+      return { ...mockMirrorStatus(), ok: true, stopped: true } as T
+    case 'mirror_set_tool_path': {
+      const tool = String(args?.tool ?? '')
+      const path = String(args?.path ?? '').trim()
+      if (tool !== 'adb' && tool !== 'scrcpy') return { ok: false, error: `未知工具：${tool}` } as T
+      if (path && !path.startsWith('/')) {
+        return { ok: false, error: 'mock: 请填写绝对路径' } as T
+      }
+      return { ok: true } as T
+    }
     case 'add_device': {
       const addr = String(args?.address ?? '').trim()
       if (!addr) throw new Error('请输入设备 IP 或描述地址')
@@ -1553,6 +1825,67 @@ export async function ignoreUpdateVersion(version: string): Promise<boolean> {
 
 // ── Microsoft Store Detection ──
 
+// ── 应用内更新（v2.4.12）──
+//
+// 与 FFmpeg 依赖下载同一套形状：start 立即返回、进度靠 status 轮询（1 秒一次），
+// 差别是多了一条 cancel——安装包 55~204 MB，用户等得起但有权走开。
+
+/** 某版本的产物清单（version 空 = 语义最新的已发布版） */
+export async function updateReleaseInfo(version?: string): Promise<UpdateInfo & {
+  tag?: string
+  release_url?: string
+  platform?: { os: string; arch: string }
+  assets?: UpdateAsset[]
+  selected?: UpdateAsset | null
+  no_asset_for_platform?: string
+}> {
+  const invoke = await initInvoke()
+  return invoke('update_release_info', { version: version || '' })
+}
+
+/** 起一次安装包下载（同名任务进行中时幂等返回当前任务） */
+export async function updateDownloadStart(asset?: string, version?: string): Promise<UpdateTask> {
+  const invoke = await initInvoke()
+  return invoke<UpdateTask>('update_download_start', {
+    asset: asset || '', version: version || '',
+  })
+}
+
+export async function updateDownloadStatus(): Promise<UpdateTask> {
+  const invoke = await initInvoke()
+  return invoke<UpdateTask>('update_download_status')
+}
+
+/** 请求取消；**不等它停**，终态由下一次 status 给出 */
+export async function updateDownloadCancel(): Promise<UpdateTask> {
+  const invoke = await initInvoke()
+  return invoke<UpdateTask>('update_download_cancel')
+}
+
+/** 已下好的产物该怎么装 */
+export async function updateInstallPlan(): Promise<UpdatePlan> {
+  const invoke = await initInvoke()
+  return invoke<UpdatePlan>('update_install_plan')
+}
+
+/**
+ * 退出并安装。
+ *
+ * 成功返回后本进程就没了，所以调用方**不要**等它的结果做任何收尾——
+ * 界面要在调用之前就把话说完（「正在退出并安装」）。
+ * `manual: true` 表示这类产物要提权（deb/rpm/Arch），命令在 `plan.command` 里。
+ */
+export async function updateApply(): Promise<UpdateApplyResult> {
+  const invoke = await initInvoke()
+  return invoke<UpdateApplyResult>('update_apply')
+}
+
+/** 打开存放安装包目录（路径由 Sidecar 报，前端不传路径） */
+export async function openUpdateDir(): Promise<{ ok: boolean; path?: string; error?: string }> {
+  const invoke = await initInvoke()
+  return invoke('open_update_dir')
+}
+
 export async function isStoreVersion(): Promise<boolean> {
   try {
     const invoke = await initInvoke()
@@ -1610,6 +1943,41 @@ export async function ffmpegDownloadStatus(): Promise<FfmpegDownloadTask> {
 export async function openFfmpegDir(): Promise<{ ok: boolean; path?: string; error?: string }> {
   const invoke = await initInvoke()
   return invoke('open_ffmpeg_dir')
+}
+
+// ── 手机镜像接收（Android → 本机）──
+
+export async function getMirrorStatus(refresh = false): Promise<MirrorStatus> {
+  const invoke = await initInvoke()
+  return invoke<MirrorStatus>('mirror_status', { refresh })
+}
+
+export async function listMirrorDevices(): Promise<MirrorDevicesReport> {
+  const invoke = await initInvoke()
+  return invoke<MirrorDevicesReport>('mirror_devices')
+}
+
+export async function connectMirrorDevice(address: string): Promise<MirrorConnectResult> {
+  const invoke = await initInvoke()
+  return invoke<MirrorConnectResult>('mirror_connect', { address })
+}
+
+export async function startMirror(params: MirrorStartParams): Promise<MirrorStartResult> {
+  const invoke = await initInvoke()
+  return invoke<MirrorStartResult>('mirror_start', { params })
+}
+
+export async function stopMirror(): Promise<{ ok: boolean; stopped?: boolean } & Partial<MirrorState>> {
+  const invoke = await initInvoke()
+  return invoke('mirror_stop')
+}
+
+export async function setMirrorToolPath(
+  tool: 'adb' | 'scrcpy',
+  path: string,
+): Promise<{ ok: boolean; error?: string } & Partial<MirrorStatus>> {
+  const invoke = await initInvoke()
+  return invoke('mirror_set_tool_path', { tool, path })
 }
 
 // ── 系统通知 ────────────────────────────────────────────────

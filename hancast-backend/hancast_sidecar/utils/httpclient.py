@@ -290,7 +290,11 @@ class CurlResponse:
             body = self._raw.content or b""
             chunks = (body[i:i + chunk_size] for i in range(0, len(body), max(chunk_size, 1)))
             return list(chunks)
-        return self._raw.iter_content(chunk_size=chunk_size, decode_unicode=decode_unicode)
+        # 流式侧**不**转交 chunk_size：curl_cffi 直接忽略它并打
+        # `CurlCffiWarning: chunk_size is ignored, there is no way to tell curl that`，
+        # 而这条警告在每次 FFmpeg / 安装包下载里都会刷出来（日志面板与 CI 日志都是噪声）。
+        # 分块大小由 curl 的内部分片决定，调用方按到达字节累计即可。
+        return self._raw.iter_content(decode_unicode=decode_unicode)
 
     def close(self) -> None:
         try:

@@ -29,7 +29,10 @@ REF_RE = re.compile(r'(?<!\.)([A-Za-z0-9_\-./@%\u4e00-\u9fff]+\.(?:py|rs|vue|ts|
 RUNTIME_NAMES = {'hancast_setting.json', 'cookies.json', 'device_identity.json',
                  'rules.json', 'manifest.json', 'package-lock.json', 'tsconfig.json',
                  'window_config.json', 'state.json', 'knowledge-graph.json',
-                 'settings.json', 'config.json', 'cast_failures.json', 'failures.json'}
+                 'settings.json', 'config.json', 'cast_failures.json', 'failures.json',
+                 # 应用内更新（v2.4.12）在运行时写的三份：安装脚本落在 temp_dir()，
+                 # 日志落在 <配置目录>/updates/，都不入库（lib.rs 的 write_apply_helper）
+                 'hancast-apply.cmd', 'hancast-apply.sh', 'update-apply.log'}
 
 # 行内含这些词时，指向不存在的文件是刻意的（历史、上游、或「没有这个文件」的否定句）
 HIST_MARKERS = ('曾', '删', '已于', '移除', '退役', '历史', '原 ', '上游',

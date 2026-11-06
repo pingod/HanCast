@@ -189,10 +189,19 @@ async function fixture(locale = 'en-US') {
   // 注意两点：① pinia 会把 setup 返回值**深拷贝**成自己的 state，所以状态只能通过
   // store 代理读写（拿原始对象改是改不到的）；② 方法里的 `this` 绑在 store 上，
   // 计数器必须写成 state 属性再用 `this.x += 1`，否则测试读不到。
-  imports['@/stores/playlist'] = { usePlaylistStore: pinia.defineStore('playlist', () => ({
+  imports['@/stores/playlist'] = {
+    // cast.ts 除了 store 还从本模块 import 了 isImageMedia / IMAGE_DWELL_DEFAULT
+    // （图片项的停留计时，v2.4.12）。桩漏了具名导出就会在 castQueueItem 里抛
+    // 「isImageMedia is not a function」——这类「桩没跟住真实 import 清单」的失效
+    // 在本仓库已经踩过三次，加能力时同步补桩。
+    isImageMedia: (media) => (media?.mime_type ?? '').toLowerCase().startsWith('image/'),
+    IMAGE_DWELL_DEFAULT: 8,
+    usePlaylistStore: pinia.defineStore('playlist', () => ({
     hasQueue: false, items: [], playingId: null, playingIndex: 0, total: 0,
     nextCalls: 0, resetCalls: 0, nextValue: null, stopAfterCurrent: false,
     folder: '', playMode: 'order',
+    // 图片停留：cast.ts 到点续播要读它（默认 8 秒，与 src/stores/playlist.ts 一致）
+    imageDwellSeconds: 8, hasImageItems: false,
     // v2.4.8 的 setupRemoteUiSync 直接读 playlist.playableItems（真实现是
     // computed(() => items.filter(it => selected.has(it.id)))，见 src/stores/playlist.ts:118-119）。
     // 桩里没有它就会在去抖回调里抛 TypeError 并让整套用例变红；这里把 items 全当已选中，

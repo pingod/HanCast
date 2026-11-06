@@ -5,6 +5,13 @@
 //   ③ 用户手动点「停止投屏」后，设备那条 STOPPED 不能被当成「播完」再续投
 //   ④ 投单个文件时必须把上一个文件夹队列作废（否则点投屏还在投旧列表）
 //   ⑤ 投屏历史按设备记账：队列只记一条、单文件另记一条
+//   ⑥～⑨ 队列里的**图片项**（v2.4.12）：图片没有「播完」那一刻（后端对图片跳过进度
+//      轮询，models/session.py:88-91），续播只能由发送端计时。现场是 Windows 投
+//      「JOJO S05」39 集 + Cover.jpg：自然序把封面图排在第 1 项，投出去就再也动不了。
+//      ⑥ 图片项到点必须自动投下一项（不等 STOPPED）
+//      ⑦ 视频项不许被计时提前跳走（只有图片计时）
+//      ⑧ 点停止后在途计时作废；暂停时不跳走、恢复后照样续播
+//      ⑨ 停留档位可切换并落盘；repeat-one 下不反复重推同一张图
 //
 // 做法：把真实的 src/stores/playlist.ts 与 src/stores/cast.ts 用 TypeScript 转译后
 // 在隔离 vm 里加载（@/api/commands、事件、pinia 都打桩），直接驱动 store 的公开函数，
@@ -49,10 +56,26 @@ function makeClock() {
         job.fn()
       }
     },
+    // 按延时长度筛一次性延时：判据⑧用它证明「停止真的撤掉了停留计时器」，
+    // 而不是只靠代次/用户停止标记兜住（那样断言没有牙齿）。
+    // 队列里别处也用 setTimeout（换集去抖 1500ms、遥控器镜像去抖等），
+    // 所以只能按「这条定时器是停留时长那个 ms」来认，不能数总量。
+    pendingMs(ms) { return [...jobs.values()].filter((j) => !j.repeat && j.ms === ms).length },
   }
 }
 
-function loadModules(api, clock, listeners) {
+// 可控的内存 localStorage：判据⑨要看「档位到底落盘了没」
+function makeStorage() {
+  const data = new Map()
+  return {
+    data,
+    getItem: (k) => (data.has(k) ? data.get(k) : null),
+    setItem: (k, v) => { data.set(k, String(v)) },
+    removeItem: (k) => { data.delete(k) },
+  }
+}
+
+function loadModules(api, clock, listeners, storage) {
   const imports = {
     vue: { ...vue, Transition: vue.BaseTransition },
     pinia,
@@ -85,7 +108,7 @@ function loadModules(api, clock, listeners) {
       console: { error() {}, log() {}, warn() {} },
       setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout,
       setInterval: clock.setInterval, clearInterval: clock.clearInterval,
-      localStorage: { getItem: () => null, setItem() {} },
+      localStorage: storage,
       window: {}, Math, Date, JSON, Object, Array, Set, Map, Number, String, Boolean, Promise, parseInt, parseFloat,
     }
     vm.runInNewContext(code, ctx, { filename: file })
@@ -118,6 +141,9 @@ function makeApi(state) {
     seekCast: async () => {}, setVolume: async (v) => v, setMute: async () => {},
     getAutostart: async () => false, notify: async () => {},
     setAutostart: async () => ({}), listFolderMedia: async () => ({ folder: '/f', files: [] }),
+    // cast.ts 的遥控器 UI 镜像去抖与分享解析：桩必须跟住 src/stores/cast.ts 的 import 清单，
+    // 否则 clock.flush() 一放到那个去抖定时器就会炸在这里。
+    remoteUpdateUi: async () => ({}), resolveShare: async () => ({ ok: false, error: 'stub' }),
   }
   const api = {}
   for (const k of Object.keys(base)) api[k] = (...a) => { calls.push({ fn: k, args: a }); return base[k](...a) }
@@ -129,11 +155,22 @@ function mkMedia(uri) {
   return { uri, title: uri.split('/').pop(), mime_type: 'video/mp4', thumbnail: null, file_size: 1, duration: null, qualities: [], quality: '', media_type: 'file' }
 }
 
+/** 队列里的图片项：后端 list_folder 对 .jpg 给的就是 image/jpeg */
+function mkImageMedia(uri) {
+  return { ...mkMedia(uri), mime_type: 'image/jpeg' }
+}
+
+/** 项 id 与 src/stores/playlist.ts 的 makeId 无关，测试里只要稳定即可 */
+function mkItems(list) {
+  return list.map((m, i) => ({ id: `t${i}`, media: m }))
+}
+
 async function run() {
   const clock = makeClock()
   const listeners = new Map()
   const api = makeApi()
-  const { playlistMod, castMod } = loadModules(api, clock, listeners)
+  const storage = makeStorage()
+  const { playlistMod, castMod } = loadModules(api, clock, listeners, storage)
 
   // 在组件实例里实例化 store：cast.ts 的 onMounted(() => setupListeners()) 才会真正注册监听。
   // 用最小的自定义渲染器（参考 tools/verify-cast-ui.cjs），不需要真实 DOM。
@@ -275,6 +312,114 @@ async function run() {
     assert.equal(fileEntries.length, 1, `单文件历史应为 1 条，实际 ${fileEntries.length}`)
     assert.equal(fileEntries[0].uri, 'file:///g/other.mp4')
     assert.ok(history.deviceIdsByRecency().includes('dev-1'))
+  })
+
+  // ── 判据 G～K：队列里的**图片项**（2026-11-06 现场回归）──
+  // 现场：Windows 投 `JOJO S05 黄金之风`（39 集 mp4 + Cover.jpg）到 macOS，
+  // 自然序把封面图排在第 1 项；图片不会让设备自报 STOPPED，于是 39 集一集都不会续。
+  const startsFor = (id) => api._calls.filter((c) => c.fn === 'startCast' && c.args[0] === id).length
+  const lastStartFor = (id) => api._calls.filter((c) => c.fn === 'startCast' && c.args[0] === id).pop()
+
+  async function setupImageQueue(mode = 'sequential') {
+    playlist.playMode = mode
+    playlist.stopAfterCurrent = false
+    playlist.items = mkItems([mkImageMedia('/f/Cover.jpg'), mkMedia('/f/1.mp4'), mkMedia('/f/2.mp4')])
+    playlist.selected = new Set(playlist.items.map((it) => it.id))
+    playlist.folder = '/f'
+    playlist.playingId = null
+  }
+
+  await setupImageQueue()
+  ok('前置：图片停留默认 8 秒', () => assert.equal(playlist.imageDwellSeconds, 8))
+
+  const gBefore = startsFor('dev-img')
+  assert.equal(await cast.castQueueItem('dev-img', playlist.items[0], { startsQueue: true }), true)
+  ok('图片项刚投出去时没有任何续播（设备不会报 STOPPED，判据要的是计时之后）', () => {
+    assert.equal(startsFor('dev-img'), gBefore + 1, `只应有 Cover.jpg 那一次起播，实际 ${gBefore} → ${startsFor('dev-img')}`)
+    assert.equal(playlist.playingId, 't0')
+  })
+  clock.flush()
+  await setTimeout_(0)
+  ok('图片项：停留计时到点自动投下一项（不等设备报 STOPPED）', () => {
+    assert.equal(startsFor('dev-img'), gBefore + 2, `应再发起一次 startCast，实际 ${gBefore} → ${startsFor('dev-img')}`)
+    assert.equal(lastStartFor('dev-img').args[1], '/f/1.mp4', `续播的应是第 1 集，实际 ${lastStartFor('dev-img').args[1]}`)
+    assert.equal(playlist.playingId, 't1')
+  })
+
+  await setupImageQueue()
+  const hBefore = startsFor('dev-vid')
+  await cast.castQueueItem('dev-vid', playlist.items[1], { startsQueue: true })
+  clock.flush()
+  await setTimeout_(0)
+  ok('视频项不会被停留计时提前跳走（只有图片才计时）', () => {
+    assert.equal(startsFor('dev-vid'), hBefore + 1, `视频项只应起播一次，实际 ${hBefore} → ${startsFor('dev-vid')}`)
+    assert.equal(playlist.playingId, 't1')
+  })
+
+  await setupImageQueue()
+  const iBefore = startsFor('dev-stop')
+  const dwellMs = () => playlist.imageDwellSeconds * 1000
+  await cast.castQueueItem('dev-stop', playlist.items[0], { startsQueue: true })
+  ok('前置：图片项投出去后确实挂着一个停留计时', () => {
+    assert.equal(clock.pendingMs(dwellMs()), 1, `应有一个 ${dwellMs()}ms 的停留计时，实际 ${clock.pendingMs(dwellMs())}`)
+  })
+  await cast.stopCast('dev-stop')
+  ok('点停止必须把在途的停留计时撤掉（不许留个定时器在那儿到点拉起设备）', () => {
+    assert.equal(clock.pendingMs(dwellMs()), 0, `停止后停留计时应清零，实际还剩 ${clock.pendingMs(dwellMs())}`)
+  })
+  clock.flush()
+  await setTimeout_(0)
+  ok('停止后不会再投下一项', () => {
+    assert.equal(startsFor('dev-stop'), iBefore + 1, `停止后不该再 startCast，实际 ${iBefore} → ${startsFor('dev-stop')}`)
+  })
+
+  await setupImageQueue()
+  const jBefore = startsFor('dev-pause')
+  await cast.castQueueItem('dev-pause', playlist.items[0], { startsQueue: true })
+  cast.sessions['dev-pause'].status = 'paused'
+  clock.flush()
+  await setTimeout_(0)
+  ok('暂停时图片不跳走（计时重新挂起，尊重用户按下的暂停）', () => {
+    assert.equal(startsFor('dev-pause'), jBefore + 1, `暂停期间不该续播，实际 ${jBefore} → ${startsFor('dev-pause')}`)
+  })
+  cast.sessions['dev-pause'].status = 'playing'
+  clock.flush()
+  await setTimeout_(0)
+  ok('恢复播放后照样续下一项', () => {
+    assert.equal(startsFor('dev-pause'), jBefore + 2, `恢复后应续播，实际 ${jBefore} → ${startsFor('dev-pause')}`)
+    assert.equal(lastStartFor('dev-pause').args[1], '/f/1.mp4')
+  })
+
+  await setupImageQueue('repeat-one')
+  const kBefore = startsFor('dev-repeat')
+  await cast.castQueueItem('dev-repeat', playlist.items[0], { startsQueue: true })
+  clock.flush()
+  await setTimeout_(0)
+  ok('单曲循环下图片不反复重推同一张（每 N 秒闪一次）', () => {
+    assert.equal(startsFor('dev-repeat'), kBefore + 1, `不该重推，实际 ${kBefore} → ${startsFor('dev-repeat')}`)
+  })
+
+  // ── 判据 L：停留档位可切、可落盘、非法值回默认 ──
+  ok('停留档位可切换并落盘（关掉程序再开还在）', () => {
+    assert.equal(playlist.imageDwellSeconds, 8)
+    playlist.cycleImageDwell()
+    assert.equal(playlist.imageDwellSeconds, 15, `8 的下一档应是 15，实际 ${playlist.imageDwellSeconds}`)
+    const raw = storage.data.get('hancast.playlist.queue')
+    assert.ok(raw, '队列应已写盘')
+    assert.equal(JSON.parse(raw).imageDwellSeconds, 15)
+    playlist.setImageDwellSeconds(30)
+    assert.equal(JSON.parse(storage.data.get('hancast.playlist.queue')).imageDwellSeconds, 30)
+    playlist.setImageDwellSeconds(0)
+    assert.equal(playlist.imageDwellSeconds, 8, '非法值应回默认 8')
+  })
+
+  ok('队列含图片项时界面才该露出档位（纯视频队列不该看见）', () => {
+    playlist.items = mkItems([mkImageMedia('/f/Cover.jpg'), mkMedia('/f/1.mp4')])
+    playlist.selected = new Set(playlist.items.map((it) => it.id))
+    assert.equal(playlist.hasImageItems, true)
+    playlist.items = mkItems([mkMedia('/f/1.mp4'), mkMedia('/f/2.mp4')])
+    playlist.selected = new Set(playlist.items.map((it) => it.id))
+    assert.equal(playlist.hasImageItems, false, '纯视频队列不该显示图片停留档位')
   })
 
   console.log(`\n${passed} passed, ${failed} failed`)

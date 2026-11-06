@@ -11,6 +11,33 @@ export interface QueueItem {
 
 export type PlayMode = 'sequential' | 'shuffle' | 'repeat-one'
 
+/**
+ * 队列里图片项的停留时长档位（秒）。图片在电视上不会自己「播完」，
+ * 只能由发送端计时续播（`src/stores/cast.ts` 的 `armImageDwell`）。
+ */
+export const IMAGE_DWELL_STEPS: readonly number[] = [5, 8, 15, 30]
+/** 默认停留：够看清封面/照片，又不至于让一叠照片把剧集队列拖死 */
+export const IMAGE_DWELL_DEFAULT = 8
+
+/** 与后端 `media/parser.py:23` 的 SUPPORTED_IMAGE 同一份口径 */
+const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'])
+
+/**
+ * 这一项是不是「图片」。是图片就不能按视频那样等「播完」信号：
+ * 接收端 mpv 挂着静帧不发 end-file，后端对图片也直接跳过进度轮询
+ * （`hancast-backend/hancast_sidecar/models/session.py:88-91`），
+ * 于是设备永远不会自报 STOPPED，队列就卡在这一项上。
+ * mime 优先；老版本落盘的条目没有 mime 时按后缀兜底。
+ */
+export function isImageMedia(media?: { mime_type?: string; uri?: string } | null): boolean {
+  if (!media) return false
+  const mime = (media.mime_type ?? '').toLowerCase()
+  if (mime) return mime.startsWith('image/')
+  const uri = media.uri ?? ''
+  const dot = uri.lastIndexOf('.')
+  return dot >= 0 && IMAGE_EXTS.has(uri.slice(dot).toLowerCase())
+}
+
 /** 顺序记忆落盘：{ [folder]: 有序的 uri 列表 } */
 const ORDER_KEY = 'hancast.playlist.order'
 /** 队列本体落盘：关掉程序再打开还在，不用重新挑一遍文件夹 */
@@ -42,6 +69,8 @@ interface PersistedQueue {
   folder: string
   playMode: PlayMode
   stopAfterCurrent: boolean
+  /** 图片项在队列里停几秒（v2.4.12） */
+  imageDwellSeconds: number
 }
 
 function loadQueue(): PersistedQueue | null {
@@ -63,6 +92,8 @@ function loadQueue(): PersistedQueue | null {
       playMode: (['sequential', 'shuffle', 'repeat-one'].includes(obj.playMode)
         ? obj.playMode : 'sequential') as PlayMode,
       stopAfterCurrent: obj.stopAfterCurrent === true,
+      imageDwellSeconds: typeof obj.imageDwellSeconds === 'number' && obj.imageDwellSeconds > 0
+        ? obj.imageDwellSeconds : IMAGE_DWELL_DEFAULT,
     }
   } catch {
     return null
@@ -113,6 +144,11 @@ export const usePlaylistStore = defineStore('playlist', () => {
   const playMode = ref<PlayMode>(restored?.playMode ?? 'sequential')
   /** 播完当前这一项就停，不自动续下一集（睡前看完一集就够用） */
   const stopAfterCurrent = ref<boolean>(restored?.stopAfterCurrent ?? false)
+  /**
+   * 队列里图片项停几秒再续下一项。图片没有「播完」这一说（设备不会报 STOPPED），
+   * 不计时整个文件夹就会卡死在第一张封面图上，所以这个时长必须在发送端。
+   */
+  const imageDwellSeconds = ref<number>(restored?.imageDwellSeconds ?? IMAGE_DWELL_DEFAULT)
 
   /** 参与播放的项（按队列顺序、已勾选） */
   const playableItems = computed(() =>
@@ -124,6 +160,8 @@ export const usePlaylistStore = defineStore('playlist', () => {
     playingId.value ? playableItems.value.findIndex((it) => it.id === playingId.value) + 1 : 0
   )
   const hasQueue = computed(() => items.value.length > 0)
+  /** 队列里有图片项才需要在界面上露出「图片停留」这个档位（纯视频队列不该看见它） */
+  const hasImageItems = computed(() => playableItems.value.some((it) => isImageMedia(it.media)))
 
   /** 把当前队列整体写盘（每次变更后调用） */
   function persist() {
@@ -133,6 +171,7 @@ export const usePlaylistStore = defineStore('playlist', () => {
       folder: folder.value,
       playMode: playMode.value,
       stopAfterCurrent: stopAfterCurrent.value,
+      imageDwellSeconds: imageDwellSeconds.value,
     })
   }
 
@@ -310,6 +349,23 @@ export const usePlaylistStore = defineStore('playlist', () => {
     persist()
   }
 
+  /** 直接指定图片停留秒数（<=0 视为没设，回默认值） */
+  function setImageDwellSeconds(seconds: number) {
+    const n = Number.isFinite(seconds) && seconds > 0 ? Math.round(seconds) : IMAGE_DWELL_DEFAULT
+    if (n === imageDwellSeconds.value) return
+    imageDwellSeconds.value = n
+    persist()
+  }
+
+  /** 队列面板上循环切换档位：5 → 8 → 15 → 30 → 5 */
+  function cycleImageDwell() {
+    const i = IMAGE_DWELL_STEPS.indexOf(imageDwellSeconds.value)
+    imageDwellSeconds.value = i < 0
+      ? IMAGE_DWELL_STEPS[0]
+      : IMAGE_DWELL_STEPS[(i + 1) % IMAGE_DWELL_STEPS.length]
+    persist()
+  }
+
   /**
    * 当前项播完后该投哪一项，返回 null 表示队列结束（不自动续播）。
    * - repeat-one：重复当前项
@@ -363,10 +419,12 @@ export const usePlaylistStore = defineStore('playlist', () => {
     error,
     playMode,
     stopAfterCurrent,
+    imageDwellSeconds,
     playableItems,
     total,
     playingIndex,
     hasQueue,
+    hasImageItems,
     reset,
     isSelected,
     toggleSelected,
@@ -382,6 +440,8 @@ export const usePlaylistStore = defineStore('playlist', () => {
     moveDown,
     removeItem,
     setPlayMode,
+    setImageDwellSeconds,
+    cycleImageDwell,
     nextItem,
     manualNext,
     manualPrev,

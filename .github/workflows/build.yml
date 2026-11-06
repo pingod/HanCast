@@ -4,13 +4,23 @@
 #   - 仓库里 mpv/ 目录被 gitignore（~120MB，未提交）。CI 会为每个平台准备 MPV：
 #       * macOS  / Windows : 从 mpv-player/mpv 官方 Release 下载对应平台二进制
 #       * Linux          : 通过 apt 安装 mpv，再复制其二进制
-#   - 不执行代码签名。
+#   - 不做付费证书签名；macOS 产物做一次 ad-hoc 深签拿稳定 Identifier（见「macOS」矩阵里的重签步骤）。
 #   - 前端构建 + sidecar(Nuitka) 打包由 tauri.conf.json 的 beforeBuildCommand 自动完成，
 #     CI 只需装好工具链、放好 mpv，然后调用 `tauri build`。
 #
 # 触发：
-#   - push 标签 v*  → 自动构建并上传 draft Release
-#   - 手动 workflow_dispatch → 构建；只有 ref 是 tag 且勾选 make_release 时才发布
+#   - push 标签 v*  → 自动构建并**直接 publish** GitHub Release（产物不齐就失败）
+#   - 手动 workflow_dispatch → 构建；ref 是 tag 且勾选 make_release 时建 **draft** Release
+#
+#   为什么 tag 推送不再留 draft（v2.4.12 改，2026-11-06 对账）：draft 要人来点 publish，
+#   验收没做完就被下一版取代，孤儿 draft 于是越堆越多——实测 22 个从未公开、占全部
+#   release 的一半，白占 1.67 GiB release-storage。更要命的是 `releases/latest` **看不见
+#   draft**：draft 烂在那儿而线上更新检查永远报旧版本，用户端表现为「明明发了版却提示没有更新」。
+#   现在 publish 与产物齐整绑在一条闸门里，缺产物就不发（发一条缺 Windows 安装包的 release
+#   比不发更糟，v2.3.8 就是这么欠下一条需要专门解释的记录）。
+#   验收没做完就不打 tag；已经打完 tag 要撤回，用 `gh release delete <tag> --yes`（留 tag）。
+#   发布面体检：`python3 tools/audit-releases.py`（另有 .github/workflows/release-audit.yml
+#   每周把它跑一遍）。
 
 name: Build Installers
 
@@ -21,7 +31,7 @@ on:
   workflow_dispatch:
     inputs:
       make_release:
-        description: "构建成功后创建 draft GitHub Release"
+        description: "构建成功后创建 draft GitHub Release（仅手动触发；tag 推送一律直接 publish）"
         type: boolean
         default: false
 
@@ -339,6 +349,24 @@ jobs:
           grep -q '"capture"' /tmp/sc-src.json \
             || { echo "::error::list_screen_sources 的返回里没有 capture 字段（wlgrab 模块没进包？）"; head -c 400 /tmp/sc-src.json; exit 1; }
           echo "list_screen_sources OK"
+
+          echo "=== 第三条：update_download_status，断言 update/manager.py 进了冻结二进制 ==="
+          # commands.py 的 handler 是**函数内** `from .update import manager`，Nuitka 漏收
+          # `hancast_sidecar.update` 时前两条命令照样绿，只有用户点「检查更新/下载」才炸
+          # ——与 curl_cffi 那次「源码里装了、包里没进」同一类坑。这条不发网络请求
+          # （空任务表也回 status/dir），专挑「模块能不能被 import」。
+          printf '{"id":3,"cmd":"update_download_status","params":{}}\n' \
+            | (cd "$X/usr/lib/HanCast" && timeout 90 ./hancast-sidecar) > /tmp/sc-upd.json 2>/tmp/sc-upd-err.log || true
+          grep -q '"success": true' /tmp/sc-upd.json \
+            || { echo "::error::update_download_status 失败（update 模块没进冻结包？）"; tail -20 /tmp/sc-upd-err.log; exit 1; }
+          grep -q '"dir"' /tmp/sc-upd.json \
+            || { echo "::error::update_download_status 没回 dir，壳层的 open_update_dir 会失败"; head -c 400 /tmp/sc-upd.json; exit 1; }
+          if grep -qE 'ModuleNotFoundError|ImportError' /tmp/sc-upd-err.log; then
+            echo "::error::update 模块导入失败"
+            tail -20 /tmp/sc-upd-err.log
+            exit 1
+          fi
+          echo "update_download_status OK"
           rm -rf "$X"
           echo "deb sidecar OK"
 
@@ -633,7 +661,7 @@ jobs:
           echo "version=$ver" >> "$GITHUB_OUTPUT"
 
   release:
-    name: Upload to draft Release
+    name: Publish GitHub Release (draft when manually triggered)
     needs: [build, read_version]
     if: >
       needs.build.result == 'success' &&
@@ -674,10 +702,48 @@ jobs:
           echo "=== artifacts ==="
           find artifacts -type f 2>/dev/null || true
 
-      - name: Publish draft release
+      # publish 前的产物闸门：**缺一平台的安装包就不发**。
+      # 判据按 build 矩阵应有的四端产物逐条数（macOS dmg / Windows setup.exe /
+      # Linux deb+rpm+AppImage / Arch pkg.tar.zst），规则包 zip 不在必需项里
+      # （它由上一步 `build-rule-packs.py --check` 单独把关）。
+      # 这条存在的理由见文件头：v2.3.8 那次 windows 作业失败、release job 整个被 skip，
+      # 结果 tag 公开而产物从未存在，欠到 2026-11-06 才补了一条「无产物」说明记录。
+      - name: Require a complete artifact set before publishing
+        run: |
+          set -u
+          missing=0
+          declare -a want=(
+            "*.dmg|macOS"
+            "*-setup.exe|Windows"
+            "*.deb|Linux deb"
+            "*.rpm|Linux rpm"
+            "*.AppImage|Linux AppImage"
+            "*.pkg.tar.zst|Arch"
+          )
+          for spec in "${want[@]}"; do
+            pat="${spec%%|*}"; label="${spec##*|}"
+            n=$(find artifacts -type f -name "$pat" -not -path 'artifacts/rule-packs/*' | wc -l | tr -d ' ')
+            if [ "$n" -eq 0 ]; then
+              echo "::error::缺 ${label} 产物（glob ${pat} 命中 0）——不发 release"
+              missing=1
+            else
+              echo "ok ${label} -> ${n} 项"
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "=== artifacts 实际清单 ==="
+            find artifacts -type f -printf '%p %s\n' 2>/dev/null | sort || true
+            echo "::error::产物不齐，本次不发。要么重跑失败的那个平台作业后 rerun 本 job" \
+                 "（gh run rerun ${GITHUB_RUN_ID} --failed），要么把这一版作废并删掉 tag。"
+            echo "   缺产物的 release 比不发更糟：v2.3.8 就是这么欠了一条需要专门解释的记录。"
+            exit 1
+          fi
+
+      - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          draft: true
+          # 推 tag = 直接公开；手动 dispatch 勾选 make_release = 建 draft 供人验收后再发。
+          draft: ${{ github.event_name != 'push' }}
           generate_release_notes: true
           files: |
             artifacts/**/*.dmg

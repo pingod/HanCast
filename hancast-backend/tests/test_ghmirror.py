@@ -2,7 +2,7 @@
 
 覆盖 ``utils/ghmirror.py`` 本身与它的三个接入点：
 - 规则包索引与包下载（``media/rules/jsplugins``）
-- 应用检查新版本（``commands``）
+- 应用检查新版本（``update/manager``）
 - FFmpeg 按需下载（``utils/ffmpeg_deps``）
 
 全程假会话离线：镜像地址是「桩里的一条 URL」，用例断言的是尝试顺序与失败文案，
@@ -17,6 +17,7 @@ import shutil
 import tempfile
 import unittest
 import zipfile
+from pathlib import Path
 from unittest.mock import patch
 
 import requests
@@ -31,9 +32,16 @@ RAW_INDEX = ("https://raw.githubusercontent.com/pingod/HanCast/"
              "main/rule-packs/index.json")
 GH_ZIP = ("https://github.com/pingod/HanCast/releases/download/rules-v1/"
           "hancast-demo-1.0.0.zip")
+# 自更新取清单走的是**列表**接口，不是 `/releases/latest`：后者把 "latest" 给
+# 「最近一次 publish」的那条而不是版本号最大的那条，为旧版补一条说明 release 就会
+# 把指针拽回去（2026-11-06 实测）。判据见 tools/audit-releases.py 的 latest 指针那条。
+GH_LIST = "https://api.github.com/repos/pingod/HanCast/releases?per_page=100&page=1"
+# 下面两条只是「非 GitHub 主机不改写 / GitHub 三种地址形态都改写」的夹具，
+# 不代表更新链路真会去访问它们（gitee 那条源已在 v2.4.12 从更新链路里删掉，
+# 见 TestUpdateCheckMirror 的说明）。
 GH_API = "https://api.github.com/repos/pingod/HanCast/releases/latest"
-GYAN = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
 GITEE_API = "https://gitee.com/api/v5/repos/buxiangqumingzi/han-cast/releases/latest"
+GYAN = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
 PREFIX = "https://gh-proxy.com/"
 
 
@@ -280,55 +288,105 @@ class TestFfmpegSourceMirror(unittest.TestCase):
         self.assertEqual(net.calls, [GYAN])
 
 
+def _release_json(tag: str = "v9.9.9") -> list:
+    """一条最小可用的 Release 列表响应：一个安装包 + 一个规则包 zip"""
+    return [{
+        "tag_name": tag,
+        "draft": False,
+        "prerelease": False,
+        "html_url": "https://github.com/pingod/HanCast/releases/tag/" + tag,
+        "body": "### 变更\n- 一条",
+        "published_at": "2026-11-06T00:00:00Z",
+        "assets": [
+            {"name": "HanCast_9.9.9_aarch64.dmg",
+             "browser_download_url":
+                 "https://github.com/pingod/HanCast/releases/download/" + tag +
+                 "/HanCast_9.9.9_aarch64.dmg",
+             "size": 1234, "digest": "sha256:" + "a" * 64},
+            {"name": "hancast-demo-1.0.0.zip",
+             "browser_download_url":
+                 "https://github.com/pingod/HanCast/releases/download/x/y.zip",
+             "size": 10, "digest": "sha256:" + "b" * 64},
+        ],
+    }]
+
+
 class TestUpdateCheckMirror(unittest.TestCase):
-    """检查新版本：走镜像时放宽等待（1s 是给直连启动检查留的），失败退回直连"""
+    """检查新版本：镜像优先、失败退直连；来源只有 GitHub
+
+    v2.4.11 及之前这里还有一条 gitee 源，本轮删掉：`gitee.com/buxiangqumingzi/han-cast`
+    属**原作者**那条线，它的 `releases/latest` 停在 v2.1.0，GitHub 一不通它就顶上来，
+    用户看到的现象是「提示有新版 2.1.0，点进去是原作者的下载页」。
+    """
 
     def setUp(self):
-        from hancast_sidecar.commands import CommandHandler
-        self.handler = CommandHandler()
-        self.addCleanup(self.handler.cleanup)
+        from hancast_sidecar.update import manager
+        self.m = manager
+        self.m.invalidate_release_cache()
+        self.addCleanup(self.m.invalidate_release_cache)
 
-    def _release(self, api_url, current_version, timeout=2):
-        self.calls.append((api_url, timeout))
-        if api_url.startswith(PREFIX):
-            raise requests.ConnectionError("镜像不通")
-        return {"has_update": True, "current": current_version, "latest": "9.9.9",
-                "url": "https://github.com/pingod/HanCast/releases/tag/v9.9.9",
-                "body": ""}
+    def _patch_http(self, fail_urls=(), payload=None):
+        """记录每次实际请求的 URL；命中 fail_urls 的抛连接异常"""
+        calls = []
 
-    def _run(self, sources, enabled=True):
-        self.calls = []
-        with MirrorEnv(enabled=enabled), \
-             patch.object(self.handler, "_fetch_github_release", self._release):
-            out = self.handler.execute("check_update",
-                                       {"current_version": "0.0.0", "sources": sources})
-        return out, self.calls
+        def fake(url, timeout=8.0):
+            calls.append(url)
+            if any(f in url for f in fail_urls):
+                raise requests.ConnectionError("桩：连不上")
+            return _release_json() if payload is None else payload
+
+        patcher = patch.object(self.m, "_http_json", fake)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return calls
 
     def test_mirror_first_then_direct(self):
-        out, calls = self._run(["github"])
-        self.assertEqual(calls, [(PREFIX + GH_API, 3), (GH_API, 1)])
+        calls = self._patch_http(fail_urls=(PREFIX,))
+        with MirrorEnv():
+            out = self.m.check_for_update("0.0.0")
+        self.assertEqual(calls, [PREFIX + GH_LIST, GH_LIST])
         self.assertTrue(out["has_update"])
+        self.assertEqual(out["source"], "github")
 
     def test_result_marks_mirror_source(self):
-        def ok(api_url, current_version, timeout=2):
-            self.calls.append((api_url, timeout))
-            return {"has_update": True, "current": current_version, "latest": "9.9.9",
-                    "url": "", "body": ""}
-        self.calls = []
-        with MirrorEnv(), patch.object(self.handler, "_fetch_github_release", ok):
-            out = self.handler.execute("check_update",
-                                       {"current_version": "0.0.0", "sources": ["github"]})
+        calls = self._patch_http()
+        with MirrorEnv():
+            out = self.m.check_for_update("0.0.0")
+        self.assertEqual(calls, [PREFIX + GH_LIST])
         self.assertEqual(out["via"], "镜像")
-        self.assertEqual(self.calls, [(PREFIX + GH_API, 3)])
 
-    def test_off_keeps_single_direct_attempt_with_1s(self):
-        out, calls = self._run(["github"], enabled=False)
-        self.assertEqual(calls, [(GH_API, 1)])
+    def test_off_keeps_single_direct_attempt(self):
+        calls = self._patch_http()
+        with MirrorEnv(enabled=False):
+            out = self.m.check_for_update("0.0.0")
+        self.assertEqual(calls, [GH_LIST])
         self.assertNotIn("via", out)
+        self.assertTrue(out["has_update"])
 
-    def test_gitee_source_never_rewritten(self):
-        _, calls = self._run(["gitee"])
-        self.assertEqual(calls, [(GITEE_API, 3)])
+    def test_rate_limit_says_so(self):
+        """403 必须说成「限流」而不是「连不上」：两者的下一步动作完全不同"""
+        def fake(url, timeout=8.0):
+            raise requests.HTTPError("403 Client Error: rate limit exceeded for url: " + url)
+        patcher = patch.object(self.m, "_http_json", fake)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        with MirrorEnv(enabled=False):
+            out = self.m.check_for_update("0.0.0")
+        self.assertFalse(out["has_update"])
+        self.assertIn("限流", out["error"])
+
+    def test_no_gitee_anywhere_in_the_update_chain(self):
+        """更新链路的源码与请求里都不许再出现 gitee（那是原作者的仓库）"""
+        calls = self._patch_http()
+        with MirrorEnv():
+            self.m.check_for_update("0.0.0")
+        self.assertTrue(calls)
+        self.assertFalse([c for c in calls if "gitee" in c])
+        root = Path(__file__).resolve().parents[1]
+        for rel in ("hancast_sidecar/commands.py",
+                    "hancast_sidecar/update/manager.py"):
+            text = (root / rel).read_text(encoding="utf-8")
+            self.assertNotIn("gitee.com", text, rel)
 
 
 if __name__ == "__main__":

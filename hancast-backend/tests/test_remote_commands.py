@@ -70,8 +70,16 @@ def test_上传把临时文件投给聚焦设备(handler):
         os.unlink(tmp.name)
 
 
-def test_上传无聚焦设备报错(handler):
+def test_上传无聚焦设备报错(handler, monkeypatch):
+    """「没有聚焦设备」这个前提必须自己钉住
+
+    这条用例原来只清了 `cast_state.device_id`，而 `_remote_upload` 还会退回去读
+    遥控器页的 `focus`。本机局域网里只要有设备在（SSDP 真发现了一台），`focus`
+    就非空，用例于是「DID NOT RAISE」——判据依赖环境，红的其实是测试自己。
+    这里把 sessions 状态一并桩成空，测的才是它想测的那条分支。
+    """
     handler.cast_state.device_id = ""
+    monkeypatch.setattr(handler, "_remote_sessions_state", lambda: {"focus": "", "sessions": {}})
     tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
     tmp.close()
     try:

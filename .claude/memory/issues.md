@@ -1,6 +1,6 @@
 # Macast-Han 已知问题与解决方案
 
-**最后更新**: 2026-11-03
+**最后更新**: 2026-11-06
 
 ---
 
@@ -98,7 +98,7 @@
 - **现象**: 2026-11-03 用户截图显示首页「局域网设备」表头上方整块空白——拖拽区/链接输入栏都不见了，设备列表本身正常。
 - **排查结论**: 代码路径不可能渲染成空（`HomeView.vue` 无条件渲染 `<MediaInput />`；`MediaInput.vue` 的 `v-if="state !== 'ready'"`/`v-else` 覆盖全部取值；CSS 无隐藏规则）；截图逐行亮度扫描确认那块真没渲染。**只剩「渲染期抛异常被 Vue 卸掉整块」一种解释**，而这类异常此前哪都不落盘。
 - **为什么当初查不到**: 前端没有 `app.config.errorHandler`、没有 `unhandledrejection` 监听，`hancast.log` 只收 Python 侧日志；打包版 WebView 不便挂调试器（`safaridriver` 要用户手开「允许远程自动化」）。
-- **修法**: ① `frontend_log` Sidecar 命令 + `commands.ts:1523` `frontendLog()` + `main.ts:50` errorHandler ⇒ 前端错误进**同一份** `hancast.log`（行首 `[webview/<source>]`）；② `SectionBoundary.vue` 区块错误边界 ⇒ 出错时原地显示「没能加载 + 错误 + 重试」，不再是一块空白。
+- **修法**: ① `frontend_log` Sidecar 命令 + `commands.ts:1620` `frontendLog()` + `main.ts:50` errorHandler ⇒ 前端错误进**同一份** `hancast.log`（行首 `[webview/<source>]`）；② `SectionBoundary.vue` 区块错误边界 ⇒ 出错时原地显示「没能加载 + 错误 + 重试」，不再是一块空白。
 - **判据**: 再出现时按 `docs/故障排查.md` §5.9 第 1 步筛 `[webview/` 日志；`node tools/verify-section-boundary.cjs` 验证边界本身没坏。
 
 ### COMP-008: 队列/定时/遥控器/字幕缺失（v2.4.6 已补齐）
@@ -111,7 +111,7 @@
 - **状态**: 🟢 已解决（v2.4.5 工作区，未发版）
 - **现象**: 解析成功、点投屏无报错，电视不动；面板默认 INFO 看不到我们发给谁、电视回了什么。COMP-005 因此排查大半天。
 - **根因**: `protocol/dlna.py` 的 `_send_action` 成功只 `logger.debug`；失败散落、无台账。
-- **方案**: ① 出站动作成功收 INFO 一行 `SOAP OUT ← <status> | <action> | <device> | <ms>ms`（`dlna.py:1256-1258`）；② 新增 `media/cast_failures.py` 投屏失败台账 + `cast_failure_list`/`cast_failure_clear` + `LogsPanel` 展示；③ `probe_url`（commands.py:853）历史条目重投前预检直链、url 条目自动回来源页重解。
+- **方案**: ① 出站动作成功收 INFO 一行 `SOAP OUT ← <status> | <action> | <device> | <ms>ms`（`dlna.py:1256-1258`）；② 新增 `media/cast_failures.py` 投屏失败台账 + `cast_failure_list`/`cast_failure_clear` + `LogsPanel` 展示；③ `probe_url`（commands.py:867）历史条目重投前预检直链、url 条目自动回来源页重解。
 - **判据**: 面板「投屏失败台账」有条目 = 断在某阶段（connect/set_uri/play/stop/media_ready/cast）；契约测试 `tests/test_cast_failures.py`。
 
 ## 架构风险
@@ -179,6 +179,118 @@
   并在三道启动自检里断言配置目录确实落在临时 HOME 下；新增 `tests/test_config_isolation.py` 钉死。
 - **验证方法**: `pytest tests/test_config_isolation.py` 5 passed；全量 563 passed；跑完再查真实
   `hancast_setting.json` 的 mtime 不再变化。现场已清理被污染的 `default_device`/`test_key`（备份在 /tmp）。
+
+### ISSUE-021: 更新检查把用户打发到原作者的 gitee 仓库
+- **发现日期**: 2026-11-06（用户报「点更新的时候还会出 gitee 这类的原始作者的地址」）
+- **严重程度**: 高
+- **状态**: 🟢 已解决（v2.4.12，未发布）
+- **描述**: `check_update` 的 `sources` 由壳层硬编码成 `["github","gitee"]`，gitee 那条指向
+  `gitee.com/buxiangqumingzi/han-cast`——那是**原作者**（lanzeweie 线）的镜像，
+  它的 `releases/latest` 停在 **v2.1.0**、正文是原作者的 changelog，且自 v2.1.0 起从未同步过
+  （仓库里没有 gitee remote，`push-gitee.ps1` 推的是不存在的 `master` 分支）。
+  于是 GitHub 一不通（墙内常态）gitee 就顶上来：装了 2.4.x 的用户看到「有新版 v2.1.0」，
+  点下载按钮（`DownloadModal.vue` 的三颗外链按钮之一）被送到原作者页面。
+- **复现步骤**: 断掉 GitHub 可达性（或把 `api.github.com` 指向黑洞），点设置页「检查更新」，
+  返回体 `source` 为 `gitee`、`latest` 为 `2.1.0`。
+- **解决方案**: gitee 这条源**从更新链路彻底删除**（`_fetch_github_release` 与 `source_configs` 一起没了，
+  `_check_update` 改为薄壳调 `update/manager.check_for_update`）；壳层不再下发 `sources`；
+  `DownloadModal.vue` 删除，更新改为应用内「挑产物 → 下载 → 校验 → 装」；
+  README / 推文里那两条 gitee 链接标注过期。国内下载能力改由既有后台参数
+  `github.mirror_enabled` / `github.mirror_prefix` + 更新弹窗里的开关承担。
+- **验证方法**: `tests/test_ghmirror.py::TestUpdateCheckMirror::test_no_gitee_anywhere_in_the_update_chain`
+  （既断言请求 URL 里没有 gitee，也直接读源码断言 `commands.py` / `update/manager.py` 里不含 `gitee.com`）；
+  `node tools/verify-update-ui.mjs` 的「弹窗内无 gitee / 原作者 / 商店地址」判据。
+
+### ISSUE-022: GitHub 的 `releases/latest` 按「最近 publish」给结果，不是按版本号
+- **发现日期**: 2026-11-06（对账时踩中，5 分钟内发现并回滚）
+- **严重程度**: 高
+- **状态**: 🟢 已解决（代码不再依赖该接口，并加了闸门）
+- **描述**: 发布面对账时为产物从未产出的 `v2.3.8` 补建了一条**无产物**的说明性 release 并 publish。
+  GitHub 把 `/releases/latest` 的 "latest" 判给**最近一次 publish** 的那条，于是它当场从 v2.4.11
+  回指 v2.3.8——而更新检查用的就是这个接口：正在跑 2.4.11 的客户端从此一律报「已是最新版本」，
+  界面上一个错误都不报。
+- **复现步骤**: `gh release create <旧 tag>`（或把任一旧 draft 转成 publish），随后
+  `gh api repos/pingod/HanCast/releases/latest --jq .tag_name` 立刻变成那个旧版本。
+- **解决方案**: ① 那条 v2.3.8 release 已删（`/releases/latest` 恢复指向 v2.4.11）；
+  ② 更新检查改为拉 **Release 列表**接口（`/releases?per_page=100`）自己按语义版本挑，
+  排除 draft/prerelease，**不再使用 `/releases/latest`**；
+  ③ `tools/audit-releases.py` 新增「latest 指针 == 语义最新版」判据，`release-audit.yml` 每周跑；
+  ④ 纪律写进文档：**永远不要为旧版补 publish 任何 release**，`{tag 有, release 无}` 用文档记着。
+- **验证方法**: `python3 tools/audit-releases.py`（exit 0，含该判据）；
+  `tests/test_update_manager.py::TestLatestSelection`（列表挑选、draft/prerelease 排除、翻页）。
+
+### ISSUE-023: 22 个从未 publish 的 draft 让发布面与更新检查同时失真
+- **发现日期**: 2026-11-06（用户报「release 和 tag 都不一致，为啥 release 里会有 draft 标签」）
+- **严重程度**: 中
+- **状态**: 🟢 已解决
+- **描述**: CI 的 release job 历史上写死 `draft: true`（按 DEC-006「先装端验收、后 publish」），
+  publish 靠人点。验收没做完就被下一版取代，draft 就永远烂着：实测 63 tag / 42 release 里
+  **22 个是 draft**（约 1.67 GiB 产物没有任何用户能下载），另有 21 个 tag 完全没有 release。
+  副作用不止"看起来乱"：`releases/latest` 不返回 draft ⇒ draft 攒着不发等于线上更新检查永远报旧版本。
+- **解决方案**: ① 22 个已被取代的 draft 全部 `gh release delete <tag> --yes`（**tag 一个没删**，
+  备份清单含资产名/字节/sha256）；② build.yml 改为**推 tag 即 publish**，手动 dispatch 才留 draft，
+  publish 前加「六件产物齐不齐」闸门；③ 新增 `tools/audit-releases.py` + `release-audit.yml` 每周对账；
+  ④ DEC-006 边界③的执行点从「publish 前」移到「打 tag 前」（验收没过就别打 tag）。
+- **验证方法**: `python3 tools/audit-releases.py` 现报 `tag 63 / release 20（已发布 20、draft 0）`、全 PASS。
+
+### ISSUE-024: 前端有封装、壳层没登记 —— 「退出并安装」在打包版永久置灰
+- **发现日期**: 2026-11-06（写前端文档时对照 `generate_handler!` 发现）
+- **严重程度**: 高
+- **状态**: 🟢 已解决
+- **描述**: `commands.ts` 有 `updateInstallPlan()` → `invoke('update_install_plan')`，Sidecar 也注册了该命令，
+  但 **Rust 侧没有这条 `#[tauri::command]`**：打包版下载完成后 `refreshPlan()` 每次 reject，
+  `plan` 为 null，弹窗主按钮按 `!plan` 判定禁用 ⇒ **没有任何入口能装**。
+  浏览器 mock 里有 `case 'update_install_plan'`，所以 `?mockUpdate=1` 的验收全绿——
+  「mock 掩盖壳层缺命令」这一类缺陷与 v2.3.8 的 `curl_cffi` 白名单漏项同构。
+- **解决方案**: 补 Rust 转发（`generate_handler!` 88→95）；前端再退一步：取装法失败时按任务表
+  的 `kind`/`dest` 兜底拼一份计划，不把这条路锁死；CI 的 deb 冒烟加第三条 `update_download_status`
+  断言（`update/manager.py` 是函数内延迟 import，Nuitka 漏收时只有它会炸）。
+- **验证方法**: `bash tools/rust-check.sh`；`node tools/verify-update-ui.mjs`（下载完必须能切到
+  「退出并安装」并出现「正在退出并安装…」）；`python3 - <<'PY'` 逐条比对 `commands.ts` 里的
+  invoke 名与 `generate_handler!` 名单（建议下轮做成 `tools/` 闸门）。
+
+### ISSUE-025: 更新弹窗打开时的那次状态查询会掐掉刚开始的下载（竞态）
+- **发现日期**: 2026-11-06（`tools/verify-update-ui.mjs` 首次运行即红）
+- **严重程度**: 中
+- **状态**: 🟢 已解决
+- **描述**: 弹窗打开会 `resumeDownload()` 查一次任务表；用户手快紧接着点「立即下载并安装」，
+  那条**更早发出、更晚返回**的查询回包带着旧的 `idle` 落回 store，把 `downloading` 按回 false
+  并覆盖任务表。后端确实在下载（下一轮进度照常往上涨），界面却没有进度条、主按钮也不切成「取消」。
+- **解决方案**: `stores/update.ts` 引入代次号 `epoch` 与在途标记 `starting`：只有仍属当代的调用
+  才允许写状态；起下载在途时把 `idle` 视为「后端还没收到」而不是终态。
+- **验证方法**: `tools/verify-update-ui.mjs` 场景 A（进度条宽度必须增长、按钮必须切态）+
+  场景 D（慢源上点「取消下载」必须落 `cancelled` 且不再显示进度条）。
+
+### ISSUE-026: 投整个文件夹只出了封面图，后面 39 集一集都不续
+- **发现日期**: 2026-11-06（用户报「Windows 投整个文件夹到 macOS 不成功」，怀疑是本轮投屏确认改动）
+- **严重程度**: 高（文件夹投屏这个功能在此类目录上等于完全不可用）
+- **状态**: 🟢 已解决
+- **描述**: 队列自动续播**只有一个**触发点——设备自报 `STOPPED`/`IDLE`（`cast.ts` 的
+  `cast_state_changed` 监听）。图片永远等不到那一刻：后端对图片直接跳过进度轮询
+  （`models/session.py:88-91`），接收端 mpv 挂静帧也不发 `end-file`。而 `list_folder` 认
+  `.jpg`（`media/parser.py:23`），自然序又把 `Cover.jpg` 排在 `《某剧…` 前面（`c` 的码位低于
+  `《`），于是队列第 1 项就是封面图，投出去后状态永久停在 playing。
+  现场目录：`H:\视频\动漫\JOJO的奇妙冒险1-6季\JOJO的奇妙冒险 S05 黄金之风`（39 个 mp4 + Cover.jpg，
+  同级 6 季里 5 季都带封面图，只有 S06 没有——所以「有时候又是好的」）。
+- **取证路径**: 发送侧 `%APPDATA%\HanCast\logs\hancast.log` 在 `Play` 之后那句
+  `Image cast, skip progress polling: image/jpeg` 是决定性证据；接收侧同一时刻是
+  `file-loaded` + `update duration 0:00:00`、只有 video-reconfig 没有 audio-reconfig。
+  排查时要否掉「投屏确认」：接收端 `hancast_setting.json` 的 `device_guard.enabled=false`
+  时 `guard.check()` 直接 return "trusted" 且不打日志，闸门根本没参与（guard.py/dlna.py 本轮也没改）。
+- **复现步骤**: 任一带 `Cover.jpg` 的剧集目录 → Windows 端「📁 选文件夹」→ 投给在线的 HanCast
+  接收端 → 观察到只显示封面图、队列面板一直「第 1 / 共 40 项」、日志里不再出现第二次 `SetAVTransportURI`。
+- **解决方案**: 发送端计时。`castQueueItem` 投完一项后按 `isImageMedia` 分流，图片项走
+  `armImageDwell`（`cast.ts:820`）到点调同一条 `advancePlaylistIfActive`，所以播放模式/播完即停/
+  勾选子集语义一律不变；档位 5/8/15/30 秒在队列面板切换并随队列落盘
+  （`hancast.playlist.queue` 的 `imageDwellSeconds`）。计时器三条撤除路径：停止（`cast.ts:587`）、
+  卸载（`cast.ts:1182`）、被新起播取代（靠 `castOp` 代次）。两个特例：暂停时到点不跳走而是重新挂起，
+  `repeat-one` 不计时（否则每 N 秒把同一张图重推一遍只会闪）。
+- **验证方法**: `tools/verify-playlist-advance.cjs` 22 项（新增⑥～⑨图片组：到点续播、视频不被提前跳走、
+  停止必须撤掉在途计时器、暂停/恢复、repeat-one、档位落盘、纯视频队列不该出现档位按钮）。
+  判据做过负向对照：撤掉 `armImageDwell` 调用 → 「停留计时到点自动投下一项」FAIL；
+  撤掉 `clearImageDwell(id)` → 「点停止必须撤掉在途计时器」FAIL。
+  另修 `tools/verify-cast-ui.cjs`：它的 `@/stores/playlist` 桩没跟住 cast.ts 新增的具名 import
+  （`isImageMedia`），会炸在 `castQueueItem` 里——「桩要跟着 import 清单走」这个坑本仓库已踩三次。
 
 ## 解决方案模板
 

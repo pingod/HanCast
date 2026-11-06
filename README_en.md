@@ -1,4 +1,4 @@
-<!-- 最后校对：2026-11-03，对应版本 v2.4.11（package.json:4）。数字与 文件:行号 引用由 tools/check-doc-freshness.py 机械核对 -->
+<!-- 最后校对：2026-11-06，对应版本 v2.4.12（package.json:4；this release: publish-on-tag, in-app update, phone mirror-in, folder queue image dwell）。数字与 文件:行号 引用由 tools/check-doc-freshness.py 机械核对 -->
 
 <p align="center">
   <a href="README.md"><img src="https://img.shields.io/badge/README-CN-blue?style=flat-square&logo=github" alt="中文"></a>
@@ -57,6 +57,7 @@ Drag a file or paste a link, select a device, and cast in one click.
 | **Local Files** | Drag video / audio / image to the window | `.mp4` `.mp3` `.jpg` |
 | **Online Links** | Paste HTTP / HTTPS direct links | `https://example.com/video.mp4` |
 | **Platform links / share codes** | Just paste; a rule pack resolves the stream | `bilibili.com/video/BV...`, Douyin share codes, `b23.tv` short links |
+| **Whole folder** | "📁 Pick folder" → reorder and tick in the queue panel, then cast | Episodic playback; image entries advance on a dwell timer (5/8/15/30 s) |
 | **Clipboard** | Copy a link and paste directly | — |
 
 Resolution for platform links comes from **pluggable rule packs** (see "Rule Packs" below) —
@@ -75,6 +76,23 @@ browser watch page handed out at the same time (HLS, two independent channels).
 - One click to copy the watch-page link, phone scans the QR and watches
 - Live viewer count, segment status and failure reasons while casting
 
+### Phone Screen Mirror-In (Android → this machine)
+
+The other direction: bring an **Android phone's screen onto this computer** — resizable window,
+recordable, clipboard shared with the desktop.
+
+- Built on a mature `scrcpy` child process with its own window (zero-copy); HanCast only owns the
+  toolchain lookup and the session lifecycle
+- `adb` / `scrcpy` are **not bundled and never auto-downloaded**: when they're missing the panel
+  prints the install command for your OS (Homebrew / winget / pacman), and you can point at a path manually
+- Wired devices just work; wireless goes "first wired connection for the serial → adb pair → adb connect ip:port"
+- Every state change (unplugged, scrcpy exited, killed externally) is reported live with the reason,
+  never inferred from polling
+- Entered from the third persistent button on the Home page; quality / frame rate / window options /
+  clipboard preferences are remembered, while **device selection is per-run only** (the adb port changes after a restart)
+
+See [docs/手机镜像.md](docs/手机镜像.md).
+
 ### Cast failures actually reach you
 
 When the window is hidden in the tray nobody sees the red inline error — all you get is "I clicked and
@@ -92,11 +110,27 @@ re-granted after every re-pack, since each build is a new linker-signed identity
 desktop notifications; Windows uses Toast. Without permission everything degrades silently and the
 inline error is still there.
 
+### In-app updates
+
+Since v2.4.12 an update no longer means "go to a web page and pick a file yourself":
+
+- The "new version available" dialog lets you **pick the artifact** (Linux: AppImage / deb / rpm / Arch,
+  with the one matching how this machine was installed preselected)
+- The **download happens inside the app**: live progress and speed, cancellable, and a broken transfer
+  resumes from the `.part` file via HTTP Range
+- Once downloaded the file is **verified against the sha256 GitHub declares** before it is installed;
+  if GitHub declares no digest, the dialog says so instead of pretending
+- Artifacts that can be applied unattended (Windows NSIS / macOS dmg / Linux AppImage) are **installed
+  after the app quits**; the ones needing root (deb / rpm / Arch) hand you a copy-paste install command
+- **The GitHub mirror switch lives right in this dialog**: when enabled, requests go through the mirror
+  prefix first and fall back to a direct connection on failure, with both failure reasons logged
+- Third-party download pages (the original author's Gitee repository and the like) no longer appear anywhere in it
+
 ### Rule Packs
 
 Site resolution runs on JS rule packs inside a QuickJS sandbox, or on declarative JSON rules:
 
-- Import a ZIP or URL from the settings page, or **check the official index for updates** (sha256 verified)
+- Import a ZIP or URL from the settings page, or **check the official index for updates** (sha256 verified); when GitHub itself is hard to reach from mainland China, turn on "Use GitHub mirror" and the index, pack downloads, update checks, FFmpeg downloads and the **in-app update installer** all go through the mirror first, falling back to a direct request on failure (same `github.mirror_enabled` / `github.mirror_prefix` parameters, also switchable right in the update dialog)
 - The sandbox exposes `host.fetch` / DOM selection / cookies / signing primitives (md5, sha, HMAC, AES, RSA); scripts never touch Python
 - Addresses you pasted that failed to resolve are logged per domain in a **failure ledger**,
   viewable and clearable in settings — it is the to-do list for the next batch of rule packs
@@ -148,14 +182,26 @@ After casting starts, click the device card to open the control panel:
 | Channel | Link |
 |---------|------|
 | GitHub Releases (**current builds**) | https://github.com/pingod/HanCast/releases/latest |
-| Gitee Releases (faster in mainland China) | https://gitee.com/buxiangqumingzi/han-cast/releases/latest |
 | Microsoft Store | https://apps.microsoft.com/detail/9nk1xwpg6hd5 |
 
-> CI builds a **draft** release for every tag and a human publishes it after on-device acceptance,
-> so the link above points at the last accepted version (**v2.3.23** when this line was written;
-> 10 assets: Windows installer, macOS `.dmg`, Linux deb / rpm / AppImage and the Arch
-> `.pkg.tar.zst`, plus 4 official rule-pack zips). Code and artifacts live on that release line:
-> [pingod/HanCast](https://github.com/pingod/HanCast). The upstream
+> **Why the Gitee row is gone** (removed in v2.4.12): that link pointed at the **original author's**
+> repository (`gitee.com/buxiangqumingzi/han-cast`), whose releases stop at **v2.1.0** with the original
+> author's changelog — clicking it only ever handed you a three-year-old build that has nothing to do
+> with our release line. This is **not** "we have no mainland-China accelerator": when GitHub itself is
+> unreachable, the supported path is the **in-app GitHub mirror switch** (right in the update dialog,
+> see "In-app updates"); download, verification and install all stay inside the app.
+
+> **Pushing a tag publishes it; an incomplete artifact set publishes nothing** (since v2.4.12): after the
+> three platform builds succeed, the release job first counts the six installers (macOS `.dmg`, Windows
+> `-setup.exe`, Linux deb / rpm / AppImage, Arch `.pkg.tar.zst`) and **refuses to release if any is missing**;
+> when they are all there it publishes immediately, so the link above points at that version straight away.
+> The newest public version when this line was written is **v2.4.11** (10 assets: those six plus the 4
+> official rule-pack zips). Draft releases are now reserved for **manually triggered builds**
+> (`workflow_dispatch` with `make_release`) — a "let me look at this build first" path, not a release channel.
+> The old rule (every tag produced a draft and a human published it after on-device acceptance) was in force
+> up to v2.4.11 and left 22 never-published drafts behind, and since `releases/latest` ignores drafts the
+> update check kept reporting the old version; details in [docs/构建与发布.md](docs/构建与发布.md) §4.5 and §5.1.
+> Code and artifacts live on one release line: [pingod/HanCast](https://github.com/pingod/HanCast). The upstream
 > [lanzeweie/HanCast](https://github.com/lanzeweie/HanCast) `main` branch is still at v2.1.0 (the
 > merge request bringing it up to date is open), so clone the fork for current source.
 
@@ -266,10 +312,11 @@ resources by `scripts/sync-sidecar.cjs`.
 | Player | MPV (external dependency) | Receiver playback, IPC control |
 | Capture | FFmpeg (external dependency) + WASAPI / Audio Tap | Screen & window capture, HLS segmentation |
 
-The frontend calls **79** Rust commands via Tauri `invoke()` (`generate_handler!`,
-src-tauri/src/lib.rs:1611-1687); Rust talks to the Python Sidecar over stdin/stdout JSON
-(**72** commands registered Sidecar-side; **8** events reach the frontend = 6 from Python + 2 from the
-shell, plus `browser_request` which stops at the shell). Full contract:
+The frontend calls **95** Rust commands via Tauri `invoke()` (`generate_handler!`,
+src-tauri/src/lib.rs:2024-2120); Rust talks to the Python Sidecar over stdin/stdout JSON
+(**86** commands registered Sidecar-side, `commands.py:159-283`; **10** events reach the frontend —
+`browser_request` stops at the shell and `ready` has no subscriber, the per-event inventory lives in
+[docs/HanCast-Frontend-API.md](docs/HanCast-Frontend-API.md). Full contract:
 [docs/HanCast-Frontend-API.md](docs/HanCast-Frontend-API.md). `python3 tools/check-doc-freshness.py`
 re-checks every one of these numbers against the code.
 
@@ -280,22 +327,23 @@ re-checks every one of these numbers against the code.
 ```
 HanCast/
 ├── src/                        # Vue 3 Frontend
-│   ├── components/             # UI Components (20; inventory in docs/HanCast-Frontend-Spec.md)
+│   ├── components/             # UI Components (23; inventory in docs/HanCast-Frontend-Spec.md)
 │   │   ├── TitleBar.vue        # Custom title bar
 │   │   ├── MediaInput.vue      # Media input (drag/link/paste)
 │   │   ├── DeviceList.vue      # Device list
 │   │   ├── DeviceCard.vue      # Device card (cast/rename/remove)
 │   │   ├── CastController.vue  # Cast control bar (incl. quality switch)
 │   │   ├── ScreenCastPanel.vue # Screen cast panel
+│   │   ├── UpdateModal.vue     # In-app update: pick artifact -> mirror switch -> progress/verify -> apply (v2.4.12)
 │   │   └── PluginSettings.vue  # Rule pack management & "check for updates"
-│   ├── stores/                 # Pinia state management (9 stores)
-│   ├── locales/                # i18n resources (zh-CN / en-US, 324 keys each, must match)
+│   ├── stores/                 # Pinia state management (12 stores)
+│   ├── locales/                # i18n resources (zh-CN / en-US, 492 keys each, must match: `node tools/verify-locale-keys.mjs`)
 │   ├── i18n.ts                 # vue-i18n instance + tt() for use outside components
 │   └── api/commands.ts         # Tauri invoke wrapper
 │
 ├── src-tauri/                  # Rust Tauri Shell
 │   ├── src/
-│   │   ├── lib.rs              # Tauri commands (79; see generate_handler! for the list)
+│   │   ├── lib.rs              # Tauri commands (95; list in generate_handler!, lib.rs:2024-2120)
 │   │   ├── macos_notify.rs     # macOS notifications via UNUserNotificationCenter (main thread!)
 │   │   └── sidecar.rs          # SidecarManager (Rust ↔ Python)
 │   ├── mpv/                    # External player binary (placed before build; FFmpeg is not bundled)
@@ -304,7 +352,7 @@ HanCast/
 ├── hancast-backend/            # Python Backend (Sidecar)
 │   └── hancast_sidecar/
 │       ├── main.py             # Sidecar entry (stdin/stdout JSON loop)
-│       ├── commands.py         # Command router (registry of 72 commands lives here)
+│       ├── commands.py         # Command router (registry of 86 commands, commands.py:159-283)
 │       ├── params.py           # 32 background parameters
 │       ├── ssdp.py             # SSDP discovery (broadcast fallback when multicast fails)
 │       ├── protocol/
@@ -319,6 +367,8 @@ HanCast/
 │       │   ├── failures.py     # Resolve failure ledger (per domain)
 │       │   └── server.py       # Local file HTTP server + in-path proxy
 │       ├── screencast/         # Screen cast: capture (incl. the Wayland helper wlgrab), HLS, serving, watch page
+│       ├── update/             # In-app update: release inventory (NOT /releases/latest), artifact picking,
+│       │                       # sha256-verified resumable download, install_plan (v2.4.12)
 │       ├── security/           # Cast confirmation (Device Guard)
 │       └── xml/                # UPnP description files
 │
@@ -326,7 +376,7 @@ HanCast/
 ├── linux-capture/              # hancast-wlgrab source (Rust; Wayland screen capture)
 ├── tools/                      # Acceptance & probe scripts (index in tools/README.md)
 ├── scripts/                    # Version sync and artifact verification scripts
-├── .github/workflows/build.yml # 3-platform CI + draft Release
+├── .github/workflows/build.yml # 3-platform CI + GitHub Release (tag push publishes)
 ├── CHANGELOG.md                # Version history
 └── docs/                       # Documentation (start at docs/README.md)
 ```
@@ -342,7 +392,7 @@ paths and states the maintenance rules. Frequently used:
 |----------|-------------|
 | [docs/架构总览.md](docs/架构总览.md) | Process layout, ports/threads/on-disk state, invariants |
 | [docs/开发指南.md](docs/开发指南.md) | Setup, run modes, test discipline, debugging, release rules |
-| [docs/HanCast-Frontend-API.md](docs/HanCast-Frontend-API.md) | Full contract of 79 invoke commands and 8 events |
+| [docs/HanCast-Frontend-API.md](docs/HanCast-Frontend-API.md) | Full contract of 95 invoke commands and 10 events |
 | [docs/HanCast-Frontend-Spec.md](docs/HanCast-Frontend-Spec.md) | Components / stores / views, styling, i18n |
 | [docs/故障排查.md](docs/故障排查.md) | Symptom-indexed: devices not found, cast won't start, won't stop, no audio… |
 | [docs/屏幕投屏.md](docs/屏幕投屏.md) · [docs/投屏确认.md](docs/投屏确认.md) | Behaviour contracts of the two subsystems |

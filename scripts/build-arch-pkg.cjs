@@ -24,7 +24,9 @@
  *      是 Arch 包最常见的翻车方式，deb 的 `libwebkit2gtk-4.1-0` 直接抄过来在 Arch 不存在）。
  *   2. `pacman -U` 真装进容器，再 `pacman -Qkk` 校验 .MTREE 与实际文件一致、
  *      `pacman -Qo` 证明 /usr/bin/HanCast 归属本包。
- *   3. 真的跑一遍 sidecar：stdin 喂 `get_settings`，断言拿到 `"success": true`。
+ *   3. 真的跑一遍 sidecar：stdin 依次喂 `get_settings`、`list_screen_sources`、
+ *      `update_download_status`，三条都断言拿到 `"success": true`（后两条查的是
+ *      函数内延迟 import 的模块有没有被 Nuitka 收进来）。
  *      这条是 v2.3.17 补的——v2.3.16 的装端验收只看「文件在不在」，全绿发布，
  *      结果 CachyOS 用户双击即崩（exe 在 /usr/bin、依赖在 /usr/lib/HanCast，
  *      Nuitka 按 exe 同级找 libpython3.12.so.1.0 落空，退出码 127）。
@@ -295,6 +297,18 @@ fi
 grep -q '"success": true' /tmp/sidecar-src.json || { echo "FATAL: list_screen_sources 没有正常应答"; head -25 /tmp/sidecar-src-err.log; exit 1; }
 grep -q '"capture"' /tmp/sidecar-src.json || { echo "FATAL: 返回里没有 capture 字段（screencast/wlgrab 没进冻结二进制？）"; head -c 400 /tmp/sidecar-src.json; exit 1; }
 echo "  ok  list_screen_sources 应答含 capture（Wayland 链路模块已进包）"
+
+# 第三条与 CI 的 deb 冒烟同源：commands.py 的更新 handler 是函数内
+# 「from .update import manager」，Nuitka 漏收 hancast_sidecar/update/ 时前两条照样绿，
+# 只有这条会炸（v2.4.12 起加；不发网络请求，空任务表也回 status/dir）。
+echo "== sidecar 实跑 3：update_download_status =="
+if ! printf '{"id":3,"cmd":"update_download_status","params":{}}\n' | (cd /usr/lib/HanCast && timeout 90 /usr/lib/HanCast/hancast-sidecar) > /tmp/sidecar-upd.json 2>/tmp/sidecar-upd-err.log; then
+  echo "FATAL: update_download_status 退出异常"
+  head -25 /tmp/sidecar-upd-err.log; exit 1
+fi
+grep -q '"success": true' /tmp/sidecar-upd.json || { echo "FATAL: update_download_status 没有正常应答（update 模块没进冻结二进制？）"; head -25 /tmp/sidecar-upd-err.log; exit 1; }
+grep -q '"dir"' /tmp/sidecar-upd.json || { echo "FATAL: 返回里没有 dir（壳层 open_update_dir 会失败）"; head -c 400 /tmp/sidecar-upd.json; exit 1; }
+echo "  ok  update_download_status 应答含 dir（应用内更新模块已进包）"
 
 # makepkg 以非 root 运行，归档里的 uid/gid 是否被重映射成 0 必须实测：
 # 若写成 build(1000)，真装到用户机器上 /usr/bin/HanCast 就成了普通用户所有。

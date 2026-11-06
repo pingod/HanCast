@@ -241,13 +241,18 @@ async function onCheckUpdate() {
   checkUpdateStatus.value = 'checking'
   const result = await updateStore.check(settingsStore.settings.version, true)
   if (result?.has_update) {
-    checkUpdateStatus.value = 'idle' // modal will show
-  } else if (result && !result.has_update) {
+    checkUpdateStatus.value = 'idle' // 弹窗自己会开
+  } else if (result?.error) {
+    // 「没查到」不是「已是最新」：Sidecar 把原因放在返回体的 error 键里（限流、
+    // 镜像与直连都不通…），压成一句「已是最新版本」就是把失败说成成功
+    checkUpdateStatus.value = 'error'
+    setTimeout(() => { checkUpdateStatus.value = 'idle' }, 4000)
+  } else if (result) {
     checkUpdateStatus.value = 'no_update'
     setTimeout(() => { checkUpdateStatus.value = 'idle' }, 2000)
   } else {
     checkUpdateStatus.value = 'error'
-    setTimeout(() => { checkUpdateStatus.value = 'idle' }, 2000)
+    setTimeout(() => { checkUpdateStatus.value = 'idle' }, 4000)
   }
 }
 </script>
@@ -576,7 +581,11 @@ async function onCheckUpdate() {
             >
               <span v-if="checkUpdateStatus === 'checking'">{{ t('update.checking') }}</span>
               <span v-else-if="checkUpdateStatus === 'no_update'" class="settings__check-result">{{ t('update.latestAlready') }}</span>
-              <span v-else-if="checkUpdateStatus === 'error'" class="settings__check-result settings__check-result--error">{{ t('update.checkFailed') }}</span>
+              <span
+                v-else-if="checkUpdateStatus === 'error'"
+                class="settings__check-result settings__check-result--error"
+                :title="updateStore.error || t('update.checkFailed')"
+              >{{ updateStore.error || t('update.checkFailed') }}</span>
               <span v-else>{{ t('settings.checkUpdate') }}</span>
             </button>
           </template>

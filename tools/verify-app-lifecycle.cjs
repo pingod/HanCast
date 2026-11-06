@@ -28,6 +28,9 @@ const leafNames = new Set([
   'RemoteControlPanel',
   // v2.4.11 起 HomeView 用错误边界（SectionBoundary）包住媒体输入区。
   'SectionBoundary',
+  // 手机镜像那轮（未发布）在 HomeView 挂了 MirrorPanel + useMirrorStore；
+  // 叶子组件不登记就又是「Unexpected import」整脚本加载失败——同一类坑第四次。
+  'MirrorPanel',
   'TitleBar', 'MediaInput', 'DeviceList', 'CastController', 'ScreenCastPanel',
   'StopWarningBanner', 'Footer', 'AutostartPromptModal',
 ])
