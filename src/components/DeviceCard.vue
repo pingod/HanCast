@@ -90,10 +90,12 @@ async function onRestoreController() {
   }
 }
 
-function onSetDefault() {
-  deviceStore.setDefault(props.device.id)
+async function onSetDefault() {
   showMenu.value = false
   showContextMenu.value = false
+  // 失败原因由 store.lastError 交给 DeviceList 顶部的提示条显示；
+  // 不 await 的话失败只会变成一条 unhandled rejection。
+  await deviceStore.setDefault(props.device.id)
 }
 
 function onRenameClick() {
@@ -103,11 +105,16 @@ function onRenameClick() {
   showContextMenu.value = false
 }
 
-function onRenameConfirm() {
-  if (renameInput.value.trim()) {
-    deviceStore.rename(props.device.id, renameInput.value.trim())
+async function onRenameConfirm() {
+  const name = renameInput.value.trim()
+  if (!name) {
+    showRename.value = false
+    return
   }
-  showRename.value = false
+  // 只有成功才关弹窗：失败时留在原地，错误由 store.lastError 显示
+  if (await deviceStore.rename(props.device.id, name)) {
+    showRename.value = false
+  }
 }
 
 function onRemoveClick() {
@@ -116,9 +123,10 @@ function onRemoveClick() {
   showContextMenu.value = false
 }
 
-function onRemoveConfirm() {
-  deviceStore.hide(props.device.id)
-  showRemove.value = false
+async function onRemoveConfirm() {
+  if (await deviceStore.hide(props.device.id)) {
+    showRemove.value = false
+  }
 }
 
 function toggleMenu() {

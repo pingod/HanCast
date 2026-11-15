@@ -256,10 +256,15 @@ export const useUpdateStore = defineStore('update', () => {
    * 不对齐就会停在「下载中」而后端早完成了——与 stores/screencast.ts:153 同一个坑。
    */
   async function resumeDownload() {
-    const gen = ++epoch
+    // 这里**不能**自增代际号：对齐只是读一次状态，却会把正在路上的
+    // `startDownload` 判成过期。那条路径 `finally` 里只在「本代仍是当代」时
+    // 清 `starting`，代际被抢走就永远留着 true —— 之后每次 idle 回包都被当成
+    // 「后端还没收到」，轮询不会启动、界面停在「连接中」，而后端其实在下。
+    // 用当前代际即可：真正开始了新下载时 epoch 已经变大，这条旧回包会被丢弃。
+    const gen = epoch
     try {
       const task = await updateDownloadStatus()
-      // 起下载正在路上（或已有更新的一代）时，这条旧回包直接作废
+      // 起下载正在路上（或已有一代更新的操作）时，这条回包直接作废
       if (gen !== epoch || starting) return
       downloadTask.value = task
       if (task.status === 'pending') {

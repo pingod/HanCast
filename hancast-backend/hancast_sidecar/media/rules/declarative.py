@@ -133,10 +133,21 @@ class DeclarativeRule(SiteRule):
         if not outputs:
             raise ValueError("规则未取到播放地址（检查 output / 正则）")
 
-        last_err = None
+        # 延迟导入：share_resolver 在 import 期就会 import rules 包，模块级
+        # 反向 import 会成环。
+        from ..share_resolver import UnplayableSource
+
+        dead: list[str] = []
         for cand in outputs:
             try:
                 uri, mime = ctx.follow(cand, base)
+            except UnplayableSource as e:
+                # 验证明确判定「不是可播流」（HTML/图片/4xx）：换下一条 output。
+                # 早先这里和网络故障一样按原样交付并 return，于是多 output 规则
+                # 永远只试第一条——文档承诺的「逐个试，第一个能播的交付」不成立。
+                dead.append(f"{cand}（{e}）")
+                logger.info(f"{self.name} 候选不可播，换下一个 {cand}: {e}")
+                continue
             except Exception as e:
                 # 网络故障无法判定（电视端可能反而拉得通），按原样交付
                 logger.info(f"{self.name} 规则候选验证失败，按原样交付 {cand}: {e}")
@@ -144,6 +155,8 @@ class DeclarativeRule(SiteRule):
             uri, mime, via = ctx.publish(uri, mime, base, self.name)
             title = self._title(body)
             return ctx.info(uri, mime, title, via, source_url=ctx.source_url)
+
+        raise ValueError("规则候选地址均不可播：" + "；".join(dead[:2]))
 
     def _outputs(self, values: dict, body: str, base: str) -> list:
         raw = self.output

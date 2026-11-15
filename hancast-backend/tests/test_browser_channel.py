@@ -172,6 +172,26 @@ class TestCookiesAndCandidates(unittest.TestCase):
         big = [{"name": f"n{i}", "value": "x" * 200, "domain": "x.com"} for i in range(100)]
         self.assertLess(len(bc._clean_cookies(big)), 100)
 
+    def test_inject_cookies_into_stdlib_cookiejar(self):
+        """curl_cffi 会话的 cookies 是 stdlib CookieJar（只有 set_cookie）
+
+        默认配置走 CurlSession（http.tls_impersonate=true），早先 inject_cookies
+        只认 `.set`，于是一枚都灌不进去、静默返回 0：解析会话没有登录态，
+        代理给电视的分片请求 403，症状是「浏览器里能看，投屏黑屏」。
+        """
+        from http.cookiejar import CookieJar
+
+        class S:
+            cookies = CookieJar()
+
+        s = S()
+        n = bc.inject_cookies(
+            s, [{"name": "sid", "value": "abc", "domain": ".example.com", "path": "/"}])
+        self.assertEqual(n, 1)
+        self.assertEqual(
+            [(c.name, c.value, c.domain, c.path) for c in s.cookies],
+            [("sid", "abc", ".example.com", "/")])
+
     def test_inject_cookies_into_session_jar(self):
         class Jar:
             def __init__(self):

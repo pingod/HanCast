@@ -142,6 +142,13 @@ class CommandHandler:
 
         # 字幕内封任务 {device_id: {status, progress, message, path}}
         self._subtitle_tasks: Dict[str, dict] = {}
+        # 上次运行留下的内封产物已经没有会话引用它们了，开机清掉。
+        # `cleanup_cache()` 此前全仓零调用点，于是每内封一次字幕就永久多出
+        # 一份「整片大小」的副本（<配置目录>/subtitle_cache/），只有用户手删才消失。
+        try:
+            subtitle_tools.cleanup_cache({})
+        except Exception:  # noqa: BLE001 - 清缓存失败不该影响启动
+            logger.debug("[Subtitles] 启动清理字幕缓存失败", exc_info=True)
 
         # 手机遥控器页（局域网浏览器打开；v2.4.8 起随应用常驻，无需先投屏）
         self.remote_server = RemoteControlServer(
@@ -645,7 +652,7 @@ class CommandHandler:
     def _start_cast(self, params: dict) -> None:
         device_id = params["device_id"]
         media_uri = params["media_uri"]
-        mime_type = params.get("mime_type", "")  # 可选，前端传入
+        mime_type = str(params.get("mime_type") or "").strip()  # 可选，前端传入（可能是 null）
         # 可选标题：手机相册上传的文件落地后是个哈希文件名，直接拿来当标题电视上很难看，
         # 所以调用方（遥控器上传）传原始文件名进来，这里塞进媒体元数据。
         title_override = str(params.get("title") or "").strip()
@@ -926,7 +933,15 @@ class CommandHandler:
         v2.4.11 起页面改成**手动刷新**（点 ⟳ 才拉一次），不再每秒轮询。
         """
         sessions = []
-        for did, s in self.device_sessions.items():
+        # 遥控器页的读取在 aiohttp 线程里，而增删发生在 `_cast_lock` 下的投屏线程；
+        # 直接迭代原字典会在「停止投屏恰好同时」抛
+        # ``RuntimeError: dictionary changed size during iteration``，被
+        # `_handle_state` 吞成 `{"session": null}`——手机页面于是间歇显示「没有投屏」。
+        # `dict(...)` 是单条 C 指令（持 GIL，不释放），拿到的是原子快照；
+        # 这里故意不抢 `_cast_lock`：`_start_cast` 持锁期间在发 SOAP（可达数秒），
+        # 抢锁会把手机页整页卡住。
+        session_snapshot = dict(self.device_sessions)
+        for did, s in session_snapshot.items():
             st = s.cast_state
             sessions.append({
                 "device_id": did,
@@ -1254,6 +1269,7 @@ class CommandHandler:
         from .utils import httpclient
         started = time.time()
         session = httpclient.make_session()
+        resp = None
         try:
             try:
                 resp = session.head(url, timeout=budget, allow_redirects=True,
@@ -1262,6 +1278,8 @@ class CommandHandler:
                 resp = None
             # 有些 CDN 不给 HEAD（405/501/空 Content-Length），退回区段 GET 取一个字节
             if resp is None or resp.status_code in (405, 501) or not resp.headers.get("Content-Length"):
+                if resp is not None:
+                    resp.close()
                 resp = session.get(url, timeout=budget, allow_redirects=True, stream=True,
                                    headers={"Range": "bytes=0-0"})
                 try:
@@ -1275,6 +1293,18 @@ class CommandHandler:
         except Exception as e:
             ms = int((time.time() - started) * 1000)
             return {"ok": False, "status": 0, "ms": ms, "error": f"{type(e).__name__}: {e}"}
+        finally:
+            # 历史面板一次开就是三条并发探活，会话/响应不关就是 curl 句柄与
+            # 套接字长在进程里：用得越久泄漏越多（curl_cffi 的 session 不是 GC 就收）。
+            if resp is not None:
+                try:
+                    resp.close()
+                except Exception:  # noqa: BLE001
+                    pass
+            try:
+                session.close()
+            except Exception:  # noqa: BLE001
+                pass
 
     def _plugin_check_updates(self, params: dict) -> dict:
         """对照官方索引看哪些包有新版本，顺带列出索引里还没装的包

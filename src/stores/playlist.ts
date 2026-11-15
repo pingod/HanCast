@@ -65,7 +65,8 @@ function saveOrderMap(map: Record<string, string[]>) {
 /** 落盘的队列形状。只存本地文件项——分享链的直链带签名、几小时就过期，存下来只会给用户一堆点不动的条目 */
 interface PersistedQueue {
   items: QueueItem[]
-  selected: string[]
+  /** 勾选集合；``null`` = 旧版本没存过（按「全选」恢复），``[]`` = 用户全取消 */
+  selected: string[] | null
   folder: string
   playMode: PlayMode
   stopAfterCurrent: boolean
@@ -87,7 +88,11 @@ function loadQueue(): PersistedQueue | null {
     if (items.length === 0) return null
     return {
       items,
-      selected: Array.isArray(obj.selected) ? obj.selected.filter((s: any) => typeof s === 'string') : [],
+      // 空数组与「没有这个字段」必须区分开：`[]` 是用户把勾选全取消，
+      // 恢复时若当成「没存过」而全选，下次投屏会把他排除掉的项又投出去。
+      selected: Array.isArray(obj.selected)
+        ? obj.selected.filter((s: any) => typeof s === 'string')
+        : null,
       folder: typeof obj.folder === 'string' ? obj.folder : '',
       playMode: (['sequential', 'shuffle', 'repeat-one'].includes(obj.playMode)
         ? obj.playMode : 'sequential') as PlayMode,
@@ -128,9 +133,9 @@ export const usePlaylistStore = defineStore('playlist', () => {
   const selected = ref<Set<string>>(
     restored
       ? new Set(
-          restored.selected.length
-            ? restored.selected.filter((id) => restored.items.some((it) => it.id === id))
-            : restored.items.map((it) => it.id),
+          restored.selected === null
+            ? restored.items.map((it) => it.id)
+            : restored.selected.filter((id) => restored.items.some((it) => it.id === id)),
         )
       : new Set(),
   )

@@ -92,7 +92,10 @@ export const useCastStore = defineStore('cast', () => {
     sleepMinutes.value = minutes
     clearSleepTimer()
     try {
-      localStorage.setItem(SLEEP_KEY, JSON.stringify({ deadline }))
+      // 同时存「用户选的那一档」：只存 deadline 的话，重启后界面只能按剩余
+      // 分钟数回填，而那是 13 这种不在 15/30/60/90 预设里的值，下拉框显示空白
+      // （倒计时还在走），看起来像定时器坏了。
+      localStorage.setItem(SLEEP_KEY, JSON.stringify({ deadline, minutes }))
     } catch {
       // 忽略：内存里的 sleepTimer 仍然有效
     }
@@ -127,7 +130,10 @@ export const useCastStore = defineStore('cast', () => {
     if (rawSleep) {
       const obj = JSON.parse(rawSleep)
       if (obj && typeof obj.deadline === 'number' && obj.deadline > Date.now()) {
-        const mins = Math.max(1, Math.round((obj.deadline - Date.now()) / 60000))
+        const stored = Number(obj.minutes)
+        const mins = Number.isFinite(stored) && stored > 0
+          ? stored
+          : Math.max(1, Math.round((obj.deadline - Date.now()) / 60000))
         armSleepTimer(obj.deadline, mins)
       } else {
         localStorage.removeItem(SLEEP_KEY)
@@ -586,8 +592,18 @@ export const useCastStore = defineStore('cast', () => {
       // 计时器还会在几秒后把下一项投出去
       clearImageDwell(id)
     })
-    // 手动停止队列播放也要把队列的「当前项」清掉，免得下次事件误判仍在队列中
-    usePlaylistStore().setPlayingId(null)
+    // 手动停止队列播放要把队列的「当前项」清掉，免得下次事件误判仍在队列中；
+    // 但多设备同时投同一队列时，A 停掉不能把 B 的位置抹成「0 / N」——
+    // B 播完那一集后会从第一集重新开始（`nextItem()` 在 cur 为 null 时回到开头）。
+    const playlist = usePlaylistStore()
+    const stillOnQueue = Object.keys(sessions.value).some((id) => {
+      if (ids.includes(id)) return false
+      const s = sessions.value[id]
+      if (!s || !['connecting', 'playing', 'paused'].includes(s.status)) return false
+      const uri = s.media?.uri
+      return !!uri && playlist.items.some((it) => it.media.uri === uri)
+    })
+    if (!stillOnQueue) playlist.setPlayingId(null)
     const names = ids.map((id) => sessions.value[id]?.device_name ?? id)
     let failed: string[] = []
     let reasons: string[] = []
@@ -849,10 +865,13 @@ export const useCastStore = defineStore('cast', () => {
   async function castQueueItem(
     deviceId: string,
     item: { id: string; media: any },
-    opts?: { startsQueue?: boolean },
+    opts?: { startsQueue?: boolean; manual?: boolean },
   ): Promise<boolean> {
-    // 用户刚按了停止：在途/排队的续播一律作废，别把设备又拉起来
-    if (userStoppedDevices.has(deviceId)) return false
+    // 用户刚按了停止：**自动**续播（在途/排队的那次）一律作废，别把设备又拉起来。
+    // 手动点播不受这条限制——`userStoppedDevices` 只在 startCast 里清除，而这里
+    // 先于 startCast 返回，早先「停止过一台设备之后，这台设备再也投不了文件夹」：
+    // 点投屏没有任何反应、也没有报错，必须先投一个单文件才能把标记洗掉。
+    if (!opts?.manual && !opts?.startsQueue && userStoppedDevices.has(deviceId)) return false
     const playlist = usePlaylistStore()
     const media = item.media as {
       uri: string; title?: string; mime_type?: string; thumbnail?: string | null
@@ -933,6 +952,26 @@ export const useCastStore = defineStore('cast', () => {
     return true
   }
 
+  /**
+   * 手动切集也要占住「换集中」窗口。
+   *
+   * 自动续播路径由 `advancePlaylistIfActive` 里的 `queueAdvancing` 占位挡住
+   * 设备在 SetAVTransportURI 的 Stop+Set 之间自报的那次 STOPPED；手动切集
+   * 早先没有这道闸，于是那条 STOPPED 被当成「一集播完」，`advancePlaylistIfActive`
+   * 又续投一集——按一次「下一集」实际跳过两集。
+   */
+  const queueAdvanceTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+  function holdQueueAdvance(deviceId: string): void {
+    const prev = queueAdvanceTimers.get(deviceId)
+    if (prev) clearTimeout(prev)
+    queueAdvancing.add(deviceId)
+    queueAdvanceTimers.set(deviceId, setTimeout(() => {
+      queueAdvanceTimers.delete(deviceId)
+      queueAdvancing.delete(deviceId)
+    }, 3000))
+  }
+
   /** 手动切下一集/上一集（控制器按钮）。没有队列或没有可播项时返回 false */
   async function skipToNext(): Promise<boolean> {
     const playlist = usePlaylistStore()
@@ -940,7 +979,8 @@ export const useCastStore = defineStore('cast', () => {
     if (!deviceId || !playlist.hasQueue) return false
     const next = playlist.manualNext()
     if (!next) return false
-    return castQueueItem(deviceId, next)
+    holdQueueAdvance(deviceId)
+    return castQueueItem(deviceId, next, { manual: true })
   }
 
   async function skipToPrev(): Promise<boolean> {
@@ -949,7 +989,8 @@ export const useCastStore = defineStore('cast', () => {
     if (!deviceId || !playlist.hasQueue) return false
     const prev = playlist.manualPrev()
     if (!prev) return false
-    return castQueueItem(deviceId, prev)
+    holdQueueAdvance(deviceId)
+    return castQueueItem(deviceId, prev, { manual: true })
   }
 
   // ── Event listeners ──
@@ -1034,7 +1075,10 @@ export const useCastStore = defineStore('cast', () => {
             if (focusedDeviceId.value === targetId) {
               showController.value = false
             }
-            if (activeDeviceIds.value.length <= 1) {
+            // 只有「一台还在投的都不剩」才停轮询。早先写的是 `<= 1`：两台设备
+            // 同时投屏时停掉其中一台，剩下的那台会立刻失去进度轮询（界面进度
+            // 停在原地、seek 后不同步），而它明明还在播。
+            if (activeDeviceIds.value.length === 0) {
               stopPolling()
             }
           }
@@ -1094,6 +1138,25 @@ export const useCastStore = defineStore('cast', () => {
   }): Promise<boolean> {
     const deviceId = focusedDeviceId.value || entry.deviceId
     if (!deviceId) return false
+    // 队列类历史：把整个文件夹重新载入队列再投第一项。早先这里和文件类走同一条
+    // 路（拿当初第一项的 uri 投一次），所以手机遥控页点一条「文件夹」历史只会
+    // 播一集，队列面板也是空的——与「队列走文件夹」的承诺不符。
+    if (entry.kind === 'queue' && entry.folder) {
+      const playlist = usePlaylistStore()
+      await playlist.loadFolder(entry.folder)
+      if (playlist.error) {
+        lastError.value = playlist.error === 'empty'
+          ? tt('media.queueEmpty')
+          : String(playlist.error)
+        return false
+      }
+      const first = playlist.playableItems[0]
+      if (!first) {
+        lastError.value = tt('media.queueEmpty')
+        return false
+      }
+      return castQueueItem(deviceId, first, { startsQueue: true, manual: true })
+    }
     // 链接类历史：直链带签名会过期，回到来源页重新解析再投（与 PC 端行为一致）
     if (entry.kind === 'url' && entry.sourceUrl) {
       return resolveShareAndCast(deviceId, entry.sourceUrl, entry.thumbnail ?? null)
@@ -1102,7 +1165,7 @@ export const useCastStore = defineStore('cast', () => {
     const uri = entry.filePath || entry.uri
     return castQueueItem(deviceId, { id: `hist-${Date.now()}`, media: {
       uri, title: entry.title, mime_type: entry.mime_type, thumbnail: entry.thumbnail ?? null,
-    } })
+    } }, { manual: true })
   }
 
   /** 解析分享链接后投屏（历史的链接类重投走这条） */
@@ -1113,7 +1176,7 @@ export const useCastStore = defineStore('cast', () => {
       if (!r || !r.uri) return false
       return castQueueItem(deviceId, { id: `share-${Date.now()}`, media: {
         uri: r.uri, title: r.title, mime_type: r.mime_type, thumbnail: thumb,
-      } })
+      } }, { manual: true })
     } catch {
       return false
     }
@@ -1151,7 +1214,9 @@ export const useCastStore = defineStore('cast', () => {
     }
     watch(
       () => [
-        playlist.items.length,
+        // 用 id 序列而不是 `items.length`：拖动排序/上下移动不改变长度，
+        // 只看长度的话遥控器页的队列顺序会一直停在旧的那一版。
+        playlist.items.map((it) => it.id).join('|'),
         playlist.selected,
         playlist.playMode,
         playlist.stopAfterCurrent,
@@ -1180,6 +1245,8 @@ export const useCastStore = defineStore('cast', () => {
     stopPolling()
     stopAllSim()
     clearAllImageDwell()
+    for (const timer of queueAdvanceTimers.values()) clearTimeout(timer)
+    queueAdvanceTimers.clear()
     unlistenFns.splice(0).forEach((fn) => fn())
   })
 

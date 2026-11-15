@@ -90,7 +90,12 @@ export const useLogsStore = defineStore('logs', () => {
 
   function open() {
     showPanel.value = true
-    refresh().then(startTail)
+    // 首次刷新是异步的：用户可能在它返回前就关掉面板，那时 `close()` 已经
+    // stopTail 过一次，这里的 startTail 又会把 3 秒轮询装回去——面板关着却
+    // 一直调 get_logs，直到下次再打开才被覆盖。
+    refresh().then(() => {
+      if (showPanel.value) startTail()
+    })
   }
 
   function close() {

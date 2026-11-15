@@ -60,8 +60,9 @@ watch(() => mirror.showPanel, (visible) => {
     copied.value = ''
     return
   }
-  void mirror.refreshStatus(false)
-  void mirror.refreshDevices()
+  // 入口按钮已经调过 `mirror.openPanel()`（refreshStatus + refreshDevices +
+  // startPolling）；这里再刷一遍等于每次打开都发两遍 mirror_status/devices，
+  // 两个回包乱序时界面还会闪回旧状态。
 })
 
 function close() {

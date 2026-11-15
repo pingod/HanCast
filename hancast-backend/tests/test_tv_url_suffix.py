@@ -254,6 +254,17 @@ class TestMimeTypeReachesTheTv(unittest.TestCase):
         s.play(BILI_URL, "")
         self.assertEqual(s.protocol.calls[0][1], "")
 
+    def test_null_mime_type_does_not_break_play(self):
+        """Rust 的 start_cast 是 Option<String>：前端不传 mimeType 时到这里是 None
+
+        （JSON null 不是缺省空串）。早先 `mime_type.startswith("image/")` 在
+        SetAVTransportURI+Play 已经发出去之后才抛 AttributeError：电视已经在放，
+        命令却回 success:false，界面报错并往失败台账记一笔。
+        """
+        s = _session()
+        s.play(BILI_URL, None)  # type: ignore[arg-type]
+        self.assertEqual(s.protocol.calls[0][1], "")
+
 
 if __name__ == "__main__":
     unittest.main()

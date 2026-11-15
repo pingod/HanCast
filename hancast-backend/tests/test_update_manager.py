@@ -215,6 +215,35 @@ class TestLatestSelection(unittest.TestCase):
         self.assertIn("可用的已发布版本", str(cm.exception))
 
 
+class TestReleaseCache(unittest.TestCase):
+    """带版本号的清单必须命中同一条缓存键
+
+    2026-11-15 审计：`get_release()` 读缓存用 `version or "latest"`，写缓存用
+    `_api_urls()` 给的 `v{version}`。于是 `update_release_info("2.4.0")` /
+    `update_download_start(..., version=...)` 每次都重新打 GitHub API——匿名限流
+    只有 60 次/小时，正是「检查更新报访问过于频繁」的来源之一。
+    """
+
+    def setUp(self):
+        um.invalidate_release_cache()
+        self.addCleanup(um.invalidate_release_cache)
+
+    def test_versioned_release_cached_under_the_key_it_is_read(self):
+        calls = []
+
+        def fake(url, timeout=8.0):
+            calls.append(url)
+            return release(tag="v2.4.0", assets=[])
+
+        with patch.object(um, "_http_json", fake):
+            first = um.get_release("2.4.0")
+            second = um.get_release("2.4.0")
+
+        self.assertEqual(first["version"], "2.4.0")
+        self.assertEqual(second["version"], "2.4.0")
+        self.assertEqual(len(calls), 1, "第二次必须走 60s 内存缓存，不能再打一次 API")
+
+
 class TestCheckForUpdate(DirCase):
     def _patch(self, payload):
         return patch.object(um, "_http_json", lambda url, timeout=8.0: payload)

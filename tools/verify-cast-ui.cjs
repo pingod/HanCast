@@ -207,10 +207,18 @@ async function fixture(locale = 'en-US') {
     // 桩里没有它就会在去抖回调里抛 TypeError 并让整套用例变红；这里把 items 全当已选中，
     // 与各用例“只放一条队列项”的写法一致。
     selected: new Set(),
+    // 手动切集与历史重投会走这两个（历史上帧测试只用到 nextItem）
+    manualNextValue: null, manualPrevValue: null, loadFolderCalls: 0, error: null,
     get playableItems() { return this.items },
     nextItem() { this.nextCalls += 1; return this.nextValue },
-    manualNext: () => null,
-    manualPrev: () => null,
+    manualNext() { return this.manualNextValue ?? null },
+    manualPrev() { return this.manualPrevValue ?? null },
+    async loadFolder(folder) {
+      this.loadFolderCalls += 1
+      this.folder = folder
+      this.hasQueue = this.items.length > 0
+      return this.items.length
+    },
     setPlayingId(id) { this.playingId = id },
     setStopAfterCurrent(v) { this.stopAfterCurrent = v },
     setPlayMode(m) { this.playMode = m },
@@ -881,6 +889,97 @@ test('history store: per-device cap keeps the newest entries and clearing stays 
   store.clear('tv1')
   assert.equal(store.forDevice('tv1').length, 0, '清空要按设备隔离')
   assert.equal(store.forDevice('tv2').length, 1, '别把别的设备的历史一起清掉')
+})
+
+
+test('停止只拦自动续播：之后手动投队列仍然要能投出去', async f => {
+  // 现场：投一个文件夹 → 停止 → 再投同一个文件夹 → 选定电视后什么都不发生。
+  // 根因是 castQueueItem 在调用 startCast **之前**就按 userStoppedDevices 返回 false，
+  // 而那个标记只有在 startCast 里才会被清——先有鸡还是先有蛋，于是这台设备
+  // 从此投不了任何队列（必须先投一个单文件把标记洗掉）。
+  await f.start('tv1')
+  await f.store.stopCast('tv1')
+  await flush()
+  f.playlist.hasQueue = true
+  f.playlist.items = [{ id: 'q1', media: { uri: 'https://invalid.test/q1.mp4' } }]
+  const before = f.count('startCast')
+
+  const auto = await f.store.castQueueItem('tv1', f.playlist.items[0])
+  assert.equal(auto, false, '自动续播必须继续被停止标记拦住')
+  assert.equal(f.count('startCast'), before)
+
+  const manual = await f.store.castQueueItem('tv1', f.playlist.items[0], { startsQueue: true })
+  await flush()
+  assert.equal(manual, true, '用户手动投队列是新的明确意图，不能被上一次停止静默拦掉')
+  assert.equal(f.count('startCast'), before + 1)
+})
+
+test('手动切集后设备的过渡 STOPPED 不会再自动跳一集', async f => {
+  await f.start('tv1')
+  const currentUri = f.store.sessions.tv1.media?.uri ?? 'https://invalid.test/low.mp4'
+  f.playlist.hasQueue = true
+  // 队列里要有「切过去的那一集」，advancePlaylistIfActive 才会认这是队列播放；
+  // 否则它本来就会因为「当前项不在队列里」返回 false，测不出换集窗口的作用。
+  f.playlist.items = [
+    { id: 'i1', media: { uri: currentUri } },
+    { id: 'i2', media: { uri: 'https://invalid.test/ep2.mp4' } },
+  ]
+  f.playlist.manualNextValue = { id: 'i2', media: { uri: 'https://invalid.test/ep2.mp4' } }
+  f.playlist.nextValue = { id: 'i3', media: { uri: 'https://invalid.test/ep3.mp4' } }
+
+  await f.store.skipToNext()
+  await flush()
+  // 换集的 SetAVTransportURI 会先 Stop 再 Set，设备自报一次 STOPPED；
+  // 没有「换集中」窗口时它被当成「一集播完」→ 再续一集 = 一次跳过两集。
+  f.listeners.get('cast_state_changed')({ payload: { device_id: 'tv1', status: 'STOPPED' } })
+  await flush()
+  assert.equal(f.playlist.nextCalls, 0, '换集窗口里的 STOPPED 不该触发自动续播')
+  // 换集窗口本身是个 3 秒计时器（与自动续播的 1.5 秒同形）；让它自然走完，
+  // fixture 结束时才会断言「没有遗留 timer」。
+  await f.clock.tick(3000)
+})
+
+test('停掉 A 不会清掉 B 在队列里的当前项', async f => {
+  await f.store.startCast('tv1', 'https://invalid.test/a.mp4')
+  await f.store.startCast('tv2', 'https://invalid.test/b.mp4')
+  await flush()
+  f.playlist.hasQueue = true
+  f.playlist.items = [
+    { id: 'x', media: { uri: 'https://invalid.test/a.mp4' } },
+    { id: 'y', media: { uri: 'https://invalid.test/b.mp4' } },
+  ]
+  f.playlist.setPlayingId('y')
+  await f.store.stopCast('tv1')
+  await flush()
+  assert.equal(f.playlist.playingId, 'y', 'B 还在放队列里那一项，A 的停止不能把位置抹掉')
+})
+
+test('历史里的文件夹条目重投会重新载入整个队列，而不是只播一集', async f => {
+  f.playlist.items = [{ id: 'h1', media: { uri: '/media/show-e1.mp4', media_type: 'file' } }]
+  // 桩里的 playableItems 是在建 store 时被 Pinia 求值成快照的（真实现是 computed），
+  // 这里同步一份，让「第一项」看得见——真实现的动态性由 playlist 自己的用例保证。
+  f.playlist.playableItems = f.playlist.items
+  const ok = await f.store.castHistoryEntry({
+    deviceId: 'tv1', uri: '/media/show-e1.mp4', title: '剧名', mime_type: 'video/mp4',
+    kind: 'queue', folder: '/shows/剧名',
+  })
+  await flush()
+  assert.equal(ok, true)
+  assert.equal(f.playlist.loadFolderCalls, 1, '队列历史必须走 loadFolder，才会把整队找回来')
+  assert.equal(f.playlist.folder, '/shows/剧名')
+  assert.equal(f.count('startCast'), 1)
+})
+
+test('history store: data-URL 缩略图不落盘（否则吃满 localStorage 配额）', async () => {
+  const { store, mem } = loadRealHistoryStore()
+  const thumb = 'data:image/jpeg;base64,' + 'A'.repeat(200000)
+  store.record({
+    deviceId: 'tv1', deviceName: 'TCL', uri: 'https://x/a.mp4', title: 'A',
+    mime_type: 'video/mp4', kind: 'url', thumbnail: thumb, at: 1000,
+  })
+  assert.ok(store.entries[0].thumbnail.startsWith('data:'), '本次会话仍要能显示抽帧缩略图')
+  const saved = JSON.parse(mem.get('hancast.cast.history'))
+  assert.equal(saved[0].thumbnail, null, 'data: 缩略图不能进 localStorage')
 })
 
 ;(async () => {

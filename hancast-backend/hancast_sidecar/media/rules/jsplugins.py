@@ -604,7 +604,10 @@ class PluginManager:
                     raise PluginError(f"zip 内不允许的文件（只收 manifest.json 和 .js）: {n}")
                 if info.file_size > _MAX_FILE_BYTES:
                     raise PluginError(f"单文件超过 2MB: {n}")
-                if (info.external_attr >> 16) & 0o170000 == 0o120000:
+                # 括号不能省：`&` 的优先级高于 `==`，写成
+                # `attr & 0o170000 == 0o120000` 实际是 `attr & (0o170000 == ...)`
+                # 即 `attr & False`，恒为 0——这条软链接拦截此前从未生效过。
+                if ((info.external_attr >> 16) & 0o170000) == 0o120000:
                     raise PluginError(f"zip 内不允许软链接: {n}")
             manifests = [i for i in entries
                          if i.filename.rsplit("/", 1)[-1] == "manifest.json"]

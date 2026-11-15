@@ -1,5 +1,7 @@
 """手机遥控器页（v2.4.6）——token 门、页面、状态、指令分发"""
 import json
+import os
+import time
 import urllib.error
 import urllib.request
 
@@ -28,6 +30,29 @@ def server():
         yield s
     finally:
         s.stop()
+
+
+def test_启动时清理隔夜上传(tmp_path):
+    """手机上传的文件原先成功路径从不删除、目录也从不回收
+
+    一段手机视频 1–2 GB，每传一次就永久多一份；界面上看不到这些文件，
+    只有磁盘慢慢变满。启动时按 24 小时清一次，当天正在投的那份留着
+    （电视可能还在拉流）。
+    """
+    s = RemoteControlServer(get_state=lambda: {}, action=lambda a, v: {},
+                            local_ip=lambda: "127.0.0.1")
+    s._upload_dir = str(tmp_path)
+    old = tmp_path / "up_old.mp4"
+    new = tmp_path / "up_new.mp4"
+    old.write_bytes(b"old")
+    new.write_bytes(b"new")
+    stale = time.time() - 25 * 3600
+    os.utime(old, (stale, stale))
+
+    s._prune_uploads()
+
+    assert not old.exists(), "超过一天的上传残留要清掉"
+    assert new.exists(), "当天的那份不能动（可能还在供流）"
 
 
 def _get(url):

@@ -268,7 +268,7 @@ const MOCK_DEVICES: Device[] = [
 const MOCK_SETTINGS: AppSettings = {
   usn: 'hancast-uuid-001',
   friendly_name: 'HanCast',
-  version: '2.4.13',
+  version: '2.4.14',
   media_port: 8080,
   default_device: null,
   network_interface: '',
@@ -553,7 +553,10 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
     case 'save_params': {
       const values = (args?.values ?? {}) as Record<string, number | boolean | string>
       for (const [key, value] of Object.entries(values)) {
-        if (mockParamSpecs().some((s) => s.default === value)) {
+        // 必须比「同一个 key 的默认值」：早先只比「任意参数的默认值」，
+        // 于是把 github.mirror_enabled 切成 true 时，因为别的参数默认值是 true，
+        // 这条覆盖被当成「回到默认」删掉——dev 里镜像开关永远拨不上去。
+        if (mockParamSpecs().some((s) => s.key === key && s.default === value)) {
           delete mockParamOverrides[key]
         } else {
           mockParamOverrides[key] = value
@@ -837,8 +840,8 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
       if (mockUpdateMode === 'off') {
         return {
           has_update: false,
-          current: '2.4.13',
-          latest: '2.4.13',
+          current: '2.4.14',
+          latest: '2.4.14',
           url: '',
           body: '',
           source: 'github',
@@ -848,7 +851,7 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
       const assets = mockUpdateAssets(os)
       return {
         has_update: true,
-        current: '2.4.13',
+        current: '2.4.14',
         // 远端版本刻意不用字面量，见 MOCK_UPDATE_REMOTE
         latest: MOCK_UPDATE_REMOTE,
         url: `https://github.com/pingod/HanCast/releases/tag/v${MOCK_UPDATE_REMOTE}`,
@@ -1086,7 +1089,9 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
         (!wantLevel || l.level === wantLevel) &&
         (!kw || l.raw.toLowerCase().includes(kw))
       )
-      const limit = Math.max(1, Number(args?.limit ?? 400))
+      // 查询条件（含 limit）都在 args.params 里：Rust 的 get_logs 只收一个
+      // params 形参，早先从 args.limit 读永远是 undefined，面板的档位形同虚设。
+      const limit = Math.max(1, Number(q.limit ?? 400))
       return {
         lines: lines.slice(-limit),
         total: lines.length,

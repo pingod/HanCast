@@ -34,8 +34,8 @@ function onAlways() {
             <span class="guard__title">{{ t('guard.newDevice') }}</span>
             <div class="guard__header-right">
               <span class="guard__countdown-text">
-                <strong>{{ guardStore.countdown }}</strong> 秒
-                <span class="guard__countdown-sub">后自动拒绝</span>
+                <strong>{{ guardStore.countdown }}</strong> {{ t('guard.secondsSuffix') }}
+                <span class="guard__countdown-sub">{{ t('guard.autoReject') }}</span>
               </span>
               <button class="guard__close" @click="onReject" :title="t('guard.reject')">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

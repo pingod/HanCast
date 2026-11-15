@@ -13,6 +13,7 @@ import shutil
 import hashlib
 import logging
 import subprocess
+import threading
 from typing import Dict, Optional, Tuple
 
 from ..utils import config
@@ -106,6 +107,23 @@ def remux(
             text=True, encoding="utf-8", errors="replace",
         )
         assert proc.stdout is not None
+        # stderr 必须**边跑边读**：ffmpeg 的 stderr 超过管道缓冲（约 64 KB）就
+        # 会阻塞在写 stderr 上，于是它永远不关 stdout，下面这个 for 也就永远等不到
+        # EOF——整个内封任务挂死、状态停在 running，后续字幕请求全被「上一件还在
+        # 进行中」拒掉。这与 screencast/capture.py 的 _drain_stderr 同一手法。
+        err_lines: list[str] = []
+
+        def _drain_stderr() -> None:
+            if proc.stderr is None:
+                return
+            for raw in proc.stderr:
+                err_lines.append(raw)
+                if len(err_lines) > 200:
+                    del err_lines[:100]
+
+        err_thread = threading.Thread(target=_drain_stderr, daemon=True,
+                                      name="hancast-subtitle-stderr")
+        err_thread.start()
         for line in proc.stdout:
             line = line.strip()
             if not line or "=" not in line:
@@ -119,8 +137,9 @@ def remux(
                     on_progress(pct)
                 except ValueError:
                     pass
-        stderr = proc.stderr.read() if proc.stderr else ""
         rc = proc.wait()
+        err_thread.join(timeout=2.0)
+        stderr = "".join(err_lines)
         if rc != 0:
             err_tail = [l for l in stderr.strip().splitlines() if l.strip()][-6:]
             raise RuntimeError("FFmpeg 内封失败: " + " | ".join(err_tail[-3:]))

@@ -397,6 +397,10 @@ class SSDPService:
         """SSDP 主循环"""
         my_gen = self._gen
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # 本代次独占的引用：restart 会把 self.sock/self.sock_list 换成新实例，
+        # 旧线程走到下面「代次已推进」分支时，只有这两个本地引用还能关掉
+        # 自己那份 socket（否则 UDP:1900 与每接口 socket 一起泄漏）。
+        my_sock = self.sock
         self.sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0)
 
         if sys.platform == 'win32':
@@ -427,6 +431,7 @@ class SSDPService:
             except Exception as e:
                 logger.warning(f"Failed to add membership for {ip}: {e}")
 
+        my_sock_list = self.sock_list
         if not self.sock_list:
             logger.error("No valid network interfaces found!")
             self.sock.close()
@@ -462,7 +467,16 @@ class SSDPService:
 
         # 清理（仅当代际未被 restart 推进：旧线程不得关闭新实例的 socket）
         if self._gen != my_gen:
-            logger.debug("Stale SSDP thread exiting; skip cleanup")
+            logger.debug("Stale SSDP thread exiting; closing its own sockets")
+            try:
+                my_sock.close()
+            except OSError:
+                pass
+            for s in my_sock_list:
+                try:
+                    s.close()
+                except OSError:
+                    pass
             return
         self._do_byebye()
         for ip, mask in self.ip_list:

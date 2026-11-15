@@ -363,13 +363,23 @@ class JsRuntime:
 
         JSException / ValueError / TimeoutError 原样抛出——调用方按
         「这条规则不适用」记录让路。看门狗 = 剩余解析预算 + 网络收尾余量。
-        """
-        self._deadline = deadline
-        self._session = session
 
+        ``deadline`` / ``session`` 必须**在固定执行线程里**赋值，不能在这里写
+        ``self._deadline``：队列只串行化「执行」，不串行化「赋值」。两条解析
+        并发用同一个包时（允许 3 个在途任务），B 会在 A 的 JS 正在跑时把
+        session 换掉，于是 A 的 ``host.fetch`` 带着 B 的 Cookie/UA 发请求、
+        ``host.sniff`` 拿着 B 的截止时间——间歇性串号，只在同时解析两条链接时出现。
+        """
         def _invoke():
-            self._ctx.set("__ctxStr", json.dumps(payload))
-            return self._ctx.eval(f"__callResolve({index}, __ctxStr)")
+            # 进入固定线程后才落上下文：host.* 都读这两项，与本次 eval 同线程同寿命
+            self._deadline = deadline
+            self._session = session
+            try:
+                self._ctx.set("__ctxStr", json.dumps(payload))
+                return self._ctx.eval(f"__callResolve({index}, __ctxStr)")
+            finally:
+                self._deadline = 0.0
+                self._session = None
 
         watchdog = max((deadline - time.monotonic()) + 2.0, _MIN_WATCHDOG)
         raw = self.runner.run(_invoke, watchdog)

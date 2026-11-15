@@ -8,7 +8,6 @@ DLNA 协议
 - 集成 aiohttp 服务
 """
 
-import re
 import time
 import uuid
 import http.client
@@ -18,6 +17,7 @@ import requests
 from lxml import etree
 from queue import Queue
 from typing import Optional, Dict, List, Callable
+from urllib.parse import urlparse
 from ..models.device import Device
 from ..utils.platform_info import build_server_info
 from ..media import cast_failures
@@ -150,8 +150,14 @@ class ObserveClient:
         self.sid = f"uuid:{uuid.uuid4()}"
         self.timeout = timeout
         self.seq = 0
-        self.host = re.findall(r"//([0-9:.]*)", url)[0]
-        self.path = re.findall(r"//[0-9:.]*(.*)$", url)[0]
+        # 用 urlparse 而不是 `//([0-9:.]*)`：那个正则只认数字/点/冒号，控制点
+        # 报 `http://phone.local:1234/cb` 这类主机名时 host 会解析成空串
+        # （之后每条 NOTIFY 都连不上），没有 `//` 的 CALLBACK 更会让
+        # `findall(...)[0]` 直接 IndexError，把 do_SUBSCRIBE 打断成掉连接。
+        parsed = urlparse(url or "")
+        self.scheme = parsed.scheme or "http"
+        self.host = parsed.netloc
+        self.path = (parsed.path or "/") + (f"?{parsed.query}" if parsed.query else "")
         self.error = 0
 
     def is_timeout(self):
@@ -163,6 +169,10 @@ class ObserveClient:
 
     def send_event_callback(self, data):
         """Sending event data to client"""
+        if not self.host:
+            # 解析不出主机就不要再逐条尝试：空主机名只会抛连接异常
+            logger.warning(f"EVENT SKIP: 订阅地址没有主机名 url={self.url!r}")
+            return
         logger.info(f"EVENT NOTIFY: service={self.service} to={self.host} "
                     f"seq={self.seq} data={list(data.keys())}")
         headers = {"NT": "upnp:event",
@@ -588,7 +598,11 @@ class DLNAProtocol:
         while not self.removed_device_queue.empty():
             sid = self.removed_device_queue.get()
             logger.info("Remove client: {}".format(sid))
-            del self.event_subscribes[sid]
+            # 用 pop：同一个 SID 可能被排进队列两次（控制点连发两次 UNSUBSCRIBE，
+            # 或超时移除与显式移除撞在一起）。早先这里是 `del`，第二次必然
+            # KeyError，而异常会穿出 event() 的循环把 DLNA 事件线程**永久打死**
+            # ——此后所有订阅者都收不到 LastChange NOTIFY，running 却还是 True。
+            self.event_subscribes.pop(sid, None)
             self.removed_device_queue.task_done()
         # add clients
         while not self.append_device_queue.empty():
@@ -629,7 +643,12 @@ class DLNAProtocol:
                     k, v = self.state_queue.get()
                     state[k] = v
                     self.state_queue.task_done()
-                self.send_states_to_clients(state)
+                # 这一轮出任何异常都不能让它穿出 while —— 线程一死就再没人重启
+                # （start() 见 running=True 直接返回），表现为「事件订阅静默失效」。
+                try:
+                    self.send_states_to_clients(state)
+                except Exception:
+                    logger.exception("DLNA 事件分发失败（线程继续运行）")
             time.sleep(1)
 
     def call(self, rawbody, caller_ip: str = None):

@@ -244,19 +244,45 @@ def reset() -> None:
 def inject_cookies(session, cookies: List[dict]) -> int:
     """把 WebView 的 cookie 灌进解析会话（「双罐同步」的浏览器→HTTP 方向）
 
-    requests 与 curl_cffi 的会话在这里是同一个口（``session.cookies.set``）：
-    前者是真 ``RequestsCookieJar``，后者被 utils.httpclient.CurlSession 的
-    property 遮成 stdlib CookieJar。灌不进去（域名不合）就跳过那条，
-    不值得为一枚 cookie 让整个解析炸掉。
+    两套 jar 的写入 API 不是一个：
+      * requests 的 ``RequestsCookieJar`` 有 ``.set(name, value, ...)``；
+      * curl_cffi 的会话被 utils.httpclient.CurlSession 遮成 **stdlib**
+        ``http.cookiejar.CookieJar``（见 `httpclient.py` 的 cookies property），
+        它只有 ``.set_cookie(Cookie(...))``，没有 ``.set``。
+
+    早先这里只认 ``.set``，于是默认配置（``http.tls_impersonate=true`` ⇒ 用
+    CurlSession）下每一枚 WebView cookie 都被静默丢弃，返回 0：解析会话没有
+    登录态，代理给电视的分片请求 403，症状是「浏览器里能看，投屏黑屏」。
     """
     jar = getattr(session, "cookies", None)
-    if jar is None or not hasattr(jar, "set"):
+    if jar is None:
+        return 0
+    setter = getattr(jar, "set", None)
+    set_cookie = getattr(jar, "set_cookie", None)
+    if setter is None and set_cookie is None:
         return 0
     done = 0
     for item in cookies:
+        name = str(item.get("name") or "")
+        if not name:
+            continue
+        value = str(item.get("value") or "")
+        domain = str(item.get("domain") or "")
+        path = str(item.get("path") or "/")
         try:
-            jar.set(item["name"], item["value"], domain=item["domain"],
-                    path=item.get("path") or "/")
+            if setter is not None:
+                setter(name, value, domain=domain, path=path)
+            else:
+                from http.cookiejar import Cookie
+
+                set_cookie(Cookie(
+                    version=0, name=name, value=value, port=None,
+                    port_specified=False, domain=domain,
+                    domain_specified=bool(domain),
+                    domain_initial_dot=domain.startswith("."),
+                    path=path, path_specified=True, secure=False, expires=None,
+                    discard=True, comment=None, comment_url=None, rest={},
+                    rfc2109=False))
             done += 1
         except Exception as e:                      # noqa: BLE001 - 单条 cookie 不值得炸
             logger.debug(f"cookie 注入跳过 {item.get('name')}: {e}")

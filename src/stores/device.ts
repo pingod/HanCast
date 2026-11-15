@@ -25,6 +25,9 @@ export const useDeviceStore = defineStore('device', () => {
   const manualDevices = ref<string[]>([])
   const adding = ref(false)
   const addError = ref<string | null>(null)
+  /** 重命名/设默认/隐藏这类「瞬时动作」的失败原因：此前直接 fire-and-forget，
+   *  后端超时只会变成一条 unhandled rejection，界面照常关掉菜单、列表没变。 */
+  const lastError = ref<string | null>(null)
 
   let refreshTimer: number | undefined
   const unlistenFns: UnlistenFn[] = []
@@ -51,25 +54,57 @@ export const useDeviceStore = defineStore('device', () => {
     }
   }
 
-  async function setDefault(id: string) {
-    await apiSetDefault(id)
-    devices.value.forEach((d) => (d.is_default = d.id === id))
+  function failure(err: unknown): string {
+    return err instanceof Error ? err.message : String(err)
   }
 
-  async function rename(id: string, name: string) {
-    await apiRename(id, name)
-    const device = devices.value.find((d) => d.id === id)
-    if (device) device.name = name
-  }
-
-  async function hide(id: string) {
-    await apiHide(id)
-    devices.value = devices.value.filter((d) => d.id !== id)
-    if (selectedDevice.value?.id === id) {
-      selectedDevice.value = null
+  async function setDefault(id: string): Promise<boolean> {
+    lastError.value = null
+    try {
+      await apiSetDefault(id)
+      devices.value.forEach((d) => (d.is_default = d.id === id))
+      return true
+    } catch (err) {
+      console.error('Failed to set default device:', err)
+      lastError.value = failure(err)
+      return false
     }
-    // 隐藏后同步隐藏列表，用户想反悔时能立刻在「已隐藏」里找回
-    fetchHiddenDevices()
+  }
+
+  async function rename(id: string, name: string): Promise<boolean> {
+    lastError.value = null
+    try {
+      await apiRename(id, name)
+      const device = devices.value.find((d) => d.id === id)
+      if (device) device.name = name
+      return true
+    } catch (err) {
+      console.error('Failed to rename device:', err)
+      lastError.value = failure(err)
+      return false
+    }
+  }
+
+  async function hide(id: string): Promise<boolean> {
+    lastError.value = null
+    try {
+      await apiHide(id)
+      devices.value = devices.value.filter((d) => d.id !== id)
+      if (selectedDevice.value?.id === id) {
+        selectedDevice.value = null
+      }
+      // 隐藏后同步隐藏列表，用户想反悔时能立刻在「已隐藏」里找回
+      fetchHiddenDevices()
+      return true
+    } catch (err) {
+      console.error('Failed to hide device:', err)
+      lastError.value = failure(err)
+      return false
+    }
+  }
+
+  function dismissError() {
+    lastError.value = null
   }
 
   // ── 已隐藏设备（此前"隐藏"是单向门：界面上没有任何入口能恢复）──
@@ -226,6 +261,8 @@ export const useDeviceStore = defineStore('device', () => {
     manualDevices,
     adding,
     addError,
+    lastError,
+    dismissError,
     hiddenDevices,
     showHiddenModal,
     fetchDevices,

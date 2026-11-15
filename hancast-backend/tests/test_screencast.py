@@ -1050,5 +1050,52 @@ class TestHlsDidl(unittest.TestCase):
                       build_didl_item("http://x/y.m3u8", HLS_MIME, ""))
 
 
+
+class TestWindowsMonitorEnumeration(unittest.TestCase):
+    """Windows 上枚举单块显示器：用到的名字必须都定义过
+
+    2026-11-15 审计：`_list_monitors()` 的 Windows 分支用了**没导入**的
+    `wintypes` 和一个根本不存在的 `primary_flag`。它被 `list_sources()` 无条件
+    调用，所以 Windows 上「捕获源列表」整条命令必然 NameError——屏幕、窗口、
+    音频一处都拿不到（面板只会显示「无法获取投屏源」）。
+
+    这里用假的 `ctypes.windll` 跑同一条代码路径：名字一旦缺失（或以后又被
+    改掉），这个用例会当场 NameError，而不是等到 Windows 真机上才发现。
+    """
+
+    def test_windows_branch_runs_without_nameerror(self):
+        import ctypes
+        import types as pytypes
+        from hancast_sidecar.screencast import ffmpeg_manager as fm
+
+        class FakeUser32:
+            def GetMonitorInfoW(self, hmon, ptr):
+                info = ptr._obj                      # MONITORINFO 实例
+                info.rcMonitor.left = 0
+                info.rcMonitor.top = 0
+                info.rcMonitor.right = 1920
+                info.rcMonitor.bottom = 1080
+                info.dwFlags = 0x1                    # MONITORINFOF_PRIMARY
+                return True
+
+            def EnumDisplayMonitors(self, hdc, clip, proc, data):
+                proc(1, 0, None, 0)
+                return 1
+
+        fake_windll = pytypes.SimpleNamespace(user32=FakeUser32())
+        with patch.object(fm, "sys", pytypes.SimpleNamespace(platform="win32")), \
+             patch.object(fm, "os", pytypes.SimpleNamespace(name="nt")), \
+             patch.object(ctypes, "windll", fake_windll, create=True), \
+             patch.object(ctypes, "WINFUNCTYPE", ctypes.CFUNCTYPE, create=True):
+            mgr = FfmpegManager.__new__(FfmpegManager)
+            monitors = mgr._list_monitors()
+
+        self.assertEqual(len(monitors), 1)
+        self.assertEqual(monitors[0]["width"], 1920)
+        self.assertEqual(monitors[0]["height"], 1080)
+        self.assertTrue(monitors[0]["primary"])
+        self.assertEqual(monitors[0]["id"], "screen:0,0,1920,1080")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -34,7 +34,20 @@ _NO_PROXY = {"http": "", "https": ""}
 # SSDP 常量
 SSDP_PORT = 1900
 SSDP_ADDR = '239.255.255.250'
-SSDP_MX = 1  # 单播探测超时时间（秒）
+SSDP_MX = 1  # 单播探测超时的默认值（秒）；实际值读后台参数 discovery.guard_mx
+
+
+def guard_mx() -> int:
+    """单播探测等待时间（秒）：后台参数 ``discovery.guard_mx``，非法值回落 1
+
+    设置页把它写成「单播确认超时」并允许 1–8 秒；早先 Guard 只认模块常量
+    ``SSDP_MX``，用户调这个参数没有任何效果（慢设备照样 1 秒判失败）。
+    """
+    try:
+        value = int(param("discovery.guard_mx"))
+    except (TypeError, ValueError):
+        return SSDP_MX
+    return min(max(value, 1), 8)
 
 # 常用 DLNA 端口（按历史成功率排序）
 COMMON_PORTS = [8080, 49152, 49153, 1900]
@@ -508,16 +521,17 @@ class DeviceGuard:
         向目标设备的 UDP 1900 端口发送单播 M-SEARCH 请求，
         解析响应中的 LOCATION 和 USN 字段获取设备信息。
         """
+        mx = guard_mx()
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            sock.settimeout(SSDP_MX)
+            sock.settimeout(mx)
 
             # 构造 M-SEARCH 请求
             message = (
                 "M-SEARCH * HTTP/1.1\r\n"
                 f"HOST: {SSDP_ADDR}:{SSDP_PORT}\r\n"
                 'MAN: "ssdp:discover"\r\n'
-                f"MX: {SSDP_MX}\r\n"
+                f"MX: {mx}\r\n"
                 "ST: ssdp:all\r\n"
                 "\r\n"
             )

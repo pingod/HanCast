@@ -529,6 +529,7 @@ class RemoteControlServer:
             logger.error("[Remote] aiohttp 不可用，遥控器页无法启动")
             return False
         self.host = host
+        self._prune_uploads()
         if not self.token:
             self.token = secrets.token_urlsafe(9)
         started = threading.Event()
@@ -599,6 +600,33 @@ class RemoteControlServer:
         return f"http://{self._local_ip()}:{self.port}/r/{self.token}/"
 
     # ── 路由 ──
+    def _prune_uploads(self) -> None:
+        """清掉隔夜的上传残留
+
+        手机相册上传的每个文件都落在 ``<tmp>/hancast-remote-uploads/``（一段视频
+        可能 1–2 GB），成功路径原先**从不删除**、目录也从不回收：用得越久磁盘越满，
+        而界面上没有任何地方能看到这些文件。这里只按时间清「上次启动之前留下的」，
+        当天正在投的那份不动（电视可能还在拉流）。
+        """
+        d = self._upload_dir or os.path.join(
+            tempfile.gettempdir(), "hancast-remote-uploads")
+        cutoff = time.time() - 24 * 60 * 60
+        try:
+            names = os.listdir(d)
+        except OSError:
+            return
+        removed = 0
+        for name in names:
+            full = os.path.join(d, name)
+            try:
+                if os.path.isfile(full) and os.path.getmtime(full) < cutoff:
+                    os.remove(full)
+                    removed += 1
+            except OSError:
+                continue
+        if removed:
+            logger.info(f"[Remote] 清理 {removed} 个过期上传文件（{d}）")
+
     def _build_app(self):
         app = web.Application(client_max_size=MAX_UPLOAD_BYTES)
         r = "/r/{token}"

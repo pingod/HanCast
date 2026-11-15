@@ -31,8 +31,11 @@ const bitrate = ref('2M')
 const depsPrompted = ref(false)
 
 // ── 打开面板时刷新 ──
+// 入口按钮（HomeView）已经调过 store 的 openPanel（取源 + 状态），这里只补
+// 本组件自己需要的那一份；再调一次 openPanel 会让每次打开都发两遍
+// list_screen_sources / screen_cast_status（枚举窗口与音频设备不便宜），
+// 两个回包乱序时还会把旧状态盖回新的上面。
 function onOpen() {
-  sc.openPanel()
   deviceStore.fetchDevices()
   // 默认选第一个在线设备
   if (!deviceId.value && deviceStore.devices.length > 0) {

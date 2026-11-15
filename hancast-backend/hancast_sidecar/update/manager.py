@@ -378,14 +378,17 @@ def get_release(version: str = "") -> Dict[str, Any]:
     「有没有新版」和「新版有什么可下载」必须来自同一次取数，否则界面会出现
     「提示有 2.5.0，下载时按 2.4.11 的产物挑」。
     """
-    key = version or "latest"
+    # 读缓存与写缓存必须用**同一个键**：早先读用 `version or "latest"`、写用
+    # `_api_urls()` 给的 `v{version}`，于是带版本号的请求永远命中不了缓存，
+    # 每调一次都重新打 GitHub API（匿名限流 60 次/小时，正是
+    # `_friendly_http_error` 里那条「访问过于频繁」的来源）。
+    cache_key, url = _api_urls(version)
     now = time.time()
     with _release_lock:
-        hit = _release_cache.get(key)
+        hit = _release_cache.get(cache_key)
         if hit and now - hit[0] < RELEASE_CACHE_TTL:
             return hit[1]
 
-    cache_key, url = _api_urls(version)
     errors: List[str] = []
     for via, fetch_url in ghmirror.candidates(url):
         try:

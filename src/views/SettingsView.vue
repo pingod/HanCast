@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
+import { setLocale } from '@/i18n'
 import { useSettingsStore } from '@/stores/settings'
 import { useThemeStore, type ThemeMode } from '@/stores/theme'
 import { useGuardStore } from '@/stores/guard'
@@ -53,22 +54,40 @@ function goBack() {
 }
 
 function onLanguageChange(lang: string) {
-  locale.value = lang
+  // setLocale 同时写 localStorage：只改运行期 locale 的话重启就回中文
+  setLocale(lang)
 }
 
 function onThemeChange(mode: ThemeMode) {
   themeStore.apply(mode)
 }
 
+// 保存失败要看得见：此前 catch 里只 console.error，输入框还留着新值，
+// 用户下一次启动才发现名字/网卡没变。
+const saveError = ref('')
+
 async function saveFriendlyName() {
-  await settingsStore.saveSettings({ friendly_name: friendlyName.value })
+  const ok = await settingsStore.saveSettings({ friendly_name: friendlyName.value })
+  if (!ok) {
+    saveError.value = t('settings.saveFailed', { msg: settingsStore.error })
+    // 回到后端真实值，别让界面继续显示一个没存下去的假值
+    friendlyName.value = settingsStore.settings.friendly_name
+  } else {
+    saveError.value = ''
+  }
 }
 
 async function onNetworkInterfaceChange(value: string | number) {
   const ip = String(value)
   if (ip === networkInterface.value) return
   networkInterface.value = ip
-  await settingsStore.saveSettings({ network_interface: ip })
+  const ok = await settingsStore.saveSettings({ network_interface: ip })
+  if (!ok) {
+    saveError.value = t('settings.saveFailed', { msg: settingsStore.error })
+    networkInterface.value = settingsStore.settings.network_interface || ''
+  } else {
+    saveError.value = ''
+  }
 }
 
 function onGuardEnabledChange(e: Event) {
@@ -339,6 +358,7 @@ async function onCheckUpdate() {
           />
         </div>
         <p class="settings__hint">{{ t('settings.interfaceHint') }}</p>
+        <p v-if="saveError" class="settings__hint settings__hint--error">{{ saveError }}</p>
 
       </section>
 
@@ -777,6 +797,10 @@ async function onCheckUpdate() {
   border-color: var(--border-focus);
   outline: 2px solid var(--border-focus);
   outline-offset: 2px;
+}
+
+.settings__hint--error {
+  color: #e5484d;
 }
 
 .settings__hint {

@@ -1,6 +1,6 @@
 # Changelog
 
-> 最后校对：2026-11-06，对应版本 v2.4.13（`package.json:4`）。
+> 最后校对：2026-11-15，对应版本 v2.4.14（`package.json:4`）。
 
 本文件记录 HanCast 的版本历史。口径说明：
 
@@ -10,6 +10,137 @@
 - 新加版本时**同一次提交**里补这里，并按 [docs/README.md](docs/README.md) §4 的约定同步对应文档。
 
 ---
+
+## v2.4.14 — 2026-11-15（全仓缺陷修复：Windows 捕获源 / DLNA 事件线程 / 退出清理 / 队列与持久化）
+
+**这一版没有新功能。** 在 v2.4.13 上做了一轮全仓缺陷审计（三层逐文件审读 + 并发/生命周期推演
++ 静态分析 + 跑既有闸门），修掉 40 项现有测试与闸门覆盖不到的缺陷。用户可感知的典型症状
+（这一版之后都应消失）：
+
+- Windows 上打开屏幕投屏，面板拿不到任何屏幕/窗口/音频源；
+- 投屏一段时间后，控制点的状态通知突然全部静默（事件线程已死，日志无报错）；
+- 退出应用后留下 scrcpy 窗口、FFmpeg 进程或 MPV；
+- 对一台设备按过一次「停止」之后，再投同一个文件夹毫无反应，必须先投一个单文件；
+- 两台电视同时投屏，停掉其中一台，另一台的进度/seek/时长不再刷新；
+- 应用内下载卡在「连接中」，后端其实还在下；
+- 网页里能看的视频投到电视黑屏（浏览器 Cookie 一枚都没进解析会话）；
+- 多地址规则的第一条是死链时，第二条永远不被尝试；
+- 设置里调「单播确认超时」完全不生效。
+
+### A. 平台层
+
+- **Windows 捕获源枚举**：`_list_monitors()` 的 Windows 分支用了未导入的 `wintypes` 和不存在的
+  `primary_flag`，而它被 `list_sources()` 无条件调用——Windows 上整条 `list_screen_sources`
+  必然 `NameError`。补局部导入、`MONITORINFOF_PRIMARY`，并把枚举初始化包进 try。
+  回归：`tests/test_screencast.py::TestWindowsMonitorEnumeration`（用假 `ctypes.windll`
+  跑同一条代码路径；换回旧代码当场 `NameError`）。
+- **DLNA 事件线程**：重复 `UNSUBSCRIBE` 让 `removed_device_queue` 里同一个 SID 出现两次，
+  第二次 `del` 抛 `KeyError`，异常穿出 `event()` 的循环把线程永久打死（`running` 仍是 True，
+  `start()` 见 running 直接返回，不会重启）。改 `pop(sid, None)` 并给每轮分发加兜底日志。
+  回归：`tests/test_dlna_event_dispatch.py`。
+- **订阅地址解析**：旧正则只认数字/点/冒号，`http://phone.local:1234/cb` 解析出空 host；
+  没有 `//` 的 CALLBACK 直接 `IndexError` 打断 `do_SUBSCRIBE`。改用 `urlparse`，空 host
+  只跳过 NOTIFY 不再逐条抛异常。
+- **`mimeType` 为 null**：Rust 的 `start_cast` 是 `Option<String>`，前端不传时 JSON 里是
+  **null** 而不是空串；`session.play()` 在 SetAVTransportURI + Play 已经发出去之后才
+  `None.startswith` 抛错——电视在放、命令却回失败。命令层与 `play()` 都做规范化。
+  回归：`tests/test_tv_url_suffix.py::test_null_mime_type_does_not_break_play`。
+
+### B. Rust 壳层
+
+- **退出清理**：原来只在托盘「退出」菜单里显式 `shutdown()`，且非 Windows 只等 1 秒
+  （Windows 3 秒）就 SIGKILL，而 Python 清理镜像/屏幕投屏最长约 7 秒——正在投屏时退出必留
+  孤儿进程。现在统一在 `RunEvent::ExitRequested` 收口（托盘、Cmd-Q、系统注销、应用内更新
+  都走这里），宽限期 12 秒；应用内更新先等 sidecar 清理完再起安装脚本，避免 NSIS 在进程
+  还活着时替换文件。
+- **`send_command` 泄漏**：进程不在或写失败时直接 `?` 返回，`pending` 里的 oneshot 留在表里，
+  sidecar 一死托盘每秒漏一条。补摘除。
+- **导出日志**：`blocking_save_file()` 会占住 async 运行时工作线程直到用户选完文件；改回调 +
+  oneshot，命令不再阻塞其它 invoke 与托盘轮询。
+- **托盘菜单**：常驻轮询任务里的几处 `unwrap()` 一旦失败就 panic，整个托盘更新循环退出；
+  改为 `Result` + stderr 日志，下一轮重试。
+- **互斥锁中毒**：窗口尺寸/托盘 URL 这几把锁用 `unwrap()`，一次 panic 会让之后每次 resize、
+  每次托盘刷新继续 panic。改为 `unwrap_or_else(|e| e.into_inner())`。
+- **窗口配置原子写**：`window_config.json` 直接覆盖写，断电截断后只能回落默认尺寸；改为
+  同目录临时文件 + `rename`。
+
+### C. Sidecar
+
+- **浏览器 Cookie 注入**：`inject_cookies()` 只认 `.set`，而默认配置走 curl_cffi，会话的
+  jar 是 stdlib `CookieJar`（只有 `set_cookie`）——每枚 Cookie 都被静默丢弃，登录态进不了
+  解析会话，代理给电视的分片 403。两种 API 都支持。
+  回归：`tests/test_browser_channel.py::test_inject_cookies_into_stdlib_cookiejar`。
+- **声明式规则多 output**：`resolve()` 在循环第一轮无条件 return，第一条被验证判死也照样交付。
+  改为「明确不可播 → 试下一条，全部试完才报错」，网络故障仍按原样交付（旧语义保留）。
+  回归：`tests/test_declarative_rules.py`。
+- **JS 运行时并发串号**：`_deadline`/`_session` 在入队前写到 runtime 上，两个解析并发时
+  会互相覆盖，`host.fetch` 可能带另一个任务的 Cookie/UA。改为在固定执行线程里赋值、退出清空。
+- **遥控器页状态竞态**：aiohttp 线程直接迭代 `device_sessions`，与停止投屏撞上时
+  `RuntimeError` 被吞成 `{"session": null}`。改为 `dict()` 原子快照（不抢 `_cast_lock`，
+  避免 SOAP 慢调用卡住手机页）。
+- **更新清单缓存键**：读用 `version or "latest"`、写用 `v{version}`，带版本号的请求每次都
+  重新打 GitHub API（匿名限流 60 次/小时）。统一用 `_api_urls()` 的键。
+  回归：`tests/test_update_manager.py::TestReleaseCache`。
+- **死参数接线**：`discovery.guard_mx` 登记了很久但 Guard 写死 `SSDP_MX = 1`；现在单播探测的
+  socket timeout 与 `MX:` 头都读这个参数（1–8 秒）。
+- **临时文件**：手机相册上传成功路径从不删、字幕内封产物 `cleanup_cache()` 全仓零调用——
+  单个视频 1–2 GB，长期只增不减。启动时清理超过 24 小时的上传、开机清空字幕缓存。
+  回归：`tests/test_remote_control.py::test_启动时清理隔夜上传`。
+- **`_probe_url` 泄漏**：历史面板一次三条并发探活，会话与 HEAD 响应都不关。改 `finally` 全关。
+- **字幕内封死锁**：ffmpeg 的 stderr 写满管道后阻塞，stdout 永不 EOF，状态永远停在 running；
+  stderr 改独立线程排空。
+- **插件 zip 软链接拦截**：`attr & 0o170000 == 0o120000` 因优先级实际是 `attr & False`，
+  这条检查从来没生效过。加括号。
+- **SSDP restart 泄漏**：join 超时后旧线程走「代次已推进」分支直接 return，不关自己的 socket；
+  改为关闭本代次持有的 socket 与每接口 socket。
+
+### D. 前端
+
+- **停止后投不了队列**：`castQueueItem` 在 `startCast` 之前按 `userStoppedDevices` 返回 false，
+  而标记只在 `startCast` 里清——先有鸡还是先有蛋。自动续播仍被拦，手动投队列/切集/重投历史
+  放行。回归：`verify-cast-ui` 新增用例。
+- **多设备轮询**：停一台时 `activeDeviceIds.length <= 1` 就 `stopPolling()`，另一台还在播也会
+  失去进度轮询。改为只在 0 台时停。
+- **队列位置串设备**：停 A 时无条件 `setPlayingId(null)`，B 的「第 n / N」被抹掉、下一集会从
+  第一集重新开始。改为仅当没有其它设备仍在队列项上时清。
+- **手动切集双跳**：设备的过渡 STOPPED 会被自动续播当成「一集播完」；手动切集也占住
+  「换集中」窗口（计时器纳入 unmount 清理）。
+- **历史文件夹重投**：`castHistoryEntry` 没处理 `kind === 'queue'`，手机遥控页点一条文件夹
+  历史只播一集。现在重新 `loadFolder` 并整队投第一项。
+- **遥控器队列顺序不同步**：`watch` 只看 `items.length`，拖动排序不改变长度；改看 id 序列。
+- **语言不落盘**：切到 English 重启回中文。`setLocale()` 写 localStorage，启动读回。
+- **历史缩略图撑爆配额**：本地视频抽帧的 data URL 单张数百 KB，20 条/设备很快吃满 5 MB，
+  之后历史和队列的落盘一起静默失效。持久化时剥掉 `data:` 缩略图，内存里仍显示。
+- **确认弹窗硬编码中文**：倒计时「秒」「后自动拒绝」直接写死；补 `guard.secondsSuffix` /
+  `guard.autoReject` 中英文案。
+- **日志轮询泄漏**：首次刷新途中关面板，`startTail` 仍把 3 秒定时器装回去。
+- **面板重复取数**：屏幕投屏/手机镜像面板打开时，入口按钮与面板 watch 各刷一遍（重复枚举
+  窗口/音频，回包乱序还会覆盖）。
+- **静默失败**：设备设默认/重命名/隐藏是 fire-and-forget；设置保存失败只 `console.error`。
+  现在全部 await + 可见错误条/错误提示，并把输入框回退到后端真实值。
+- **睡眠定时档位**：重启后按剩余分钟回填（13），不在 15/30/60/90 预设里，下拉框空白；改为
+  连用户选的档位一起落盘。
+- **队列「全不选」**：持久化的空集合被当成「没存过」而恢复成全选；改为区分 `[]` 与缺失。
+- **重复选同一文件**：`<input type=file>` 的 value 没清，第二次 change 不触发；选择后清空。
+- **dev mock**：`save_params` 拿「任意参数的默认值」比较、`get_logs` 的 limit 读错位置。
+
+### E. 测试与验证（全部离线）
+
+- Python：**707 passed / 3 subtests**（原 695；新增 `test_declarative_rules.py`、
+  `test_dlna_event_dispatch.py`，另在 screencast / tv_url_suffix / browser_channel /
+  update_manager / remote_control 里补用例）。
+- 前端：`vue-tsc` 干净、`vite build` 成功；`tools/verify-cast-ui.cjs` **35/35**（新增 5 条，
+  其中 3 条做过负向对照），playlist-advance 22、locale-keys / device-list-empty /
+  section-boundary / remote-entry / media-theme / app-lifecycle 全过。
+- Rust：`tools/rust-check.sh`（`cargo check`）通过。
+- 其它：`verify-sidecar-utf8-protocol`、`verify-dlna-volume-chain`、`verify-tv-url-suffix`、
+  `build-rule-packs.py --check` 全 PASS。
+- 文档闸门：`tools/check-doc-freshness.py` 23 份文档 FAIL 0（代码行号整体位移后已重锚），
+  `tools/audit-doc-refs.py` 4584 处引用 0 可疑。
+
+### F. 发布记录
+
+（待 CI 完成后补：tag、发布提交、CI run、各平台产物 sha256、macOS/Linux 装端结果。）
 
 ## v2.4.13 — 2026-11-06（本轮实际发布的那一版：v2.4.12 全部内容 + CI runner 标签修复）
 
@@ -158,7 +289,7 @@ The configuration 'macos-14-arm64-us-default' is not supported
 
 真因是**队列自动续播只有一个触发点**：设备自报 `STOPPED`/`IDLE`。图片永远等不到那一刻——后端对图片直接跳过进度轮询（`models/session.py:88-91`），接收端 mpv 挂静帧也不发 `end-file`。而 `list_folder` 认 `.jpg`（`media/parser.py:23`），自然序又把 `Cover.jpg` 排在 `《某剧…` 前面（字母 `c` 的码位低于 `《`），于是**队列第一项是封面图**：投出去后状态永久停在 playing，后面 39 集一集都不会起。现场目录 `H:\视频\动漫\JOJO的奇妙冒险1-6季\JOJO的奇妙冒险 S05 黄金之风`（39 个 mp4 + Cover.jpg；同级 6 季里 5 季都带封面，只有 S06 没有——所以「有时候又是好的」）。取证铁证：发送侧 `Play` 之后那句 `Image cast, skip progress polling: image/jpeg`，接收侧同一时刻 `update duration 0:00:00` 且只有 video-reconfig 没有 audio-reconfig。
 
-- 修法在**发送端**（队列是前端权威，后端明确不复制一套队列逻辑，`commands.py:1011-1015`）：`castQueueItem` 投完一项按 `isImageMedia` 分流，图片项走新增的 `armImageDwell`（`cast.ts:820`），到点调**同一条** `advancePlaylistIfActive`——播放模式、播完即停、勾选子集、历史记账的语义一律不变。
+- 修法在**发送端**（队列是前端权威，后端明确不复制一套队列逻辑，`commands.py:1011-1015`）：`castQueueItem` 投完一项按 `isImageMedia` 分流，图片项走新增的 `armImageDwell`（`cast.ts:836`），到点调**同一条** `advancePlaylistIfActive`——播放模式、播完即停、勾选子集、历史记账的语义一律不变。
 - 计时器三条撤除路径：点停止（`cast.ts:587`）、组件卸载（`cast.ts:1182`）、被新起播取代（`castOp` 代次判定）。两个刻意的特例：**暂停时到点不跳走**而是重新挂起（用户按了暂停就别自己翻篇）；`repeat-one` 不计时（每 N 秒把同一张图重推一遍只会闪屏）。
 - 停留时长可配：队列面板新增 `🖼 图片停 N 秒` 档位（`MediaInput.vue:1043`，**只有队列里真有图片项才出现**），点击循环 5/8/15/30（`IMAGE_DWELL_STEPS`，`playlist.ts:18`），随队列落盘进 `hancast.playlist.queue` 的 `imageDwellSeconds`。
 - 回归：`tools/verify-playlist-advance.cjs` 断言 **10→22**（图片组⑥～⑨），两条关键判据做过**负向对照**——撤掉 `armImageDwell` 调用则「到点自动投下一项」FAIL；撤掉 `clearImageDwell(id)` 则「点停止必须撤掉在途计时器」FAIL（这条一开始写成数定时器总量，没有牙齿，改成按延时长筛才真抓住）。
@@ -438,7 +569,7 @@ HanCast 本身既是控制端也能当接收端（DLNA 渲染端），但设备�
 - 新增 Sidecar 命令 `cast_failure_list` / `cast_failure_clear`；后台日志面板新增「投屏失败台账」区（`components/LogsPanel.vue`，中英文案 `logs.castFailures*`）。
 
 ### 直链有效性预检 + 历史自动重解
-- 新增 Sidecar 命令 `probe_url`（commands.py:1240）：探直链是否还在（过期 / 被 CDN 判废提前暴露）。前端 `MediaInput.vue:601` 在历史条目重投前调用；历史里的 url 条目重投时自动回来源页重解（提示文案 `media.historyDead` / `media.historyDeadHint`）。
+- 新增 Sidecar 命令 `probe_url`（commands.py:1255）：探直链是否还在（过期 / 被 CDN 判废提前暴露）。前端 `MediaInput.vue:601` 在历史条目重投前调用；历史里的 url 条目重投时自动回来源页重解（提示文案 `media.historyDead` / `media.historyDeadHint`）。
 
 ### 行号与硬数字
 - 命令总数 71 → **74**（lib.rs:1612-1680），Sidecar 注册表 64 → **67**（`commands.py:132-232`），`src/api/commands.ts` 导出 70 → **73**，locale 369 → **375** 键。
@@ -694,7 +825,7 @@ HanCast 本身既是控制端也能当接收端（DLNA 渲染端），但设备�
 - **实测证据（不是推测）**：装好 2.3.21 后往那台 TCL 投被拒，重复五次，`usernoted` 库里躺着五条 `com.han.hancast` 记录——标题 `投屏失败`、正文 `unknown tcl_mt5879_cn：…HTTP 500…请在电视上打开「多屏互动/无线投屏/DLNA」…`（内容完全对，说明链路走到了最后一米），但 **`presented` 全为 0**，屏幕上也没有横幅。同机正对照：走新 API 的 App 是 21 条 `presented=1`，而这段时间系统自己的横幅（屏幕访问提示）正常弹出——**不是勿扰、不是样式设置**（HanCast 在系统设置里是「允许通知 on + 桌面/通知中心/锁屏全勾 + 提醒样式=临时」）。
 - **根因**：`tauri-plugin-notification` 在 macOS 上落到 `notify-rust 4.18` → `mac-notification-sys 0.6.15`，用的是 **`NSUserNotificationCenter`**（macOS 11 起废弃；当前 macOS 只把它存进通知中心，不再呈现）。载荷里那句 `scat.id = "LEGACY"` 就是这条路的签名。**升级插件没用**——已查 2.7.0 的依赖仍是 `notify-rust ^4.18`。
 - **修法一 · 壳层直发**：新增 `#[tauri::command] notify_os`（src-tauri/src/lib.rs:1120），macOS 走 `UNUserNotificationCenter`（新模块 `src-tauri/src/macos_notify.rs`：授权只在第一次真要发时问一次、被拒不重试不报错；`RcBlock` 传空 completion handler）。依赖 `objc2 0.6` / `objc2-foundation 0.3` / `objc2-user-notifications 0.3` / `block2 0.6`，**与 tauri 自己在用的同一套版本**（锁里 objc2 就是 0.6.4），不引第二份运行时。**非 macOS 一律回 `Err`**，前端 catch 之后退回插件那条路——Linux 的 DBus（他那台由 quickshell 接收）与 Windows 的 Toast 保留原样。
-- **修法二 · 不依赖系统通知的兜底**：`raiseIfHidden()`（src/api/commands.ts:2021）在窗口不可见时 `show()+setFocus()`，把那条红字直接摆到用户眼前；**只在真不可见时做**，避免用户正在别的程序里打字被抢焦点。为此加 capability `core:window:allow-is-visible`。这条同时也是「投屏失败必须让用户看见」这条约束里唯一与 OS 通知实现无关的保证。
+- **修法二 · 不依赖系统通知的兜底**：`raiseIfHidden()`（src/api/commands.ts:2026）在窗口不可见时 `show()+setFocus()`，把那条红字直接摆到用户眼前；**只在真不可见时做**，避免用户正在别的程序里打字被抢焦点。为此加 capability `core:window:allow-is-visible`。这条同时也是「投屏失败必须让用户看见」这条约束里唯一与 OS 通知实现无关的保证。
 - **契约变化**：`#[tauri::command]` **66 → 67**（`generate_handler!` 现读 lib.rs:1606-1673）；壳层就地执行的命令 **9 → 10**（新增 `notify_os`）；转发 Sidecar 的仍是 57 条。
 - **验证**：`cargo check` 通过（同时证明 `core:window:allow-is-visible` 是合法 capability 标识、objc2 绑定签名可用：`requestWithIdentifier_content_trigger` 参数顺序是 id→content→trigger，`requestAuthorization…` 的 handler 非空所以必须给 block）；`vue-tsc` + `vite build` 通过；`tools/verify-cast-ui.cjs` 23 条仍全绿（该 harness 把 `notify()` 整个 stub 掉，所以它证明的是「五条失败出口都会调用它」，不涉及 OS 呈现）。**真机端到端复验在装完 2.3.22 之后做**：同一台电视重投被拒 + 窗口收进托盘，看横幅弹不弹、窗口带不带得回来。
 - **文档同轮修订**：AGENTS.md（**安全约束第 5 条**改写：macOS 不得用插件发通知 + 窗口兜底 + 实测数字、Rust 依赖块加 objc2 家族、命令计数与 `generate_handler!` 行号重锚、版本行）；docs/架构总览.md（进程图 66 → 67、命令归属 9 → 10）；docs/HanCast-Frontend-API.md（§2 新增 `notify_os` 一行、快速参考表 66 → 67 条并加第 67 行、壳层本地执行计数、头部校对标明「本轮只补这一条链路，其余沿用 2.3.13 取证」）；docs/HanCast-Frontend-Spec.md（capability 清单加 `allow-is-visible`、cast.ts 失败出口补窗口前置、版本行）。
@@ -708,13 +839,13 @@ HanCast 本身既是控制端也能当接收端（DLNA 渲染端），但设备�
 一轮只补一件事：**投屏失败的原因要送到用户眼前，而不是只留在看不见的那块屏上**。用户可感知面——窗口收进托盘后往电视投被拒，桌面会弹一条系统通知「投屏失败 / 设备名：电视返回的原文」。没有新能力、没有视觉改动。覆盖的是**五条失败出口**（媒体投屏两条 + 屏幕投屏三条），不是只修用户撞到的那一条。
 
 - **现象与真因**：2026-10-24 用户报「投 TCL 怎么没反应」，实际电视回的是 `HTTP 500 …请在电视上打开「多屏互动/无线投屏/DLNA」`。这条原因 v2.3.20 已经放进首页红条（`src/stores/cast.ts` 的 `lastError`），**但 HanCast 平时收在托盘里**——窗口不在前台时那条红字没人看得见，于是错误「产生了、没送达」。修的是投递，不是采集。
-- **五条失败出口进系统通知**：媒体投屏 ① `startCast` 抛错 → `notify.castFailed`（`src/stores/cast.ts:535`）；② 停止未送达（`stop_cast` 的 `control_failed`）→ `notify.stopNotDelivered`（`:478-479`）。屏幕投屏 ③ `start` 被拒或抛错、④ `stop` 未送达、⑤ **会话中途自己死了**（状态事件带 `error`）——三者统一经 `alertScreen()`（`src/stores/screencast.ts:197-203`）发出，调用点在 `:189-211`、`:212-249`、`:285-300`。正文原样带 Sidecar 给的失败原因，前端不改写、不翻译。
+- **五条失败出口进系统通知**：媒体投屏 ① `startCast` 抛错 → `notify.castFailed`（`src/stores/cast.ts:541`）；② 停止未送达（`stop_cast` 的 `control_failed`）→ `notify.stopNotDelivered`（`:478-479`）。屏幕投屏 ③ `start` 被拒或抛错、④ `stop` 未送达、⑤ **会话中途自己死了**（状态事件带 `error`）——三者统一经 `alertScreen()`（`src/stores/screencast.ts:197-203`）发出，调用点在 `:189-211`、`:212-249`、`:285-300`。正文原样带 Sidecar 给的失败原因，前端不改写、不翻译。
   ②与④是同一类坑的另一半：「本机停了、电视还在播」原本也只有红条说得出；⑤ 覆盖「投着投着采集进程退出」这种用户已经走开的场景。同一条 `error` 会被终止与停止各递一次，**按文本去重只弹第一条**（`:45` 的 `lastAlertedError`）；只投给浏览器（没有电视）时正文就是原因本身，不硬凑设备名。
 - **接线四处**：npm `@tauri-apps/plugin-notification@~2.4.0`（`package.json:20`）/ Rust `tauri-plugin-notification = "2.4"`，锁到 **2.4.0**（`src-tauri/Cargo.toml:26`）/ `.plugin(tauri_plugin_notification::init())`（src-tauri/src/lib.rs:1320，紧挨着插件链、带一句「窗口收进托盘时红条没人看得见」的为什么）/ capability `notification:default`（`src-tauri/capabilities/default.json:22`）。三平台后端由 `notify-rust 4.18.2` 分派，`Cargo.lock:2259-2268` 可见 `mac-notification-sys`（macOS）+ `zbus`（Linux DBus）+ `tauri-winrt-notification`（Windows Toast）。
   **版本配对是这轮唯一的返工**：第一次打的 tag 在三平台 `Tauri bundle` 步骤全部失败——`Found version mismatched Tauri packages … tauri (v2.11.5) : @tauri-apps/api (v2.12.4)` 与 `tauri-plugin-notification (v2.4.0) : @tauri-apps/plugin-notification (v2.7.0)`。根因是 npm 侧插件会拽着 `@tauri-apps/api` 往上涨（`plugin-notification@2.7.0` 要求 `api ^2.12.0`），而 `package.json` 里 `"@tauri-apps/api": "^2.0.0"` 这种宽范围让它在装依赖时飘到 2.12.4，`Cargo.lock` 的 `tauri` 却仍是 2.11.5。`cargo check`、`vue-tsc`、`vite build` **没有一个会报这件事**，只有 `tauri build` 在 bundle 阶段拒。所以把 `@tauri-apps/api` 收成 `~2.11.1`、通知插件收成 `~2.4.0`（Rust 侧 `2.4`）——**成对改**才对，单改一边照样失败；这条铁律写进 AGENTS.md 的 Rust 依赖块下面。
 - **src/api/commands.ts:1658-1660 的三条设计约束**：**权限惰性申请**（只在真要发通知时 `requestPermission()`，投屏路径绝不因申请权限而等待或失败）；**被拒不缓存**（`notifyGranted` 在返回 false 时清空，用户后来在系统设置里放开后，下一次失败还能再问一次）；**动态 `import()`**（浏览器 dev 与没装该插件的旧壳层直接 no-op，界面里那条红条作为兜底仍然存在）。
 - **i18n 从 `main.ts` 拆出**（新增 `src/i18n.ts`，19 行；`main.ts` 改成 `import { i18n } from './i18n'`）：store 层也要取文案，反向 import `main.ts` 会把 `main → App → store → main` 绕成循环依赖；`tt()` 是非组件环境的取文案出口。**这不只是通知这一处用到**——以后任何 store 里的用户可读错误都得走它。
-- **设备名从哪来**：`deviceLabel()`（`cast.ts:160-164`）先查本机会话、再查设备表、最后退回 device id——首次投屏失败时本地还没有会话，只有设备表里有名字。
+- **设备名从哪来**：`deviceLabel()`（`cast.ts:166-170`）先查本机会话、再查设备表、最后退回 device id——首次投屏失败时本地还没有会话，只有设备表里有名字。
 - **文案**：zh/en 各 **+3 条 key**（321 → **324**，两侧键集零差异）。
 - **测试**：`tools/verify-cast-ui.cjs` 21 → **23**，fixture 现在**同时装配真实的 `cast.ts` 与真实的 `screencast.ts`**（此前只装前者）。新增两条：媒体侧断言「投屏失败发 `notify.castFailed`」「停止未送达发 `notify.stopNotDelivered`」「成功一条都不发」；屏幕侧断言被拒 / 抛错 / 未送达 / 终止事件各发一条、**重复 error 只弹一次**、面板里那句话仍留着。标题、正文里的原因原文、设备名前缀与「浏览器目标不硬凑设备名」都 checked。**变异验过**：删掉 `start()` 里那行 `alertScreen` 后该用例转红（还原用 md5 比过，防的是「测试看着绿但其实什么也没依赖」）。本轮裁剪跑：`vue-tsc` + `vite build` 通过、`cargo check` 通过——后者顺带证明 `notification:default` 是合法 capability 标识（Tauri 构建期校验 capability，写错直接 fail），并且 `sendNotification` 在 `dist/assets/` 里独立成 chunk（动态导入被 Vite 正确切开）。**没跑全量，按既定口径。**
 - **文档同轮修订**：AGENTS.md（前端与 Rust 两张依赖表各一行、结构树补 `src/i18n.ts`、**安全约束新增第 5 条**：投屏失败必须进系统通知、权限只能惰性申请且不得阻断投屏、macOS linker-signed 每版换签名身份所以通知授权可能要重给，原第 5 条「规则包沙箱」顺延为 6、项目概述的版本号从滞后的 2.3.19 更正）；docs/HanCast-Frontend-Spec.md（依赖表两行、capability 清单、§8.1 记录 i18n 位置迁移的理由、store 间耦合从「唯一一处」更正为两处、`cast.ts` 与 `screencast.ts` 两行都补上失败出口，且两行的**全部** `:NNN-NNN` 区间按新行号重锚——`screencast.ts` 行数 327 → 现读 349、key 计数 321 → 324 与命名空间 16 → 17）；docs/README.md（索引里 Frontend-Spec 行数按现读 `wc -l` 重锚）；docs/开发指南.md（i18n 等键数从滞后的 278 更正为现读 324）。
@@ -860,7 +991,7 @@ GitHub CI 现在能打出 Arch 装得上的包：Linux 矩阵项在 tauri bundle
 设备列表里不再躺着路由器：投屏目标改成**按服务识别**，不提供 AVTransport 的 UPnP 设备一律不登记。
 
 - **准入门槛**（`ssdp.py:1095` 常量、`ssdp.py:1097-1111` 判定、`ssdp.py:1190-1196` 落在 `_parse_device_description` 里）：整份描述 XML（含内嵌设备）必须出现 `urn:schemas-upnp-org:service:AVTransport:`。判定是**命名空间无关**的（`tag.rpartition('}')[2]` 取 local-name）且**大小写不敏感**——URN 规范写法是 `AVTransport`，但山寨描述里 a/v 混乱，宁可放宽匹配也别把真能投屏的设备挡在门外。`deviceType` 降级为展示标签，不再参与准入：控制端能做的所有事（SetAVTransportURI / Play / Pause / Stop / Position）都走 AVTransport 这一个服务，标签写 `MediaServer` 的盒子只要带这个服务就照样收进来，写 `MediaRenderer` 但没有服务的设备照样挡掉。
-- **手动添加走同一条门槛**（`ssdp.py:1252-1256`）：报错文案从「该地址不是有效的 DLNA 设备描述」改成点名准入条件——用户手输的往往正是路由器后台地址，那些机器**确实有**合法的 UPnP 描述，旧文案会让人反复检查自己填的格式对不对。`_MANUAL_PORTS`（`ssdp.py:1233`）仍是手输裸 IP 时的猜端口候选，**不是端口扫描**；发现链路自始至终只被动收 NOTIFY / M-SEARCH 响应。
+- **手动添加走同一条门槛**（`ssdp.py:1252-1256`）：报错文案从「该地址不是有效的 DLNA 设备描述」改成点名准入条件——用户手输的往往正是路由器后台地址，那些机器**确实有**合法的 UPnP 描述，旧文案会让人反复检查自己填的格式对不对。`_MANUAL_PORTS`（`ssdp.py:1247`）仍是手输裸 IP 时的猜端口候选，**不是端口扫描**；发现链路自始至终只被动收 NOTIFY / M-SEARCH 响应。
 - **顺带抓出一个真 bug**：lxml 的注释与处理指令节点 `.tag` 是**可调用对象**而非字符串，服务遍历在其上抛 `AttributeError`，被外层宽 `except` 吞成「描述 XML 解析失败」——**表现是「带 XML 注释的合格电视从列表消失」而不是报错**。守卫是 `isinstance(tag, str)`（`ssdp.py:1102-1105`），回归锁为 `test_ssdp_cast_service_gate.py::test_xml_comments_do_not_break_the_service_scan`。这条只有真机替身（描述里带注释）才会暴露，纯桩数据容易漏。
 - **拒绝理由按 location 去重**（`ssdp.py:1113-1124`、计数表 `ssdp.py:192`）：同一地址首次打 INFO/WARNING、之后降 DEBUG。路由器这类设备每 30s 重播一轮 NOTIFY（抓取去重窗口 `fetch_dedup_window`，`ssdp.py:185`），不去重就是每天上万行噪音；无 device 元素 / 缺 UDN / XML 解析失败三种「数据本身有问题」的理由仍按 WARNING 露首行，正常「不是投屏目标」按 INFO。两个发现调用点（NOTIFY 与 M-SEARCH）不再各自打笼统 WARNING，理由由解析侧统一给。
 - **数字口径**：`ssdp.py` 1264 → **1322** 行；测试新增 `tests/test_ssdp_cast_service_gate.py` **13 条**（电视/路由器/IGW 三份描述 fixture + 大小写 + 命名空间 + 内嵌设备 + 注释回归 + 日志去重 + 手动添加文案），`tests/test_ssdp_discovery_retry.py` 的 `RENDERER_DESC` 随之补上 `<serviceList>`（它原本没有服务，正是新门槛要挡的形状）。命令面、事件面、后台参数本轮**未动**（Rust 66 条 / Sidecar 59 条 / `commands.ts` 65 个 / `PARAM_SPECS` 32 项）。

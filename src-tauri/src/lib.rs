@@ -41,6 +41,15 @@ impl Default for WindowConfig {
     }
 }
 
+/// 取锁：中毒（某个持锁者 panic 过）时照样拿回内部值。
+///
+/// 这些锁保护的都是窗口尺寸、托盘 URL 之类的纯数据；因为一次早已发生的
+/// panic 让之后每次 resize/每次托盘刷新都跟着 panic，只会把问题放大成
+/// 「窗口尺寸记不住 + 托盘地址不更新」。用这条读法让失败局部化。
+fn lock_ignore_poison<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// 窗口配置状态（用于防抖）
 #[derive(Clone)]
 struct WindowConfigState {
@@ -72,13 +81,13 @@ impl WindowConfigState {
     fn update_and_save(&self, new_config: WindowConfig) {
         // 更新内存中的配置
         {
-            let mut config = self.config.lock().unwrap();
+            let mut config = lock_ignore_poison(&self.config);
             *config = new_config;
         }
 
         // 取消之前的保存任务
         {
-            let mut timer = self.save_timer.lock().unwrap();
+            let mut timer = lock_ignore_poison(&self.save_timer);
             if let Some(handle) = timer.take() {
                 handle.abort();
             }
@@ -92,27 +101,35 @@ impl WindowConfigState {
         let handle = tauri::async_runtime::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
-            let config = config_ref.lock().unwrap().clone();
+            let config = lock_ignore_poison(&config_ref).clone();
             if let Ok(json) = serde_json::to_string_pretty(&config) {
                 if let Some(parent) = path.parent() {
                     let _ = std::fs::create_dir_all(parent);
                 }
-                let _ = std::fs::write(&path, json);
+                // 写临时文件再 rename：直接写目标文件时，崩溃/断电可能留下
+                // 半截 JSON，下次启动只能回落到默认窗口尺寸（用户以为
+                // 「窗口大小又忘了」）。rename 覆盖旧文件是原子替换。
+                let tmp = path.with_extension("json.tmp");
+                if std::fs::write(&tmp, json.as_bytes()).is_ok()
+                    && std::fs::rename(&tmp, &path).is_err()
+                {
+                    let _ = std::fs::remove_file(&tmp);
+                }
             }
 
             // 清除定时器引用
-            let mut timer = timer_ref.lock().unwrap();
+            let mut timer = lock_ignore_poison(&timer_ref);
             *timer = None;
         });
 
         // 保存新的定时器句柄
-        let mut timer = self.save_timer.lock().unwrap();
+        let mut timer = lock_ignore_poison(&self.save_timer);
         *timer = Some(handle);
     }
 
     /// 获取当前配置
     fn get_config(&self) -> WindowConfig {
-        self.config.lock().unwrap().clone()
+        lock_ignore_poison(&self.config).clone()
     }
 }
 
@@ -1355,6 +1372,14 @@ async fn update_apply(
         return Ok(serde_json::json!({"ok": false, "manual": true, "plan": plan}));
     }
 
+    // 先让 sidecar 走完清理，再起安装脚本。
+    //
+    // Windows 的 WIN_APPLY 只 `timeout /t 3` 就开装，而 Python 的 cleanup 在
+    // 「正在镜像/屏幕投屏」时最长要 7 秒；先起脚本会让安装程序在应用还没退出
+    // 时就去替换可执行文件（NSIS 会弹「请先关闭 HanCast」）。这里先把这一步
+    // 等完；ExitRequested 那条路径随后会看到 sidecar 已退出，立即放行。
+    sidecar.shutdown().await;
+
     // 日志落在产物旁边：应用已经退了，程序日志没人再看，而这条链最需要事后取证
     let mut log_path = std::path::PathBuf::from(&path);
     log_path.set_file_name("update-apply.log");
@@ -1538,15 +1563,22 @@ async fn export_logs(app: tauri::AppHandle) -> Result<bool, String> {
         return Err("日志文件不存在".to_string());
     }
 
-    // 打开文件保存对话框
-    let file_path = app
-        .dialog()
+    // 打开文件保存对话框。
+    //
+    // 必须用**回调式** API，不能用 `blocking_save_file()`：后者会一直阻塞
+    // 异步运行时的工作线程，直到用户选完文件（可能几分钟）。这段时间里所有
+    // Tauri 命令与托盘/投屏轮询都排在同一条被占住的线程后面。
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog()
         .file()
         .set_title("导出日志")
         .set_file_name("hancast.log")
         .add_filter("日志文件", &["log"])
         .add_filter("所有文件", &["*"])
-        .blocking_save_file();
+        .save_file(move |path| {
+            let _ = tx.send(path);
+        });
+    let file_path = rx.await.map_err(|_| "保存对话框已关闭".to_string())?;
 
     match file_path {
         Some(path) => {
@@ -1679,34 +1711,36 @@ fn update_tray_menu(
     autostart_enabled: bool,
 ) {
     if let Some(tray) = app.tray_by_id(tray_id) {
-        let new_item = MenuItemBuilder::with_id("copy_cast_url", CAST_URL_LABEL)
-            .enabled(!url.is_empty())
-            .build(app)
-            .unwrap();
-        let show_item = MenuItemBuilder::with_id("show", "显示窗口")
-            .build(app)
-            .unwrap();
-        let autostart_item = CheckMenuItemBuilder::with_id("autostart", "开机自启")
-            .checked(autostart_enabled)
-            .build(app)
-            .unwrap();
-        let quit_item = MenuItemBuilder::with_id("quit", "退出")
-            .build(app)
-            .unwrap();
-        let new_menu = MenuBuilder::new(app)
-            .item(&new_item)
-            .item(&show_item)
-            .item(&autostart_item)
-            .item(&quit_item)
-            .build()
-            .unwrap();
-        tray.set_menu(Some(new_menu)).ok();
+        // 这里在常驻异步任务里每秒被调用一次：任何一个 `unwrap()` 失败都会让
+        // panic 穿出 spawn 的循环，从此托盘菜单（复制地址、开机自启勾选）不再
+        // 更新，而且没有任何提示。失败只记一条 stderr，下一轮还会再试。
+        let rebuilt: tauri::Result<()> = (|| {
+            let new_item = MenuItemBuilder::with_id("copy_cast_url", CAST_URL_LABEL)
+                .enabled(!url.is_empty())
+                .build(app)?;
+            let show_item = MenuItemBuilder::with_id("show", "显示窗口").build(app)?;
+            let autostart_item = CheckMenuItemBuilder::with_id("autostart", "开机自启")
+                .checked(autostart_enabled)
+                .build(app)?;
+            let quit_item = MenuItemBuilder::with_id("quit", "退出").build(app)?;
+            let new_menu = MenuBuilder::new(app)
+                .item(&new_item)
+                .item(&show_item)
+                .item(&autostart_item)
+                .item(&quit_item)
+                .build()?;
+            tray.set_menu(Some(new_menu)).ok();
+            Ok(())
+        })();
+        if let Err(e) = rebuilt {
+            eprintln!("[Tray] 重建托盘菜单失败: {e}");
+        }
     }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
@@ -1732,19 +1766,16 @@ pub fn run() {
             } else if event.id() == "copy_cast_url" {
                 // 从状态中读取完整 URL 并复制到剪贴板
                 if let Some(state) = app.try_state::<CastUrlState>() {
-                    let url = state.url.lock().unwrap().clone();
+                    let url = lock_ignore_poison(&state.url).clone();
                     if !url.is_empty() {
                         app.clipboard().write_text(url).ok();
                     }
                 }
             } else if event.id() == "quit" {
-                // 优雅关闭：先通知 sidecar 清理（杀 MPV 等），再退出应用
-                let app_handle = app.clone();
-                tauri::async_runtime::spawn(async move {
-                    let sidecar = app_handle.state::<SidecarManager>();
-                    sidecar.shutdown().await;
-                    app_handle.exit(0);
-                });
+                // 退出统一走 ExitRequested（见 run() 末尾）：那条路径对托盘退出、
+                // Cmd-Q、系统注销、应用内更新一视同仁，都会先让 sidecar 清理完
+                // 再退出。这里不再自己 shutdown，否则会等两遍。
+                app.exit(0);
             } else if event.id() == "autostart" {
                 // CheckMenuItem 已自动切换 checked 状态，执行实际操作
                 let app_handle = app.clone();
@@ -2004,7 +2035,7 @@ pub fn run() {
                                 last_url = new_url.clone();
                                 // Update state for clipboard copy
                                 if let Some(state) = app_handle.try_state::<CastUrlState>() {
-                                    *state.url.lock().unwrap() = new_url.clone();
+                                    *lock_ignore_poison(&state.url) = new_url.clone();
                                 }
                                 update_tray_menu(&app_handle, &tray_id.0, &new_url, last_autostart);
                             }
@@ -2118,6 +2149,40 @@ pub fn run() {
             get_autostart,
             set_autostart,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    // 所有退出路径统一在这里收口：托盘「退出」、macOS Cmd-Q、系统注销/关机、
+    // 应用内更新后的 `app.exit(0)` 都会先经过 ExitRequested。
+    //
+    // 早先只有托盘那一条菜单项会显式 `sidecar.shutdown()`，其余路径直接退出，
+    // 靠 `Drop` 用 `try_lock` 尽力 SIGKILL：Python 来不及清理，MPV / scrcpy /
+    // FFmpeg 这些子进程就留成孤儿（镜像窗口不关、FFmpeg 继续吃 CPU）。
+    app.run(|app_handle, event| {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        // EXIT_STARTED：清理只做一次；EXIT_ALLOWED：清理完成后放行真正的退出。
+        static EXIT_STARTED: AtomicBool = AtomicBool::new(false);
+        static EXIT_ALLOWED: AtomicBool = AtomicBool::new(false);
+
+        if let tauri::RunEvent::ExitRequested { api, .. } = event {
+            if EXIT_ALLOWED.load(Ordering::SeqCst) {
+                return;
+            }
+            // 先挡住默认退出，等 sidecar 走完清理
+            api.prevent_exit();
+            if EXIT_STARTED.swap(true, Ordering::SeqCst) {
+                // 清理期间用户又按了一次退出：忽略，别把清理打断
+                return;
+            }
+            let handle = app_handle.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Some(sidecar) = handle.try_state::<SidecarManager>() {
+                    sidecar.shutdown().await;
+                }
+                EXIT_ALLOWED.store(true, Ordering::SeqCst);
+                handle.exit(0);
+            });
+        }
+    });
 }

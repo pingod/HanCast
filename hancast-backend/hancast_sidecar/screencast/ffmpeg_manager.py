@@ -636,18 +636,31 @@ class FfmpegManager:
         if os.name != "nt":
             return []
         monitors: List[Dict] = []
+        # wintypes 只在 Windows 分支需要；顶层不导入是为了不给另外两个平台
+        # 多背一个 ctypes 子模块。早先这里直接用了 `wintypes` 却没导入，
+        # 于是 Windows 上枚举显示器必然 NameError——而它又被 `list_sources()`
+        # 无条件调用，整个「捕获源列表」直接失败（屏幕/窗口/音频一处都拿不到）。
+        from ctypes import wintypes
 
-        class MONITORINFO(ctypes.Structure):
-            _fields_ = [
-                ("cbSize", wintypes.DWORD),
-                ("rcMonitor", wintypes.RECT),
-                ("rcWork", wintypes.RECT),
-                ("dwFlags", wintypes.DWORD),
-            ]
+        # MONITORINFOF_PRIMARY（winuser.h）：dwFlags 里的主屏位。原先写的是
+        # 一个不存在的名字 `primary_flag`，同样会在回调里抛 NameError。
+        MONITORINFOF_PRIMARY = 0x00000001
 
-        ENUM_PROC = ctypes.WINFUNCTYPE(
-            ctypes.c_bool, wintypes.HMONITOR, wintypes.HDC,
-            ctypes.POINTER(wintypes.RECT), wintypes.LPARAM)
+        try:
+            class MONITORINFO(ctypes.Structure):
+                _fields_ = [
+                    ("cbSize", wintypes.DWORD),
+                    ("rcMonitor", wintypes.RECT),
+                    ("rcWork", wintypes.RECT),
+                    ("dwFlags", wintypes.DWORD),
+                ]
+
+            ENUM_PROC = ctypes.WINFUNCTYPE(
+                ctypes.c_bool, wintypes.HMONITOR, wintypes.HDC,
+                ctypes.POINTER(wintypes.RECT), wintypes.LPARAM)
+        except Exception as e:  # noqa: BLE001 - 枚举失败不该拖垮整个源列表
+            logger.warning(f"[ScreenCast] 显示器枚举初始化失败: {e}")
+            return []
 
         def _callback(hmon, _hdc, _lprc, _lparam):
             info = MONITORINFO()
@@ -659,7 +672,7 @@ class FfmpegManager:
             height = rect.bottom - rect.top
             if width <= 0 or height <= 0:
                 return True
-            is_primary = bool(info.dwFlags & primary_flag)
+            is_primary = bool(info.dwFlags & MONITORINFOF_PRIMARY)
             label = f"显示器 {len(monitors) + 1} · {width}x{height}"
             if is_primary:
                 label += "（主屏）"

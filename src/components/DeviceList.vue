@@ -71,6 +71,15 @@ const handleRefresh = () => {
       </div>
     </div>
 
+    <div v-if="deviceStore.lastError" class="device-list__error" role="alert">
+      <span>{{ t('devices.actionFailed', { msg: deviceStore.lastError }) }}</span>
+      <button
+        class="device-list__error-close"
+        :aria-label="t('common.close')"
+        @click="deviceStore.dismissError()"
+      >×</button>
+    </div>
+
     <div class="device-list__items" v-if="deviceStore.devices.length > 0">
       <DeviceCard
         v-for="device in deviceStore.devices"
@@ -173,6 +182,28 @@ const handleRefresh = () => {
   100% { transform: rotate(1800deg); }
 }
 
+.device-list__error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-radius: var(--r-sm);
+  background: rgba(229, 72, 77, 0.12);
+  color: #e5484d;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.device-list__error-close {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+}
 .device-list__items {
   display: flex;
   flex-direction: column;

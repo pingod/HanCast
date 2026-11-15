@@ -521,6 +521,10 @@ function onFileSelected(e: Event) {
     dropQueueForSingleMedia()
     mediaStore.parseFile(file)
   }
+  // 清空 value 才能再次选同一个文件：不清的话 input 不会触发第二次 change
+  // （浏览器兜底路径里「选同一个文件重试」就是死的）。File 对象已经拿到，
+  // 清 value 不影响正在进行的解析。
+  input.value = ''
 }
 
 // ── 文件夹投屏 / 播放队列 ──

@@ -13,7 +13,7 @@ export const useSettingsStore = defineStore('settings', () => {
   const settings = ref<AppSettings>({
     usn: '',
     friendly_name: 'HanCast',
-    version: '2.4.13',
+    version: '2.4.14',
     media_port: 8080,
     default_device: null,
     network_interface: '',
@@ -21,6 +21,9 @@ export const useSettingsStore = defineStore('settings', () => {
   })
   const loading = ref(false)
   const autostart = ref(false)
+  /** 最近一次保存失败的原因：此前 catch 里只 console.error，界面照常显示新值，
+   *  重启后才发现根本没存下去（改名、切网卡都会这样）。 */
+  const error = ref('')
 
   let unlistenAutostart: UnlistenFn | null = null
 
@@ -50,13 +53,17 @@ export const useSettingsStore = defineStore('settings', () => {
     }
   }
 
-  async function saveSettings(patch: Partial<AppSettings>) {
+  async function saveSettings(patch: Partial<AppSettings>): Promise<boolean> {
     loading.value = true
+    error.value = ''
     try {
       await apiSaveSettings(patch)
       settings.value = { ...settings.value, ...patch }
+      return true
     } catch (err) {
       console.error('Failed to save settings:', err)
+      error.value = err instanceof Error ? err.message : String(err)
+      return false
     } finally {
       loading.value = false
     }
@@ -76,6 +83,7 @@ export const useSettingsStore = defineStore('settings', () => {
     settings,
     loading,
     autostart,
+    error,
     fetchSettings,
     saveSettings,
     toggleAutostart,

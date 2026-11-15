@@ -395,15 +395,25 @@ impl SidecarManager {
         }
 
         // Write request to stdin (synchronous write through Mutex)
-        {
+        //
+        // 写失败/进程不在时必须把上面登记的 pending 条目摘掉：早先这里直接 `?`
+        // 返回，oneshot 发送端留在表里。sidecar 一死，托盘那条每秒一次的
+        // `get_cast_url` 轮询就漏一个条目，直到应用退出为止。
+        let write_result = {
             let mut guard = self.child.lock().await;
-            let child = guard
-                .as_mut()
-                .ok_or_else(|| "Sidecar process not running".to_string())?;
-            let line = format!("{}\n", serde_json::to_string(&request).unwrap());
-            child
-                .write(line.as_bytes())
-                .map_err(|e| format!("Failed to write to sidecar: {e}"))?;
+            match guard.as_mut() {
+                None => Err("Sidecar process not running".to_string()),
+                Some(child) => {
+                    let line = format!("{}\n", serde_json::to_string(&request).unwrap());
+                    child
+                        .write(line.as_bytes())
+                        .map_err(|e| format!("Failed to write to sidecar: {e}"))
+                }
+            }
+        };
+        if let Err(e) = write_result {
+            self.pending.lock().await.remove(&id);
+            return Err(e);
         }
 
         // Wait for response.
@@ -464,7 +474,15 @@ impl SidecarManager {
         }
 
         // 2. 轮询等待 sidecar 真正退出（reader_loop 置 terminated 标志）
-        let timeout_ms: u64 = if cfg!(target_os = "windows") { 3000 } else { 1000 };
+        //
+        // 这个期限要覆盖 Python 侧最慢的合法清理，而不是「等一下就杀」：
+        // `CommandHandler.cleanup()` 会先等手机镜像的 scrcpy（terminate 后最多
+        // 5s + kill 后 2s），再等屏幕投屏的 FFmpeg 收尸。原来非 Windows 只等
+        // 1s（Windows 3s），于是「正在镜像/投屏时退出」必定被 SIGKILL——Python
+        // 来不及走清理，scrcpy 窗口与 FFmpeg 子进程就成了孤儿。
+        // 12s > 7s（镜像）+ 3s（屏幕）+ 余量；真卡死的进程仍会被下面的 kill 兜底。
+        const SHUTDOWN_GRACE_MS: u64 = 12_000;
+        let timeout_ms = SHUTDOWN_GRACE_MS;
         let poll_interval = std::time::Duration::from_millis(50);
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
 

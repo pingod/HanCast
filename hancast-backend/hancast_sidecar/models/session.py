@@ -61,6 +61,11 @@ class DeviceCastSession:
     def play(self, media_uri: str, mime_type: str = "",
              metadata: str = "") -> None:
         """播放媒体；调用方在 handler registry 锁下串行化播放替换。"""
+        # Rust 那边 `mime_type` 是 Option<String>，前端不传时 JSON 里是 **null**，
+        # 不是缺省空串。早先这里假定 str，`mime_type.startswith` 在协议已经
+        # 发出 SetAVTransportURI+Play 之后才抛 AttributeError：电视已经在放，
+        # 命令却回 success:false，界面报错、失败台账还多记一笔。
+        mime_type = str(mime_type or "").strip()
         # 必须先失效旧轮询，包括视频切图片，以及 serve_file/play 失败的路径。
         self.stop_poll()
         # 如果是本地文件，通过媒体服务器提供 HTTP 访问

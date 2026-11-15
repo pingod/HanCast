@@ -60,7 +60,15 @@ function load(): HistoryEntry[] {
 
 function save(list: HistoryEntry[]) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(list))
+    // data: URL 缩略图是「本地视频抽帧」的结果，单张可达数百 KB（按原分辨率
+    // 的 canvas 尺寸编码）。20 条/设备、全局 200 条，几轮投屏就能吃满 origin
+    // 的 ~5 MB 配额；一旦配额满，`save()` 会被 catch 吞掉——历史不再落盘，
+    // 同 origin 的队列持久化也跟着静默失效，而界面上一个字都不会说。
+    // 只持久化 http(s) 封面（分享页封面本来就小），data: 的留在内存里本次会话可见。
+    const slim = list.map((e) =>
+      e.thumbnail && e.thumbnail.startsWith('data:') ? { ...e, thumbnail: null } : e,
+    )
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(slim))
   } catch {
     // 同上：写不进去就只在内存里活着
   }
