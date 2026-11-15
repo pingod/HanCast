@@ -16,7 +16,7 @@ import logging
 import threading
 import requests as http_requests
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from socketserver import ThreadingMixIn
+from socketserver import ThreadingMixIn, TCPServer
 from urllib.parse import urlparse, parse_qs
 from typing import Dict, Tuple
 
@@ -649,6 +649,14 @@ class MediaServer:
 
         class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
             daemon_threads = True
+
+            def server_bind(self):
+                # 与 protocol/server.py 同一个理由：不做反向 DNS 反查。媒体服务器
+                # 在主端口之后启动，DNS 慢同样会把整个 sidecar 启动拖住。
+                TCPServer.server_bind(self)
+                host, port = self.server_address[:2]
+                self.server_name = str(host)
+                self.server_port = port
 
         self._server = ThreadedHTTPServer(
             (self.host, self.port), MediaHandler

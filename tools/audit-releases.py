@@ -75,6 +75,12 @@ DECLARED_UNRELEASED = frozenset({
     # 说明性 release**，内容原样往前发（v2.4.13 = v2.4.12 全部内容 + CI runner 标签修复）。
     # 详见 docs/构建与发布.md §4.1 的实测教训。
     "v2.4.12",
+    # v2.4.14：tag 推上去后 macos-arm64 红在 sidecar 冒烟测试——进程 20 秒没打印
+    # `DLNA server started`，根因是标准库 HTTPServer.server_bind 的 socket.getfqdn()
+    # 反向 DNS 在 macOS runner 上卡住（windows/linux 同 run 全绿，Linux 还真喂了命令）。
+    # release job 的产物闸门因此没建 Release。处置同 v2.3.8/v2.4.12：tag 保留、不补建
+    # 说明性 release；内容原样往前发（v2.4.15 = v2.4.14 全部内容 + 绑定不再反查 DNS）。
+    "v2.4.14",
     "v2.2.21",
     "v2.2.22",
     "v2.2.23",

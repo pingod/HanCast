@@ -8,7 +8,7 @@ import os
 import logging
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from socketserver import ThreadingMixIn
+from socketserver import ThreadingMixIn, TCPServer
 from xml.sax.saxutils import escape
 
 from ..params import get as param
@@ -310,6 +310,21 @@ class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
     ThreadingHTTPServer 为每个请求创建独立线程，避免阻塞。
     """
     daemon_threads = True
+
+    def server_bind(self):
+        """绑定后不做 ``socket.getfqdn()`` 反查
+
+        标准库 ``HTTPServer.server_bind`` 会 ``socket.getfqdn(host)``（反向 DNS）。
+        macOS 的 mDNSResponder/DNS 慢、断网或 VPN 刚起时这一步能阻塞几十秒，
+        而 sidecar 是**同步**启动的：应用会停在「正在启动」，CI 的 20 秒冒烟
+        测试直接判失败（2026-11-15 v2.4.14 的 macos-arm64 作业就是这么红的）。
+        UPnP 的 SERVER 头由 ``build_server_info()`` 生成，不读 ``server_name``，
+        跳过反查没有任何副作用。
+        """
+        TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name = str(host)
+        self.server_port = port
 
 
 class DLNAServer:

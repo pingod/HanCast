@@ -2,7 +2,7 @@
 
 > 这份文档回答：`tools/` 下这些脚本各自验什么、怎么跑、需要什么环境，以及新增脚本要守哪些约定。
 >
-> 最后校对：2026-11-15，对应版本 v2.4.14（v2.4.12 未发布改动：发布链路 publish 化 + 应用内更新）
+> 最后校对：2026-11-15，对应版本 v2.4.15（v2.4.12 未发布改动：发布链路 publish 化 + 应用内更新）
 > 分类表按当前工作区重数：新增 `audit-releases.py`、`verify-update-ui.mjs`、`verify-locale-keys.mjs`，顶层脚本 60→63
 
 `tools/` 里放的是**可重复运行的验收 / 探针脚本**，不是一次性的 `/tmp` 手搓脚本。它们必须自适应当前机器——设备名、网卡、产物路径、参数条数都从现场现读，不写死。用法上的两条铁律：**修 bug 之前先跑它复现，修完之后再用它证明**。「证明」的对象是判据（退出码 / PASS-FAIL 行），不是截图，也不是「我点了一下看起来对」。
@@ -28,7 +28,7 @@
 | `cleanup-macos-aggregates.py` | 清掉探针残留在系统里的 HanCast CoreAudio 聚合设备（默认只打印计划） | `hancast-backend/.venv/bin/python tools/cleanup-macos-aggregates.py`<br>`… --apply`<br>`… --apply --product` | 仅 macOS；后端 venv（import `hancast_sidecar.screencast.macos_tap`） |
 | `rust-check.sh` | 本地 `cargo check` 的前置：按 Tauri 配置建一次性空桩，让资源 glob 不落空；check 完只删自己建的文件 | `tools/rust-check.sh`<br>`tools/rust-check.sh --release`（参数透传给 `cargo check`） | 本地开发机；`rustc`/`cargo`；会**在 `src-tauri/` 下临时写文件**（`trap cleanup EXIT` 回收，已存在的路径绝不动） |
 | `build-rule-packs.py` | 官方规则包的生产工具：`rule-packs/<name>/` → `rule-packs/dist/<name>-<version>.zip` + `index.json` | `python3 tools/build-rule-packs.py`（重建）<br>`… --check`（只校验，CI/验收用）<br>`… --clean`（删孤儿 zip） | 任意平台，纯 Python 标准库；详见 [rule-packs/README.md](../rule-packs/README.md) |
-| `audit-releases.py` | **发布面对账（v2.4.12，只读）**：GitHub tag / Release / CHANGELOG 三方是否互相自洽，外加 `releases/latest` 指针漂移、已 publish 的 release 缺平台产物、release tag 与安装包文件名里的版本不符、以及「该删的 draft」清单。判据逐条打印，豁免线写在文件头：`LEGACY_TAG_LINE = "v2.2.19"`（及更早允许无 release）、`DECLARED_UNRELEASED`（23 个明确决定不公开的 tag，走 INFO）、`DECLARED_ASSETLESS`（**当前为空**——给旧版补一条无产物 release 会让 `releases/latest` 指针回指旧版，实测教训见 docs/构建与发布.md §5.1） | `python3 tools/audit-releases.py`<br>`… --json`（机器可读，CI 当闸门）<br>`… --cleanup-commands`（**只打印** `gh release delete <tag> --yes` 清单，脚本本身绝不执行删除） | 需要 GitHub token：`GITHUB_TOKEN`（或 `GH_TOKEN`）环境变量，**或**已登录的 `gh`（走 `gh auth token`）；两者都没有就匿名打 `api.github.com`（60 次/小时，一次对账约 15 个请求）。退出码 **0 干净 / 1 任一 FAIL / 2 环境不通**（读不到 GitHub）。CI 侧由 `.github/workflows/release-audit.yml` 每周一 03:10 UTC 跑一遍，判据与后果记在 docs/构建与发布.md §5.1 |
+| `audit-releases.py` | **发布面对账（v2.4.12，只读）**：GitHub tag / Release / CHANGELOG 三方是否互相自洽，外加 `releases/latest` 指针漂移、已 publish 的 release 缺平台产物、release tag 与安装包文件名里的版本不符、以及「该删的 draft」清单。判据逐条打印，豁免线写在文件头：`LEGACY_TAG_LINE = "v2.2.19"`（及更早允许无 release）、`DECLARED_UNRELEASED`（25 个明确决定不公开的 tag，走 INFO）、`DECLARED_ASSETLESS`（**当前为空**——给旧版补一条无产物 release 会让 `releases/latest` 指针回指旧版，实测教训见 docs/构建与发布.md §5.1） | `python3 tools/audit-releases.py`<br>`… --json`（机器可读，CI 当闸门）<br>`… --cleanup-commands`（**只打印** `gh release delete <tag> --yes` 清单，脚本本身绝不执行删除） | 需要 GitHub token：`GITHUB_TOKEN`（或 `GH_TOKEN`）环境变量，**或**已登录的 `gh`（走 `gh auth token`）；两者都没有就匿名打 `api.github.com`（60 次/小时，一次对账约 15 个请求）。退出码 **0 干净 / 1 任一 FAIL / 2 环境不通**（读不到 GitHub）。CI 侧由 `.github/workflows/release-audit.yml` 每周一 03:10 UTC 跑一遍，判据与后果记在 docs/构建与发布.md §5.1 |
 
 ### 1.2 DLNA / SSDP 链路
 

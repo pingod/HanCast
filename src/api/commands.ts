@@ -268,7 +268,7 @@ const MOCK_DEVICES: Device[] = [
 const MOCK_SETTINGS: AppSettings = {
   usn: 'hancast-uuid-001',
   friendly_name: 'HanCast',
-  version: '2.4.14',
+  version: '2.4.15',
   media_port: 8080,
   default_device: null,
   network_interface: '',
@@ -840,8 +840,8 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
       if (mockUpdateMode === 'off') {
         return {
           has_update: false,
-          current: '2.4.14',
-          latest: '2.4.14',
+          current: '2.4.15',
+          latest: '2.4.15',
           url: '',
           body: '',
           source: 'github',
@@ -851,7 +851,7 @@ async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promi
       const assets = mockUpdateAssets(os)
       return {
         has_update: true,
-        current: '2.4.14',
+        current: '2.4.15',
         // 远端版本刻意不用字面量，见 MOCK_UPDATE_REMOTE
         latest: MOCK_UPDATE_REMOTE,
         url: `https://github.com/pingod/HanCast/releases/tag/v${MOCK_UPDATE_REMOTE}`,

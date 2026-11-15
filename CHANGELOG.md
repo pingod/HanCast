@@ -1,6 +1,6 @@
 # Changelog
 
-> 最后校对：2026-11-15，对应版本 v2.4.14（`package.json:4`）。
+> 最后校对：2026-11-15，对应版本 v2.4.15（`package.json:4`）。
 
 本文件记录 HanCast 的版本历史。口径说明：
 
@@ -11,7 +11,34 @@
 
 ---
 
-## v2.4.14 — 2026-11-15（全仓缺陷修复：Windows 捕获源 / DLNA 事件线程 / 退出清理 / 队列与持久化）
+## v2.4.15 — 2026-11-15（= v2.4.14 全部缺陷修复 + 启动不再依赖反向 DNS）
+
+**内容等于 v2.4.14**（见下一节 A–E，此处不重复），多出来的只有一件：两个内置 HTTP
+服务器（DLNA 描述服务、媒体服务）绑定端口时不再调用 `socket.getfqdn()` 做反向 DNS。
+
+### 为什么要多发一版
+
+v2.4.14 的 tag 推上去后，`macos-arm64` 作业红在 sidecar 冒烟测试：进程 20 秒内没有
+打印 `DLNA server started`，被超时脚本 SIGTERM 掉；同一次 run 的 `windows-x64` 与
+`linux-x64` 全绿（Linux 的 deb 冒烟还要真喂 `get_settings`），说明不是新代码的确定性
+缺陷，而是 macOS runner 上反向 DNS 卡住。
+
+根因在标准库：`HTTPServer.server_bind` 绑定后会 `socket.getfqdn(host)`。macOS 上
+mDNSResponder/DNS 慢、断网或 VPN 刚起时，这一步能阻塞几十秒；sidecar 是**同步**启动
+的，真机上同样会表现为「点了图标停在启动」，CI 只是把 20 秒判据摆在明面上。这不是
+本轮新增的代码，但既然它拦住了发布，就该一起修掉。
+
+修法：两个服务器都覆写 `server_bind()`，只做 `TCPServer.server_bind()`，然后直接把
+`server_name` / `server_port` 写成绑定到的地址与端口。UPnP 的 SERVER 头由
+`build_server_info()` 生成，不读 `server_name`，跳过反查没有任何副作用。回归
+`tests/test_http_bind_no_dns.py`：把 `socket.getfqdn` 换成一调用就抛（负向对照：旧代码
+两例都红，新代码两例都绿）。
+
+### 发布记录
+
+（待 CI 完成后补：tag、发布提交、CI run、各平台产物 sha256、macOS/Linux 装端结果。）
+
+## v2.4.14 — 未公开（tag 有、Release 无；内容随 v2.4.15 发布。本轮：全仓缺陷修复 40 项）
 
 **这一版没有新功能。** 在 v2.4.13 上做了一轮全仓缺陷审计（三层逐文件审读 + 并发/生命周期推演
 + 静态分析 + 跑既有闸门），修掉 40 项现有测试与闸门覆盖不到的缺陷。用户可感知的典型症状
@@ -140,7 +167,11 @@
 
 ### F. 发布记录
 
-（待 CI 完成后补：tag、发布提交、CI run、各平台产物 sha256、macOS/Linux 装端结果。）
+- tag `v2.4.14` → 提交 `5e6db69`。CI run **`43729395162`**：`Resolve version` ✓、
+  `windows-x64` ✓、`linux-x64` ✓、**`macos-arm64` ✗**（`Fix macOS sidecar resource
+  layout` 的冒烟测试 20 秒没等到 `DLNA server started`），`Publish GitHub Release`
+  因此 skipped——**这一版没有产出 Release，也没有任何安装包产物**。
+- 结论：只留 tag 与本记录，内容随 **v2.4.15** 发布（与 v2.4.12→v2.4.13 同一处理）。
 
 ## v2.4.13 — 2026-11-06（本轮实际发布的那一版：v2.4.12 全部内容 + CI runner 标签修复）
 
