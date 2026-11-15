@@ -36,7 +36,34 @@ mDNSResponder/DNS 慢、断网或 VPN 刚起时，这一步能阻塞几十秒；
 
 ### 发布记录
 
-（待 CI 完成后补：tag、发布提交、CI run、各平台产物 sha256、macOS/Linux 装端结果。）
+- **tag `v2.4.15` → 提交 `164a418`**；CI run **`43731828732`**：`Resolve version` 11s →
+  `macos-arm64` 17m25s ✓ / `windows-x64` 14m44s ✓ / `linux-x64` 18m21s ✓ →
+  `Publish GitHub Release` 22s ✓。Release 已 publish（`2026-11-15T16:06:12Z`，
+  `draft: false`、`prerelease: false`），**10 项资产**：6 个安装包 + 4 个规则包 zip。
+  同一次修复让 v2.4.14 上红掉的 `macos-arm64` 冒烟测试转绿（`Fix macOS sidecar
+  resource layout`），根因确认为反向 DNS。
+- **产物 sha256**（GitHub 声明的 digest；本地下载后逐字节核对，两台机器都对上）：
+  - `HanCast_2.4.15_aarch64.dmg` 85,530,332 B / `bcdc45f97027d2539880d72b12990ba14f8872216d96321f22329ba7286ab0f9`
+  - `HanCast_2.4.15_x64-setup.exe` 68,938,577 B / `eca6867007c2fbefceb0e97efed1c062b9d0603a338828939ffdd37f3fbdad45`
+  - `HanCast_2.4.15_amd64.deb` 56,204,962 B / `6e989bb3b351234640d769e5c0092814c9183c9ca670726c8eceaef5d4991879`
+  - `HanCast-2.4.15-1.x86_64.rpm` 56,209,447 B / `a6ed397395feb54861d9e7c6a77254fafe6355a801775d34595480960f49a219`
+  - `HanCast_2.4.15_amd64.AppImage` 204,237,304 B / `6f892795c40f3d880e095028b7bf335ad7b094a83d9ba754ebd4bc2c4d6669b3`
+  - `hancast-2.4.15-1-x86_64.pkg.tar.zst` 53,043,100 B / `68292e9a2c0d770727542444381e003c34a236029eedee6bc654127c7827628f`
+- **macOS 本机**：`tools/install-macos-artifact.sh 2.4.15 <dmg>` 装好（旧 2.4.13 移到
+  `/tmp/HanCast_pre_2413_001341.app`），`CFBundleShortVersionString=2.4.15`；包内
+  sidecar 喂 `get_settings` 回 `version: "2.4.15"`；已重新启动。
+  装前遇到一件旧版遗留：2.4.13 的 sidecar **孤儿进程已跑 5 天**（`PPID 1`，占着
+  8080/8899；`SIGTERM` 后卡在 `ssdp._do_byebye()` 的 `sendto` 里不退），只能 SIGKILL
+  腾端口——正是本轮修的退出清理问题在现场的残留。装完顺手清掉 60+ 个旧 hancast
+  mpv 孤儿进程。
+- **Linux（CachyOS / Hyprland，`192.168.1.68`）**：pkg 走 LAN scp，远端 `sha256sum`
+  与 release digest 一致；旧 2.4.13 先 `SIGTERM` 干净退出（GUI 与 sidecar 都退、
+  8080/8899 释放），`sudo pacman -U --noconfirm` → `hancast 2.4.15-1`；
+  `/usr/lib/HanCast/hancast-sidecar` 喂 `get_settings` 回 `version: "2.4.15"`；
+  用会话 env（Hyprland `WAYLAND_DISPLAY=wayland-1` + `DBUS_SESSION_BUS_ADDRESS`）
+  重新启动，GUI 与 sidecar 均在跑。
+- **未做**：Windows 真机装包、三平台真机投屏回归；本轮只证明「装上的就是 2.4.15、
+  sidecar 协议可用」，不等于功能验收（判据清单见 docs/构建与发布.md §6）。
 
 ## v2.4.14 — 未公开（tag 有、Release 无；内容随 v2.4.15 发布。本轮：全仓缺陷修复 40 项）
 
